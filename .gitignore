@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Cloudflare's local state, and the secrets it reads in development
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+
+# Lightning and Bitcoin key material. Never commit these, even from a test node.
+*.macaroon
+macaroons.db
+tls.cert
+tls.key
+wallet.db
+wallet.dat
+channel.backup
+*.seed
+
+# Logs
+*.log

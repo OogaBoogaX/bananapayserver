@@ -1,0 +1,3 @@
+# Every pull request needs a code owner's approval. Changes to the relay, to credentials, to
+# the relay's protocol or to deployment need two maintainers. See CONTRIBUTING.md.
+* @drneski @2140data @w-s-bitcoin @rules-without-rulers
