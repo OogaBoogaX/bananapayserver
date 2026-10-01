@@ -98,9 +98,11 @@ pull against each other, which is why its trial measures invoice times; see
 1. **Page → Worker.** An HTTPS request with the amount, handle and message. To save time, the
    page can ask as soon as the donor picks an amount; the handle and message then follow in a
    second request before the QR shows.
-2. **Worker.** Checks the amount, sanitizes the text with OBL's rules, applies a rate limit,
-   and calls the Durable Object.
-3. **Durable Object.** Stores the handle, message and amount under a new request id, in its
+2. **Worker.** Checks the amount, sanitizes the text with OBL's rules, and calls the Durable
+   Object.
+3. **Durable Object.** Applies the rate limits, per visitor and overall, because it is the one
+   place every request reaches; a visitor's address stays in memory for a minute at most and
+   is never stored. It stores the handle, message and amount under a new request id, in its
    own storage, until the invoice is paid or expires. It sends `{ request id, sats }` down the
    relay's line and keeps the page's request open.
 4. **Relay.** Checks the amount against its own cap, asks BTCPay on the machine for the
@@ -154,6 +156,9 @@ in the Delivery section of
 - the reply is the highest `seq` the server has accepted.
 
 Publishing is opt-in for each operator. A node needs a relay only if it also takes donations.
+
+The ingest isn't built yet. It waits for Foundry to specify the batch envelope its exporter
+signs, which Foundry's docs say comes with the export implementation.
 
 The browser side follows Foundry's consumer contract in
 [`docs/lightning-factory.md`](https://github.com/OogaBoogaX/lightningfoundry/blob/main/docs/lightning-factory.md).
@@ -238,6 +243,19 @@ request per visit, against 360 per visitor-hour for polling every 10 seconds.
 - Tor shows up as country `T1` in IP Access Rules. Don't add an account-wide Tor rule; the
   relay's line arrives over Tor.
 
+## Where the code is
+
+| Directory | What it holds |
+|---|---|
+| [`shared/`](../shared/) | The line's messages and OBL's donation contract, used by both ends |
+| [`worker/`](../worker/) | The Worker and its Durable Object |
+| [`relay/`](../relay/) | The relay and its container |
+| [`migrations/`](../migrations/) | D1's schema |
+| [`tests/`](../tests/) | Everything `node --test` runs, and the stand-ins for BTCPay and Cloudflare |
+
+The interfaces between them are in [`protocol.md`](protocol.md), and every setting is in
+[`configuration.md`](configuration.md).
+
 ## Deliberately outside
 
 - **Node software.** Anything that operates a node, including Foundry's event exporter, lives
@@ -265,5 +283,6 @@ Not settled yet. Each gets a decision record when it is.
   their pile? That's OBL's call; each pile lives in its own browser.
 - **How pages get node feeds.** Foundry's docs say pages poll once a minute. With the object's
   sockets, pushing them is cheap too.
-- **The toolchain.** Plain JavaScript on Workers, ideally with no dependencies. Every
-  dependency needs a written reason, as in Foundry. Decided when code starts.
+
+The toolchain was on this list until the code started; it is proposed in
+[decision 0009](decisions/0009-toolchain.md).
