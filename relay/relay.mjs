@@ -71,7 +71,10 @@ export class Relay {
     this.checking.add(invoiceId);
     try {
       const invoice = await this.btcpay.invoice(invoiceId);
-      if (invoice?.metadata?.orderId !== ORDER_ID) return;
+      if (invoice?.metadata?.orderId !== ORDER_ID) {
+        this.open.delete(invoiceId);
+        return;
+      }
       if (invoice.status === "Expired" || invoice.status === "Invalid") {
         this.open.delete(invoiceId);
         return;
@@ -85,6 +88,8 @@ export class Relay {
       this.unacked.set(invoiceId, sats);
       this.line.send({ type: "paid", invoice: invoiceId, sats });
     } catch (error) {
+      // An invoice BTCPay no longer knows will never settle.
+      if (error.status === 404) this.open.delete(invoiceId);
       this.log(`check: ${error.message}`);
     } finally {
       this.checking.delete(invoiceId);
@@ -92,15 +97,31 @@ export class Relay {
   }
 
   // Sends every notice the object hasn't acknowledged. Repeats are harmless: the object
-  // ignores them by invoice id.
+  // records each invoice once.
   flush() {
     for (const [invoice, sats] of this.unacked) this.line.send({ type: "paid", invoice, sats });
   }
 
-  // Once a minute: catches any webhook that never arrived, then resends what's unacknowledged.
+  // Once a minute: resends what's still unacknowledged, then catches any webhook that never
+  // arrived. In that order, a notice found now isn't sent twice before its ack can arrive.
   async sweep() {
-    for (const invoiceId of [...this.open.keys()]) await this.check(invoiceId);
     this.flush();
+    for (const invoiceId of [...this.open.keys()]) await this.check(invoiceId);
+  }
+
+  // After a reboot the relay may start before BTCPay does, so finding its invoices again keeps
+  // trying, with growing delays, until BTCPay answers.
+  async loadWhenReady({ wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), maxDelayMs = 60_000 } = {}) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.load();
+        this.flush();
+        return;
+      } catch (error) {
+        this.log(`load: ${error.message}; trying again`);
+        await wait(Math.min(maxDelayMs, 1_000 * 2 ** attempt));
+      }
+    }
   }
 
   // After a restart, find the relay's invoices from the last day again.

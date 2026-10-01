@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { handle } from "../worker/front.mjs";
-import { REPLAY_MAX } from "../worker/object.mjs";
+import { PAGE_SOCKETS_MAX, REPLAY_MAX, visitorKey } from "../worker/object.mjs";
 import { fakeWorld, until } from "./helpers/cloudflare.mjs";
 import { ADDRESS, BOLT11, INVOICE, bolt11For } from "./helpers/values.mjs";
 
@@ -32,9 +32,9 @@ async function world(overrides = {}) {
     assert.equal(response.status, 101);
     return w.ctx.getWebSockets("relay").at(-1);
   };
-  w.connectPage = async (after) => {
+  w.connectPage = async (after, visitor = "visitor-p") => {
     const query = after ? `?after=${after}` : "";
-    const response = await w.send(upgrade(`/donations/socket${query}`, { Origin: ORIGIN, "CF-Connecting-IP": "visitor-p" }));
+    const response = await w.send(upgrade(`/donations/socket${query}`, { Origin: ORIGIN, "CF-Connecting-IP": visitor }));
     assert.equal(response.status, 101);
     return w.ctx.getWebSockets("page").at(-1);
   };
@@ -305,4 +305,112 @@ test("pending requests are forgotten after the retention period", async () => {
   w.platform.advance(8 * 86_400_000);
   await w.invoice(relay, { sats: 1000 }, () => ({ id: "Inv0ice5678", bolt11: BOLT11, expires: EXPIRES }));
   assert.equal((await w.send(post("/donations/note", { request: asked.request, handle: "x" }))).status, 404);
+});
+
+test("notices that arrive together record and push the donation once", async () => {
+  const w = await world();
+  const relay = await w.connectRelay();
+  const page = await w.connectPage();
+  await w.invoice(relay, { sats: 1000 });
+  const sent = relay.sent.length;
+  await Promise.all([
+    w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000 }),
+    w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000 }),
+  ]);
+  assert.equal(page.messages().filter((m) => m.type === "donation").length, 1);
+  assert.equal(w.env.DB.db.prepare("SELECT COUNT(*) AS n FROM donations").get().n, 1);
+  const results = relay.sent.slice(sent).map((text) => JSON.parse(text).result).sort();
+  assert.deepEqual(results, ["duplicate", "recorded"]);
+});
+
+test("a double click on the on-chain switch shares one answer", async () => {
+  const w = await world();
+  const relay = await w.connectRelay();
+  const { asked } = await w.invoice(relay, { sats: 1000 });
+  const first = w.send(post("/donations/onchain", { request: asked.request }));
+  const second = w.send(post("/donations/onchain", { request: asked.request }));
+  await until(() => relay.sent.some((text) => JSON.parse(text).type === "onchain"));
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(relay.sent.filter((text) => JSON.parse(text).type === "onchain").length, 1);
+  await w.relaySays(relay, { type: "onchain", request: asked.request, address: ADDRESS, sats: 1000 });
+  for (const response of await Promise.all([first, second])) {
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { address: ADDRESS, sats: 1000 });
+  }
+});
+
+test("a page that sends anything is closed", async () => {
+  const w = await world();
+  const page = await w.connectPage();
+  await w.object.webSocketMessage(page, "hello?");
+  assert.deepEqual(page.closedWith, { code: 1008, reason: "pages don't send" });
+});
+
+test("page loads have a budget of their own and can't close donations", async () => {
+  const w = await world({ RATE_PER_IP: "2", RATE_GLOBAL: "2" });
+  await w.connectPage(undefined, "crowd-1");
+  await w.connectPage(undefined, "crowd-1");
+  const third = await w.send(upgrade("/donations/socket", { Origin: ORIGIN, "CF-Connecting-IP": "crowd-1" }));
+  assert.equal(third.status, 429, "a visitor's own page budget");
+  for (let i = 2; i <= 6; i++) await w.connectPage(undefined, `crowd-${i}`);
+  const asked = await w.send(post("/donations/invoice", { sats: 1000 }, { visitor: "donor" }));
+  assert.equal(asked.status, 503, "closed for want of a relay, not busy");
+});
+
+test("pages stop short of the platform's socket limit, leaving room for the relay", async () => {
+  const w = await world();
+  const real = w.ctx.getWebSockets;
+  w.ctx.getWebSockets = (tag) => (tag === "page" ? { length: PAGE_SOCKETS_MAX } : real(tag));
+  const refused = await w.send(upgrade("/donations/socket", { Origin: ORIGIN, "CF-Connecting-IP": "late" }));
+  assert.equal(refused.status, 429);
+  w.ctx.getWebSockets = real;
+  await w.connectRelay();
+});
+
+test("notes are rate limited too", async () => {
+  const w = await world({ RATE_PER_IP: "2" });
+  const note = () => w.send(post("/donations/note", { request: "e".repeat(32), handle: "x" }, { visitor: "noter" }));
+  assert.equal((await note()).status, 404);
+  assert.equal((await note()).status, 404);
+  assert.equal((await note()).status, 429);
+});
+
+test("donations close even when the closing line still reads as open", async () => {
+  const w = await world();
+  const relay = await w.connectRelay();
+  const page = await w.connectPage();
+  await w.object.webSocketClose(relay, 1006, "", false);
+  assert.deepEqual(page.messages().at(-1), { type: "status", open: false });
+});
+
+test("a chunked body is cut off at the cap without being read whole", async () => {
+  const w = await world();
+  let pulled = 0;
+  const body = new ReadableStream({
+    pull(controller) {
+      pulled += 1;
+      if (pulled > 100) return controller.close();
+      controller.enqueue(new TextEncoder().encode("x".repeat(512)));
+    },
+  });
+  const request = new Request("https://api.example.org/donations/invoice", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: ORIGIN },
+    body,
+    duplex: "half",
+  });
+  const response = await w.send(request);
+  assert.equal(response.status, 413);
+  assert.ok(pulled < 10, `read ${pulled} chunks`);
+});
+
+test("IPv6 visitors count by their /64", () => {
+  assert.equal(visitorKey("2001:db8:1:2:aaaa:bbbb:cccc:dddd"), "2001:db8:1:2::/64");
+  assert.equal(visitorKey("2001:db8:1:2::1"), "2001:db8:1:2::/64");
+  assert.equal(visitorKey("2001:DB8:0001:0002::ffff"), "2001:db8:1:2::/64");
+  assert.equal(visitorKey("2001:db8::1"), "2001:db8:0:0::/64");
+  assert.equal(visitorKey("::1"), "0:0:0:0::/64");
+  assert.equal(visitorKey("::ffff:192.0.2.1"), "192.0.2.1");
+  assert.equal(visitorKey("192.0.2.1"), "192.0.2.1");
+  assert.equal(visitorKey(""), "");
 });

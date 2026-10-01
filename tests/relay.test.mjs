@@ -148,3 +148,39 @@ test("after a restart the relay finds its invoices from the last day", async () 
   assert.deepEqual([...relay.open], [["Waiting0001", 500]]);
   assert.deepEqual([...relay.unacked], [[INVOICE, 1000]]);
 });
+
+test("a payment the sweep finds is sent once, not again by the same sweep", async () => {
+  const { relay, line } = setup();
+  relay.open.set(INVOICE, 1000);
+  await relay.sweep();
+  assert.deepEqual(line.sent, [{ type: "paid", invoice: INVOICE, sats: 1000 }]);
+});
+
+test("an invoice BTCPay no longer knows, or that isn't the relay's, leaves the sweep", async () => {
+  const gone = Object.assign(new Error("BTCPay answered 404 to GET /invoices/Gone000001"), { status: 404 });
+  const { relay, btcpay } = setup({
+    invoice: async (id) => {
+      if (id === "Gone000001") throw gone;
+      return { id, status: "New", metadata: { orderId: "someone-else" } };
+    },
+  });
+  relay.open.set("Gone000001", 500).set("NotOurs0001", 500);
+  await relay.sweep();
+  assert.deepEqual([...relay.open.keys()], []);
+  assert.equal(btcpay.calls.length, 0);
+});
+
+test("finding its invoices again keeps trying until BTCPay is up", async () => {
+  let failures = 2;
+  const { relay, line, logs } = setup({
+    recent: async () => {
+      if (failures-- > 0) throw new Error("connect ECONNREFUSED");
+      return [{ id: INVOICE, status: "Settled", amount: "0.00001000", currency: "BTC", metadata: { orderId: ORDER_ID } }];
+    },
+  });
+  const waits = [];
+  await relay.loadWhenReady({ wait: async (ms) => waits.push(ms) });
+  assert.deepEqual(waits, [1_000, 2_000]);
+  assert.equal(logs.filter((m) => m.startsWith("load:")).length, 2);
+  assert.deepEqual(line.sent, [{ type: "paid", invoice: INVOICE, sats: 1000 }]);
+});

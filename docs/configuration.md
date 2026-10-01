@@ -1,8 +1,9 @@
 # Configuration
 
-Every setting the Worker and the relay read. Limits have no defaults: a limit that is missing
-or malformed keeps donations closed on the Worker and stops the relay. Limits and secrets
-are set in each deployment and never committed.
+Every setting the Worker and the relay read. The limits are the caps on amounts and the rate
+limits, and they have no defaults: one that is missing or malformed keeps donations closed on
+the Worker and stops the relay. Limits and secrets are set in each deployment and never
+committed. The few settings with defaults are not limits; their defaults are below.
 
 ## The Worker
 
@@ -13,9 +14,9 @@ example `wrangler secret put MAX_SATS`. For local development, copy
 | Setting | Kind | Meaning |
 |---|---|---|
 | `MAX_SATS` | limit, required | The largest donation the Worker accepts, in sats |
-| `MIN_SATS` | limit, optional | The smallest; 1 when unset |
-| `RATE_PER_IP` | limit, required | Invoice requests, on-chain switches and page sockets per visitor per minute |
-| `RATE_GLOBAL` | limit, required | The same, for all visitors together |
+| `MIN_SATS` | optional | The smallest; 1 when unset, the smallest invoice there is |
+| `RATE_PER_IP` | limit, required | Per visitor and per minute: invoice requests and on-chain switches together, and separately each of notes and page sockets. An IPv6 visitor counts by its /64 |
+| `RATE_GLOBAL` | limit, required | Invoice requests and on-chain switches per minute, for all visitors together. Notes and page sockets don't count, so a crowd of page loads can't close donations |
 | `RELAY_TOKEN_SHA256` | secret | The SHA-256, in hex, of the relay's token |
 | `NETWORK` | variable | `mainnet`, `testnet`, `signet` or `regtest`; invoices and addresses for any other are refused |
 | `ALLOWED_ORIGINS` | variable | The origins a browser may call from, separated by commas |
@@ -41,7 +42,7 @@ them.
 | `BTCPAY_API_KEY` | secret | A key that can only create and view invoices on that store |
 | `BTCPAY_WEBHOOK_SECRET` | secret | The webhook's secret, as set in BTCPay |
 | `MAX_SATS` | limit, required | The relay's own cap, in sats, whatever the Worker allows |
-| `MIN_SATS` | limit, optional | 1 when unset |
+| `MIN_SATS` | optional | 1 when unset |
 | `WEBHOOK_LISTEN` | optional | Where the webhook listener binds inside the container; `0.0.0.0:8080` when unset. Never publish this port |
 | `INVOICE_MINUTES` | optional | How long an invoice stays payable; 15 when unset |
 | `LIGHTNING_METHOD`, `ONCHAIN_METHOD` | optional | BTCPay's payment method ids; `BTC-LN` and `BTC-CHAIN` when unset. BTCPay 1.x calls them `BTC-LightningNetwork` and `BTC` |

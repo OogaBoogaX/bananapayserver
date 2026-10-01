@@ -53,9 +53,8 @@ export class Line extends EventEmitter {
     }
   }
 
-  #redial() {
+  #redial(delay = Math.min(this.maxDelayMs, 1_000 * 2 ** this.#attempts) * (0.5 + this.random() / 2)) {
     if (!this.#running) return;
-    const delay = Math.min(this.maxDelayMs, 1_000 * 2 ** this.#attempts) * (0.5 + this.random() / 2);
     this.#attempts += 1;
     this.#retry = setTimeout(() => this.#dial(), delay);
   }
@@ -77,9 +76,17 @@ export class Line extends EventEmitter {
     socket.on("close", ({ code }) => {
       clearInterval(this.#pinger);
       this.#socket = null;
-      this.log(`line: closed (${code})`);
       this.emit("down");
-      this.#redial();
+      // 4000: a newer line with this token replaced this one, so another relay is using it.
+      // Waiting the longest delay keeps two relays from taking the line from each other
+      // every second.
+      if (code === 4000) {
+        this.log("line: replaced by another line with this token; is a second relay running?");
+        this.#redial(this.maxDelayMs);
+      } else {
+        this.log(`line: closed (${code})`);
+        this.#redial();
+      }
     });
     // The Worker's runtime answers protocol pings without waking the object.
     this.#pinger = setInterval(() => {

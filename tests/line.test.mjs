@@ -93,3 +93,15 @@ test("a failed dial is retried, and stop means stop", async () => {
   assert.equal(sockets.length, 1);
   assert.equal(line.send({ type: "paid", invoice: "Inv0ice1234", sats: 1 }), false);
 });
+
+test("a line replaced by another relay waits the longest delay before taking it back", async (t) => {
+  const { line, sockets, logs } = setup({ maxDelayMs: 200 });
+  t.after(() => line.stop());
+  line.start();
+  await until(() => line.connected);
+  sockets[0].emit("close", { code: 4000, reason: "replaced" });
+  assert.ok(logs.some((m) => m.includes("is a second relay running?")));
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  assert.equal(sockets.length, 1, "an ordinary redial would have come at 100 ms");
+  await until(() => sockets.length === 2);
+});

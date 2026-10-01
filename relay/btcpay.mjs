@@ -76,7 +76,10 @@ export class BTCPay {
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     // Errors name the call, never BTCPay's address.
-    if (!response.ok) throw new Error(`BTCPay answered ${response.status} to ${method} ${path.split("?")[0]}`);
+    if (!response.ok) {
+      const error = new Error(`BTCPay answered ${response.status} to ${method} ${path.split("?")[0]}`);
+      throw Object.assign(error, { status: response.status });
+    }
     const text = await response.text();
     return text ? JSON.parse(text) : null;
   }

@@ -57,7 +57,7 @@ test("numbers must be whole and in order", () => {
   }
 });
 
-test("the Worker's limits have no defaults, and a bad one closes donations", () => {
+test("the Worker's caps and rate limits have no defaults, and a bad one closes donations", () => {
   const limits = { MAX_SATS: "100000", RATE_PER_IP: "5", RATE_GLOBAL: "50" };
   assert.deepEqual(readLimits(limits), { minSats: 1, maxSats: 100_000, ratePerIp: 5, rateGlobal: 50 });
   for (const name of Object.keys(limits)) assert.equal(readLimits({ ...limits, [name]: undefined }), null, name);

@@ -36,12 +36,8 @@ const server = createWebhookServer({
 });
 server.listen(config.listen.port, config.listen.host, () => log(`webhook: listening on port ${config.listen.port}`));
 
-try {
-  await relay.load();
-} catch (error) {
-  log(`load: ${error.message}`);
-}
 line.start();
+relay.loadWhenReady();
 const sweep = setInterval(() => relay.sweep().catch((error) => log(`sweep: ${error.message}`)), 60_000);
 
 const stop = () => {

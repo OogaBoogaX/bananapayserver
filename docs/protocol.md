@@ -69,7 +69,8 @@ network fee. Build the payment URI from these two. There is no BTCPay link.
 
 ### `GET /donations/socket?after=<invoice id>`
 
-A WebSocket. The page sends nothing on it, and receives:
+A WebSocket. The page sends nothing on it; a page that does is closed with code 1008. It
+receives:
 
 - `{ "type": "status", "open": true }` when it connects, and again whenever the relay's line
   opens or closes, so the page can say donations are closed before anyone tries.
@@ -78,8 +79,12 @@ A WebSocket. The page sends nothing on it, and receives:
   donor's page recognizes its own invoice id.
 
 `after` is the last donation id the page saw. On reconnecting, the object replays up to 50
-newer ones. Leave it out on a first visit. Rarely, a page may receive the same donation
-twice; ignore an id it has already played.
+newer ones. Leave it out on a first visit. A donation recorded while a replay is on its way
+can reach the page twice, so ignore an id the page has already played.
+
+The object keeps its page sockets below Cloudflare's limit for one object, so the relay's
+line always has room. Past that, and past the visitor's rate limit, a new socket is refused
+with 429.
 
 ## The relay's line
 

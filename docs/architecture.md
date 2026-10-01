@@ -101,7 +101,8 @@ pull against each other, which is why its trial measures invoice times; see
 2. **Worker.** Checks the amount, sanitizes the text with OBL's rules, and calls the Durable
    Object.
 3. **Durable Object.** Applies the rate limits, per visitor and overall, because it is the one
-   place every request reaches; a visitor's address stays in memory for a minute at most and
+   place every request reaches. Page sockets have a budget of their own, so a crowd of page
+   loads can't close donations. A visitor's address stays in memory for a minute at most and
    is never stored. It stores the handle, message and amount under a new request id, in its
    own storage, until the invoice is paid or expires. It sends `{ request id, sats }` down the
    relay's line and keeps the page's request open.

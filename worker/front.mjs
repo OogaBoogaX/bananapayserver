@@ -50,7 +50,7 @@ async function note(request, env, cors) {
   if (body.error) return reply({ error: body.error }, body.status, cors);
   const text = cleanText(body.value);
   if (!REQUEST.test(String(body.value.request)) || !text) return reply({ error: "invalid" }, 400, cors);
-  return toObject(env, "/note", { request: body.value.request, ...text }, cors);
+  return toObject(env, "/note", { request: body.value.request, ...text, client: clientOf(request) }, cors);
 }
 
 async function onchain(request, env, cors) {
@@ -99,11 +99,11 @@ async function readBody(request, allowed, required) {
     return { error: "invalid", status: 415 };
   }
   if (Number(request.headers.get("Content-Length") ?? 0) > MAX_BODY) return { error: "too large", status: 413 };
-  const text = await request.text();
-  if (text.length > MAX_BODY) return { error: "too large", status: 413 };
+  const bytes = await readCapped(request, MAX_BODY);
+  if (!bytes) return { error: "too large", status: 413 };
   let value;
   try {
-    value = JSON.parse(text);
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
     return { error: "invalid", status: 400 };
   }
@@ -111,6 +111,32 @@ async function readBody(request, allowed, required) {
     Object.keys(value).every((key) => allowed.includes(key)) &&
     required.every((key) => Object.hasOwn(value, key));
   return valid ? { value } : { error: "invalid", status: 400 };
+}
+
+// Reads the body a chunk at a time and stops past the cap, since a chunked request has no
+// Content-Length to check first. Null when the body is too large.
+async function readCapped(request, max) {
+  if (!request.body) return new Uint8Array();
+  const reader = request.body.getReader();
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > max) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 // The visitor's address goes to the object for rate limiting only. It's never stored.
