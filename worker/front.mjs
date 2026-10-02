@@ -1,19 +1,26 @@
-// The Worker: the front door. It checks every browser request and the relay's credential, and
-// passes what survives to the Durable Object. It never calls the relay; the relay dials in.
+// The Worker: the front door. It checks every browser request and the relay's credential, runs
+// GitHub sign-in, and passes what survives to the Durable Object. It never calls the relay; the
+// relay dials in.
 
-import { HANDLE_MAX, MESSAGE_MAX, sanitize } from "../shared/donation.mjs";
+import { MESSAGE_MAX, sanitize } from "../shared/donation.mjs";
+import { finishSignIn, signedIn, signInConfigured, signOutCookie, startSignIn } from "./auth.mjs";
 import { readLimits, readSettings } from "./config.mjs";
 
 const MAX_BODY = 1024;
 const INVOICE_ID = /^[A-Za-z0-9]{8,64}$/;
 const REQUEST = /^[0-9a-f]{32}$/;
 
-export async function handle(request, env) {
+// platform: { fetch, now, id }, so the tests can run this without the runtime.
+export async function handle(request, env, platform) {
   const url = new URL(request.url);
   const route = `${request.method} ${url.pathname}`;
   const settings = readSettings(env);
 
+  // The relay isn't a browser, and sign-in is a page the browser navigates to, so none of these
+  // is a cross-origin call.
   if (route === "GET /relay") return relay(request, env);
+  if (route === "GET /auth/github") return startSignIn(request, env, platform, settings.origins);
+  if (route === "GET /auth/github/callback") return finishSignIn(request, env, platform);
 
   const cors = corsHeaders(request, settings.origins);
   if (!cors) return reply({ error: "origin" }, 403);
@@ -21,36 +28,50 @@ export async function handle(request, env) {
 
   switch (route) {
     case "POST /donations/invoice":
-      return invoice(request, env, settings, cors);
+      return invoice(request, env, platform, settings, cors);
     case "POST /donations/note":
       return note(request, env, cors);
     case "POST /donations/onchain":
       return onchain(request, env, cors);
     case "GET /donations/socket":
       return socket(request, env, url);
+    case "GET /auth/me":
+      return me(request, env, platform, cors);
+    case "POST /auth/signout":
+      return new Response(null, { status: 204, headers: { ...cors, "Set-Cookie": signOutCookie() } });
   }
   return reply({ error: "not found" }, 404, cors);
 }
 
-async function invoice(request, env, settings, cors) {
-  const body = await readBody(request, ["sats", "handle", "message"], ["sats"]);
+// Who gave it comes from GitHub sign-in, never from the request body. A signed-in donor can
+// still give anonymously.
+async function invoice(request, env, platform, settings, cors) {
+  const body = await readBody(request, ["sats", "message", "anon"], ["sats"]);
   if (body.error) return reply({ error: body.error }, body.status, cors);
   const limits = readLimits(env);
   if (!limits || !settings.network) return reply({ error: "closed" }, 503, cors);
-  const { sats } = body.value;
-  if (!Number.isSafeInteger(sats)) return reply({ error: "invalid" }, 400, cors);
+  const { sats, anon = false } = body.value;
+  if (!Number.isSafeInteger(sats) || typeof anon !== "boolean") return reply({ error: "invalid" }, 400, cors);
   if (sats < limits.minSats || sats > limits.maxSats) return reply({ error: "amount" }, 400, cors);
-  const text = cleanText(body.value);
-  if (!text) return reply({ error: "invalid" }, 400, cors);
-  return toObject(env, "/invoice", { sats, ...text, client: clientOf(request) }, cors);
+  const message = cleanMessage(body.value);
+  if (message === null) return reply({ error: "invalid" }, 400, cors);
+  const github = anon ? null : await signedIn(request, env, platform);
+  return toObject(env, "/invoice", { sats, message, github, client: clientOf(request) }, cors);
 }
 
 async function note(request, env, cors) {
-  const body = await readBody(request, ["request", "handle", "message"], ["request"]);
+  const body = await readBody(request, ["request", "message"], ["request"]);
   if (body.error) return reply({ error: body.error }, body.status, cors);
-  const text = cleanText(body.value);
-  if (!REQUEST.test(String(body.value.request)) || !text) return reply({ error: "invalid" }, 400, cors);
-  return toObject(env, "/note", { request: body.value.request, ...text, client: clientOf(request) }, cors);
+  const message = cleanMessage(body.value);
+  if (!REQUEST.test(String(body.value.request)) || message === null) return reply({ error: "invalid" }, 400, cors);
+  return toObject(env, "/note", { request: body.value.request, message, client: clientOf(request) }, cors);
+}
+
+// The page asks who it's donating as.
+async function me(request, env, platform, cors) {
+  if (!signInConfigured(env)) return reply({ error: "sign-in unavailable" }, 503, cors);
+  const user = await signedIn(request, env, platform);
+  return user ? reply({ login: user.login }, 200, cors) : reply({ error: "signed out" }, 401, cors);
 }
 
 async function onchain(request, env, cors) {
@@ -88,11 +109,8 @@ export async function relayAuthorized(request, env) {
   return difference === 0;
 }
 
-// The handle and message, cleaned with OBL's rules, or null when either isn't text.
-function cleanText({ handle = "", message = "" }) {
-  if (typeof handle !== "string" || typeof message !== "string") return null;
-  return { handle: sanitize(handle, HANDLE_MAX), message: sanitize(message, MESSAGE_MAX) };
-}
+// The message, cleaned with OBL's rules, or null when it isn't text.
+const cleanMessage = ({ message = "" }) => (typeof message === "string" ? sanitize(message, MESSAGE_MAX) : null);
 
 async function readBody(request, allowed, required) {
   if (!/^application\/json\b/i.test(request.headers.get("Content-Type") ?? "")) {
@@ -163,10 +181,14 @@ async function toObject(env, path, body, cors) {
 
 const stub = (env) => env.DONATIONS.get(env.DONATIONS.idFromName("donations"));
 
+// Credentials are allowed so the page can send its sign-in cookie, which is why the origin has
+// to be named exactly and never a wildcard.
 function corsHeaders(request, origins) {
   const origin = request.headers.get("Origin");
   if (origin === null) return {};
-  return origins.includes(origin) ? { "Access-Control-Allow-Origin": origin, Vary: "Origin" } : null;
+  return origins.includes(origin)
+    ? { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true", Vary: "Origin" }
+    : null;
 }
 
 const preflight = (cors) => new Response(null, {

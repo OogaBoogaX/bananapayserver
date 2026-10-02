@@ -71,6 +71,11 @@ test("the Worker's other settings", () => {
     origins: ["https://a.example", "https://b.example"],
     invoiceTimeoutMs: 10_000,
     pendingDays: 7,
+    pileStart: 1_000,
+    pileEatPerHour: 60,
   });
   assert.equal(readSettings({ NETWORK: "liquid" }).network, null);
+  const pile = readSettings({ PILE_START: "0", PILE_EAT_PER_HOUR: "0" });
+  assert.deepEqual([pile.pileStart, pile.pileEatPerHour], [0, 0], "zero is allowed for the pile");
+  assert.equal(readSettings({ PILE_EAT_PER_HOUR: "-3" }).pileEatPerHour, 60);
 });

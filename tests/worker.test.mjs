@@ -2,71 +2,33 @@
 // for an invoice, the relay answers on its line, a payment lands on every page.
 
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import test from "node:test";
-import { handle } from "../worker/front.mjs";
 import { PAGE_SOCKETS_MAX, REPLAY_MAX, visitorKey } from "../worker/object.mjs";
-import { fakeWorld, until } from "./helpers/cloudflare.mjs";
+import { until } from "./helpers/cloudflare.mjs";
 import { ADDRESS, BOLT11, INVOICE, bolt11For } from "./helpers/values.mjs";
+import { EXPIRES, ORIGIN, post, sessionCookie, TOKEN, upgrade, world } from "./helpers/world.mjs";
 
-const ORIGIN = "https://oogabooga.land";
-const TOKEN = `relay-token-${"x".repeat(30)}`;
-const TOKEN_SHA256 = createHash("sha256").update(TOKEN).digest("hex");
-const EXPIRES = Math.floor(Date.UTC(2026, 9, 1, 12, 15) / 1000);
-
-const post = (path, body, { origin = ORIGIN, visitor = "visitor-a", type = "application/json" } = {}) =>
-  new Request(`https://api.example.org${path}`, {
-    method: "POST",
-    headers: { "Content-Type": type, "CF-Connecting-IP": visitor, ...(origin ? { Origin: origin } : {}) },
-    body: typeof body === "string" ? body : JSON.stringify(body),
-  });
-
-const upgrade = (path, headers = {}) =>
-  new Request(`https://api.example.org${path}`, { headers: { Upgrade: "websocket", ...headers } });
-
-async function world(overrides = {}) {
-  const w = fakeWorld({ RELAY_TOKEN_SHA256: TOKEN_SHA256, ...overrides });
-  w.send = (request) => handle(request, w.env);
-  w.connectRelay = async () => {
-    const response = await w.send(upgrade("/relay", { Authorization: `Bearer ${TOKEN}` }));
-    assert.equal(response.status, 101);
-    return w.ctx.getWebSockets("relay").at(-1);
-  };
-  w.connectPage = async (after, visitor = "visitor-p") => {
-    const query = after ? `?after=${after}` : "";
-    const response = await w.send(upgrade(`/donations/socket${query}`, { Origin: ORIGIN, "CF-Connecting-IP": visitor }));
-    assert.equal(response.status, 101);
-    return w.ctx.getWebSockets("page").at(-1);
-  };
-  w.relaySays = (relay, message) => w.object.webSocketMessage(relay, JSON.stringify(message));
-  // Asks for an invoice and answers it on the relay's behalf.
-  w.invoice = async (relay, body, answer = (request) => ({ id: INVOICE, bolt11: BOLT11, expires: EXPIRES })) => {
-    const before = relay.sent.length;
-    const pending = w.send(post("/donations/invoice", body));
-    await until(() => relay.sent.length > before);
-    const asked = JSON.parse(relay.sent.at(-1));
-    const invoice = answer(asked.request);
-    await w.relaySays(relay, invoice.error ? { type: "invoice", request: asked.request, error: invoice.error } : { type: "invoice", request: asked.request, invoice });
-    return { asked, response: await pending };
-  };
-  return w;
-}
-
-test("an invoice goes from the page to the relay and back", async () => {
+test("an invoice goes from the page to the relay and back, with its bananas", async () => {
   const w = await world();
   const relay = await w.connectRelay();
-  const { asked, response } = await w.invoice(relay, { sats: 1000, handle: "<b>Ooga</b>", message: "for the cave" });
+  const { asked, response } = await w.invoice(relay, { sats: 1000, message: "for the cave" });
   assert.deepEqual(Object.keys(asked).sort(), ["request", "sats", "type"]);
   assert.equal(asked.sats, 1000);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("Access-Control-Allow-Origin"), ORIGIN);
-  assert.deepEqual(await response.json(), { request: asked.request, invoice: { id: INVOICE, bolt11: BOLT11, expires: EXPIRES } });
+  assert.equal(response.headers.get("Access-Control-Allow-Credentials"), "true");
+  assert.deepEqual(await response.json(), {
+    request: asked.request,
+    invoice: { id: INVOICE, bolt11: BOLT11, expires: EXPIRES },
+    bananas: { exact: 1, rounded: 1 },
+    rate: { usdPerBtc: 100_000, satsPerBanana: 1000, at: w.platform.now() },
+  });
 });
 
-test("the handle and message never reach the relay", async () => {
+test("who gave it and the message never reach the relay", async () => {
   const w = await world();
   const relay = await w.connectRelay();
-  await w.invoice(relay, { sats: 1000, handle: "secret-handle", message: "secret message" });
+  await w.invoice(relay, { sats: 1000, message: "secret message" }, undefined, { cookie: await sessionCookie(w, "secret-login") });
   assert.ok(relay.sent.every((text) => !text.includes("secret")));
 });
 
@@ -74,11 +36,13 @@ test("a payment is recorded once, acknowledged, and pushed to every page", async
   const w = await world();
   const relay = await w.connectRelay();
   const pages = [await w.connectPage(), await w.connectPage()];
-  await w.invoice(relay, { sats: 1000, handle: "<b>Ooga</b>", message: "for the cave" });
+  await w.invoice(relay, { sats: 1000, message: "<b>for</b> the cave" });
   await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
   assert.deepEqual(JSON.parse(relay.sent.at(-1)), { type: "ack", invoice: INVOICE, result: "recorded" });
-  const donation = { id: INVOICE, sats: 1000, handle: "bOogab", message: "for the cave", at: w.platform.now() };
-  for (const page of pages) assert.deepEqual(page.messages().at(-1), { type: "donation", donation });
+  const donation = { id: INVOICE, sats: 1000, handle: "", message: "bforb the cave", at: w.platform.now() };
+  for (const page of pages) {
+    assert.deepEqual(page.messages().filter((m) => m.type === "donation"), [{ type: "donation", donation, bananas: { exact: 1, rounded: 1 } }]);
+  }
   assert.deepEqual(w.env.DB.db.prepare("SELECT id, sats, handle, message, at FROM donations").all().map((row) => ({ ...row })), [donation]);
   assert.equal(w.env.DB.db.prepare("SELECT method FROM donations").get().method, "lightning", "how it was paid is recorded too");
 
@@ -87,18 +51,20 @@ test("a payment is recorded once, acknowledged, and pushed to every page", async
   assert.equal(pages[0].messages().filter((m) => m.type === "donation").length, 1);
 });
 
-test("the handle and message can follow the amount", async () => {
+test("the message can follow the amount, but who gave it can't change", async () => {
   const w = await world();
   const relay = await w.connectRelay();
   const page = await w.connectPage();
   const { asked } = await w.invoice(relay, { sats: 1000 });
-  const noted = await w.send(post("/donations/note", { request: asked.request, handle: "Late Ooga", message: "<i>hi</i>" }));
+  const noted = await w.send(post("/donations/note", { request: asked.request, message: "<i>hi</i>" }));
   assert.equal(noted.status, 204);
+  const renamed = await w.send(post("/donations/note", { request: asked.request, handle: "someone-else" }));
+  assert.equal(renamed.status, 400);
   await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
-  const { donation } = page.messages().at(-1);
-  assert.equal(donation.handle, "Late Ooga");
+  const [{ donation }] = page.messages().filter((m) => m.type === "donation");
+  assert.equal(donation.handle, "");
   assert.equal(donation.message, "ihii");
-  const unknown = await w.send(post("/donations/note", { request: "f".repeat(32), handle: "x" }));
+  const unknown = await w.send(post("/donations/note", { request: "f".repeat(32), message: "x" }));
   assert.equal(unknown.status, 404);
 });
 
@@ -164,7 +130,9 @@ test("the Worker checks amounts and bodies before anything reaches the object", 
     [{ sats: "1000" }, 400, "invalid"],
     [{ sats: 10.5 }, 400, "invalid"],
     [{ sats: 1000, extra: true }, 400, "invalid"],
-    [{ sats: 1000, handle: 7 }, 400, "invalid"],
+    [{ sats: 1000, handle: "typed-in" }, 400, "invalid"],
+    [{ sats: 1000, message: 7 }, 400, "invalid"],
+    [{ sats: 1000, anon: "yes" }, 400, "invalid"],
     [{}, 400, "invalid"],
     ["[1000]", 400, "invalid"],
     ["{not json", 400, "invalid"],
@@ -210,7 +178,7 @@ test("a relay that redials replaces its old line", async () => {
   assert.equal(w.object.line(), second);
   const page = await w.connectPage();
   await w.object.webSocketClose(first, 4000, "replaced", true);
-  assert.deepEqual(page.messages(), [{ type: "status", open: true }], "the old line closing doesn't close donations");
+  assert.deepEqual(page.messages().filter((m) => m.type === "status"), [{ type: "status", open: true }], "the old line closing doesn't close donations");
 });
 
 test("rate limits apply per visitor and overall, per minute", async () => {
@@ -268,7 +236,8 @@ test("a page that reconnects gets what it missed, and no more than the cap", asy
   assert.equal(replayed.length, REPLAY_MAX);
   assert.equal(replayed[0], "Donation0003");
   const fresh = await w.connectPage("UnknownId1");
-  assert.deepEqual(fresh.messages(), [{ type: "status", open: false }]);
+  assert.deepEqual(fresh.messages().filter((m) => m.type === "donation"), []);
+  assert.deepEqual(fresh.messages()[0], { type: "status", open: false });
   const invalid = await w.send(upgrade("/donations/socket?after=../x", { Origin: ORIGIN }));
   assert.equal(invalid.status, 400);
 });
@@ -305,7 +274,7 @@ test("pending requests are forgotten after the retention period", async () => {
   const { asked } = await w.invoice(relay, { sats: 1000 });
   w.platform.advance(8 * 86_400_000);
   await w.invoice(relay, { sats: 1000 }, () => ({ id: "Inv0ice5678", bolt11: BOLT11, expires: EXPIRES }));
-  assert.equal((await w.send(post("/donations/note", { request: asked.request, handle: "x" }))).status, 404);
+  assert.equal((await w.send(post("/donations/note", { request: asked.request, message: "x" }))).status, 404);
 });
 
 test("notices that arrive together record and push the donation once", async () => {
@@ -370,7 +339,7 @@ test("pages stop short of the platform's socket limit, leaving room for the rela
 
 test("notes are rate limited too", async () => {
   const w = await world({ RATE_PER_IP: "2" });
-  const note = () => w.send(post("/donations/note", { request: "e".repeat(32), handle: "x" }, { visitor: "noter" }));
+  const note = () => w.send(post("/donations/note", { request: "e".repeat(32), message: "x" }, { visitor: "noter" }));
   assert.equal((await note()).status, 404);
   assert.equal((await note()).status, 404);
   assert.equal((await note()).status, 429);

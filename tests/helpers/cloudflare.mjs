@@ -1,8 +1,9 @@
 // Stand-ins for the parts of the Workers runtime the Worker and its object use: the object's
-// SQL storage and D1 (both SQLite, here through node:sqlite), hibernatable sockets, and the
-// object's namespace. Enough to run front.mjs and object.mjs under node --test.
+// SQL storage and D1 (both SQLite, here through node:sqlite), hibernatable sockets, the
+// object's namespace, and the price sources. Enough to run front.mjs and object.mjs under
+// node --test.
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { DonationsObject } from "../../worker/object.mjs";
 
@@ -21,6 +22,17 @@ export function fakeStorage() {
         return cursor(db.prepare(query).all(...bindings));
       },
     },
+    transactionSync(callback) {
+      db.exec("BEGIN");
+      try {
+        const result = callback();
+        db.exec("COMMIT");
+        return result;
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+    },
   };
 }
 
@@ -34,9 +46,13 @@ function cursor(rows) {
   };
 }
 
+// D1 with every migration applied, in order, the way Wrangler applies them.
 export function fakeD1() {
   const db = new DatabaseSync(":memory:");
-  db.exec(readFileSync(new URL("../../migrations/0001_donations.sql", import.meta.url), "utf8"));
+  const migrations = new URL("../../migrations/", import.meta.url);
+  for (const file of readdirSync(migrations).filter((f) => f.endsWith(".sql")).sort()) {
+    db.exec(readFileSync(new URL(file, migrations), "utf8"));
+  }
   const statement = (sql, args = []) => ({
     bind: (...bound) => statement(sql, bound),
     run: async () => {
@@ -82,8 +98,14 @@ export class FakeSocket {
 
 export function fakeCtx() {
   const sockets = [];
+  const background = [];
   return {
     storage: fakeStorage(),
+    waitUntil(promise) {
+      background.push(promise);
+    },
+    // Lets the tests wait for work the object started in the background.
+    settle: () => Promise.all(background.splice(0)),
     acceptWebSocket(ws, tags = []) {
       ws.readyState = OPEN;
       sockets.push({ ws, tags });
@@ -94,11 +116,24 @@ export function fakeCtx() {
   };
 }
 
-// Deterministic time and ids, and plain objects where the runtime would make a 101 response.
-export function fakePlatform({ start = Date.UTC(2026, 9, 1, 12) } = {}) {
+// The three price sources' answers for a price in dollars; null makes a source fail.
+export function priceAnswers({ coinbase = 100_000, kraken = 100_000, mempool = 100_000 } = {}) {
+  const answer = (dollars, body) => (dollars === null ? new Response("down", { status: 503 }) : Response.json(body));
+  return (url) => {
+    const host = new URL(url).hostname;
+    if (host === "api.coinbase.com") return answer(coinbase, { data: { amount: String(coinbase), currency: "USD" } });
+    if (host === "api.kraken.com") return answer(kraken, { error: [], result: { XXBTZUSD: { c: [String(kraken), "1"] } } });
+    if (host === "mempool.space") return answer(mempool, { USD: mempool });
+    return new Response("unexpected", { status: 500 });
+  };
+}
+
+// Deterministic time and ids, plain objects where the runtime would make a 101 response, and
+// price sources that answer $100,000 unless a test says otherwise.
+export function fakePlatform({ start = Date.UTC(2026, 9, 1, 12), prices = priceAnswers() } = {}) {
   let time = start;
   let counter = 0;
-  return {
+  const platform = {
     pair: () => [new FakeSocket(), new FakeSocket()],
     upgrade: (client) => ({ status: 101, webSocket: client }),
     now: () => time,
@@ -106,7 +141,14 @@ export function fakePlatform({ start = Date.UTC(2026, 9, 1, 12) } = {}) {
     advance: (ms) => {
       time += ms;
     },
+    fetched: [],
+    respond: prices,
+    fetch: async (url, init) => {
+      platform.fetched.push(String(url));
+      return platform.respond(String(url), init);
+    },
   };
+  return platform;
 }
 
 export const ENV = {
@@ -119,9 +161,9 @@ export const ENV = {
 };
 
 // The object behind a namespace binding, the way env.DONATIONS looks to the Worker.
-export function fakeWorld(overrides = {}) {
+export function fakeWorld(overrides = {}, platformOptions = {}) {
   const ctx = fakeCtx();
-  const platform = fakePlatform();
+  const platform = fakePlatform(platformOptions);
   const env = { ...ENV, DB: fakeD1(), ...overrides };
   const object = new DonationsObject(ctx, env, platform);
   env.DONATIONS = {
