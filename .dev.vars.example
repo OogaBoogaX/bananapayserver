@@ -6,4 +6,4 @@ RATE_GLOBAL=
 # SHA-256, in hex, of the relay's token.
 RELAY_TOKEN_SHA256=
 NETWORK=regtest
-ALLOWED_ORIGINS=http://localhost:8080
+ALLOWED_ORIGINS=http://localhost:8000

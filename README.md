@@ -56,6 +56,7 @@ node.
 | [`docs/architecture.md`](docs/architecture.md) | Where each piece runs, what each may hold, and how an invoice and a payment travel |
 | [`docs/protocol.md`](docs/protocol.md) | The page's API, the relay's line, and what the relay needs from BTCPay |
 | [`docs/configuration.md`](docs/configuration.md) | Every setting, which ones are limits and secrets, and what the relay's container needs |
+| [`docs/testing.md`](docs/testing.md) | How to test end to end, from a payment on regtest to the cave |
 | [`docs/decisions/`](docs/decisions/) | Choices that are expensive to revisit, and why they were made |
 
 ## Tests

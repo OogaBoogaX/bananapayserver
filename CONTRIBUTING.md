@@ -48,7 +48,8 @@ convenience.
 
 `node --test` runs every test, and CI runs them on Node 22 and 24 for every pull request.
 Run them before asking for review, and say in the PR what you ran and what happened. Report
-failures with their output. Never claim a suite passed that you did not run.
+failures with their output. Never claim a suite passed that you did not run. For a change the
+stand-ins can't judge, run the end-to-end stages in [`docs/testing.md`](docs/testing.md) too.
 
 Deterministic tests only. Anything involving time, randomness or network conditions must be
 injectable, so a check measures your change rather than the machine it ran on. Never test
