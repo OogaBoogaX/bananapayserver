@@ -43,9 +43,9 @@ the node's machine.
 | Part | Holds | Responsibility |
 |---|---|---|
 | **Relay** | the BTCPay key, the webhook secret, its credential for the line | Keeps the line open, asks BTCPay for invoices, takes BTCPay's webhook, reports payments |
-| **Worker** | what it needs to check credentials | The front door: checks browser requests and the relay's credential, and takes the exporters' batches |
-| **Durable Object** | pending requests, until paid or expired | Holds the relay's line and every page's socket, matches payments to requests, pushes donations |
-| **D1** | donation records, feed history | Keeps what the object replays when a page reconnects; a feed, not a ledger |
+| **Worker** | what it needs to check credentials; the GitHub app's secret and the session key | The front door: checks browser requests and the relay's credential, runs GitHub sign-in, and takes the exporters' batches |
+| **Durable Object** | pending requests, until paid or expired; bitcoin's last price; the pile | Holds the relay's line and every page's socket, matches payments to requests, pushes donations, the pile and the leaderboard |
+| **D1** | donation records with their banana counts, each signed-in donor's total, feed history | Keeps what the object replays when a page reconnects; a feed, not a ledger |
 
 Nothing in that table can spend from a node, and nothing in it can reach one.
 
@@ -75,8 +75,10 @@ donor at the cave shouldn't be left waiting, for the QR or for the thanks after 
 Several choices in the design are there for it:
 
 - The relay's line is open before anyone asks, so no request waits for a connection.
-- The page can ask for an invoice as soon as the donor picks an amount; the handle and message
-  follow before the QR shows.
+- The page can ask for an invoice as soon as the donor picks an amount; the message follows
+  before the QR shows.
+- Bitcoin's price is looked up while the relay makes the invoice, from what the object already
+  has, so pricing the bananas adds no wait.
 - BTCPay makes the Lightning invoice first, and an on-chain address only if the donor
   switches.
 - The object holds the page's request open and answers it as soon as the invoice arrives.
@@ -95,26 +97,27 @@ pull against each other, which is why its trial measures invoice times; see
    The Worker checks the relay's credential and hands the socket to the Durable Object, which
    accepts it with the Hibernation API. The relay sends the keepalives, and redials whenever
    the line drops.
-1. **Page → Worker.** An HTTPS request with the amount, handle and message. To save time, the
-   page can ask as soon as the donor picks an amount; the handle and message then follow in a
-   second request before the QR shows.
-2. **Worker.** Checks the amount, sanitizes the text with OBL's rules, and calls the Durable
-   Object.
+1. **Page → Worker.** An HTTPS request with the amount and the message, carrying the donor's
+   sign-in cookie if they signed in. To save time, the page can ask as soon as the donor picks
+   an amount; the message then follows in a second request before the QR shows.
+2. **Worker.** Checks the amount, sanitizes the message with OBL's rules, reads who gave it
+   from the sign-in, and calls the Durable Object.
 3. **Durable Object.** Applies the rate limits, per visitor and overall, because it is the one
    place every request reaches. Page sockets have a budget of their own, so a crowd of page
    loads can't close donations. A visitor's address stays in memory for a minute at most and
-   is never stored. It stores the handle, message and amount under a new request id, in its
-   own storage, until the invoice is paid or expires. It sends `{ request id, sats }` down the
-   relay's line and keeps the page's request open.
+   is never stored. It stores who gave it, the message and the amount under a new request id,
+   in its own storage, until the invoice is paid or expires. It sends `{ request id, sats }`
+   down the relay's line and keeps the page's request open, and meanwhile works out the
+   bananas at bitcoin's current price.
 4. **Relay.** Checks the amount against its own cap, asks BTCPay on the machine for the
    invoice, and sends `{ request id, invoice }` up the line. BTCPay makes the Lightning invoice
    first, and an on-chain address only if the donor switches to on-chain.
-5. **Durable Object → Worker → page.** The invoice comes back as the reply, and the page shows
-   the QR. If the relay isn't connected or doesn't answer in time, the reply says donations
-   are closed.
+5. **Durable Object → Worker → page.** The invoice comes back as the reply, with the rate and
+   the banana counts, and the page shows the QR. If the relay isn't connected or doesn't answer
+   in time, the reply says donations are closed.
 
-The handle and message never reach the node. The relay and BTCPay see a request id and an
-amount.
+Who gave it and the message never reach the node. The relay and BTCPay see a request id and
+an amount.
 
 ## Paid
 
@@ -146,6 +149,41 @@ OBL's scenes are built on that shape, so it is copied here, and a contract test 
 in step; see [decision 0001](decisions/0001-separate-repository.md). OBL's content policy
 already allows `connect-src https: wss:`, so the page can reach the Worker and its socket as it
 stands.
+
+## Who gave it, and what it counts for
+
+**Who gave it** comes from GitHub sign-in through the Worker, never from what the page sends.
+The Worker reads the donor's username and numeric id from GitHub, drops GitHub's token, and
+keeps a signed cookie on the API's domain for a week, one that only the API's own host can set.
+A signed-in donor gives as their GitHub username unless they choose to give anonymously, and
+everyone else gives anonymously. See [decision 0010](decisions/0010-handles-from-github.md).
+
+**What it counts for** is set when the invoice is made: one banana is a dollar's worth of
+bitcoin. The object keeps bitcoin's price from three public sources, and a price counts only
+when at least two agree. It refreshes the price when a page connects, so it's usually fresh
+before a donor asks; an invoice waits for a new one only when the one it has is more than five
+minutes old. The price is locked into the invoice, and the donor is shown the rate and both
+counts, exact and rounded. The donation records its sats, the price and when it was fetched,
+and its bananas in thousandths, so any count can be worked out again. See
+[decision 0011](decisions/0011-bananas-in-dollars.md).
+
+## The pile and the leaderboard
+
+**The pile** is one for every visitor, kept by the object. Each donation adds its bananas
+exactly once, even if the object stops halfway and the relay sends the notice again, and the
+Oogas eat at a fixed rate, so every page can tell the level from the last state it was sent.
+Its clock never runs backwards. The pile can be rebuilt from the donations in D1: start at the
+starting level, then take the donations in order, each at the later of its own time and the
+last one's. See [decision 0012](decisions/0012-global-pile.md).
+
+**The leaderboard** is the top 20 signed-in donors by total bananas, rounded to whole ones.
+D1 keeps each donor's running total by GitHub's numeric id, so a renamed username keeps its
+bananas, and a trigger adds to it only when a donation is actually recorded. Anonymous
+donations count toward the pile but never appear on the board. Both are pushed to every page
+when they change.
+
+Neither belongs along a production line in the Lightning cave. Banana counts follow donation
+amounts closely, and joined to a line they could expose its balance.
 
 ## Node event feeds
 
@@ -199,6 +237,8 @@ In general terms. The specifics of any one machine stay out of this repository.
 | The Worker or the Durable Object | Donations close and pages stop updating. Invoices already shown still pay, and the relay keeps their notices until the object acknowledges them. |
 | D1 | Donations can't be recorded, so the object doesn't acknowledge them, and the relay keeps them. |
 | A node's exporter | That node's feed goes quiet, and the Factory shows "no signal". |
+| The price sources | Donations go on at the last price the object had, and record when it was fetched. With no price ever, they count no bananas until worked out again. |
+| GitHub | Nobody new can sign in. Donors can still give anonymously. |
 | bananapayserver entirely | LND and BTCPay carry on. The node keeps routing. |
 
 There is no failure in that table where this server takes a node down with it. The money is
@@ -282,8 +322,6 @@ Not settled yet. Each gets a decision record when it is.
   `api.oogabooga.land`.
 - **The Cloudflare account and the deploy rights.** They belong to the team, jointly, not to
   one person. Which account, and who holds what, is still open.
-- **Missed donations.** Should a visitor who comes back get the donations they missed onto
-  their pile? That's OBL's call; each pile lives in its own browser.
 - **How pages get node feeds.** Foundry's docs say pages poll once a minute. With the object's
   sockets, pushing them is cheap too.
 

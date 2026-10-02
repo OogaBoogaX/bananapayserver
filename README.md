@@ -24,6 +24,9 @@ point anything here at a node holding funds you would mind losing.
   invoice from a node. When it settles, every open page sees the donation land.
 - **Node event feeds.** The ingest for each operator's Foundry public events, and the feeds
   that render the Lightning Factory cave in OBL.
+- **The pile and the leaderboard.** One banana pile that every visitor sees, and a leaderboard
+  of donors who signed in with GitHub, both counted from the donations. A banana is a dollar's
+  worth of bitcoin when the donor gives.
 - **Every operator's node that joins later.** Each one stands alone, and nothing here
   correlates one node with another.
 

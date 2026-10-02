@@ -16,8 +16,9 @@ donating node's machine, a Cloudflare Worker with one Durable Object, and D1. Se
 
 It **runs no node, holds no funds, and never holds a credential that can spend from or control
 a node.** The most it ever holds is the relay's BTCPay key, which can only create and view
-invoices on one store. Every rule below protects that boundary, or the people on either side
-of it.
+invoices on one store. The Worker also runs GitHub sign-in, so it holds the GitHub app's secret
+and the key that signs sessions; neither can reach a node. Every rule below protects that
+boundary, or the people on either side of it.
 
 ## Ground rules
 

@@ -22,6 +22,20 @@ example `wrangler secret put MAX_SATS`. For local development, copy
 | `ALLOWED_ORIGINS` | variable | The origins a browser may call from, separated by commas |
 | `INVOICE_TIMEOUT_MS` | optional | How long a page waits for the relay before hearing donations are closed; 10,000 when unset |
 | `PENDING_DAYS` | optional | How long a request is kept while unpaid; 7 when unset |
+| `GITHUB_CLIENT_ID` | variable | The GitHub OAuth app that signs donors in. Its callback is `https://<api host>/auth/github/callback` |
+| `GITHUB_CLIENT_SECRET` | secret | That app's client secret |
+| `SESSION_KEY` | secret | At least 32 random characters, which sign the sign-in cookie. Changing it signs everyone out |
+| `PILE_START` | optional | Where the global pile starts, in bananas; 1,000 when unset, a placeholder for the team. It applies only when the pile is first made |
+| `PILE_EAT_PER_HOUR` | optional | How many bananas the Oogas eat an hour; 60 when unset, a placeholder for the team |
+
+Without the three sign-in settings, sign-in is off and every donation is anonymous. With
+them, the API has to be served from the same site as the page, such as a subdomain of
+`oogabooga.land`; otherwise browsers won't send the sign-in cookie. A sign-in lasts a week.
+An org owner registers the GitHub OAuth app under OogaBoogaX.
+
+**Apply D1's migrations before deploying the Worker that needs them.** The Worker records
+each donation with the columns the latest migration adds; without them it can't, and payments
+pile up unacknowledged at the relay until the migration is applied.
 
 [`wrangler.jsonc`](../wrangler.jsonc) binds the Durable Object as `DONATIONS` and D1 as `DB`,
 whose schema is in [`migrations/`](../migrations/).

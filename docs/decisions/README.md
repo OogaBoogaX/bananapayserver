@@ -30,6 +30,9 @@ means writing a new record.
 | [0007](0007-ai-assisted-commits.md) | Every commit is AI-assisted and names the model | accepted |
 | [0008](0008-limited-contributions.md) | Limited contributions | accepted |
 | [0009](0009-toolchain.md) | Plain JavaScript, no dependencies | proposed |
+| [0010](0010-handles-from-github.md) | Handles come from GitHub sign-in | accepted |
+| [0011](0011-bananas-in-dollars.md) | A banana is a dollar's worth of bitcoin | accepted |
+| [0012](0012-global-pile.md) | One global pile | accepted |
 
 ## Waiting for a record
 
