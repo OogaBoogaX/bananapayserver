@@ -10,6 +10,8 @@ const platform = {
   upgrade: (client) => new Response(null, { status: 101, webSocket: client }),
   now: () => Date.now(),
   id: () => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join(""),
+  fetch: (input, init) => fetch(input, init),
+  socket: (url) => new WebSocket(url),
 };
 
 export class Donations extends DurableObject {
@@ -36,5 +38,5 @@ export class Donations extends DurableObject {
 }
 
 export default {
-  fetch: (request, env) => handle(request, env),
+  fetch: (request, env) => handle(request, env, platform),
 };

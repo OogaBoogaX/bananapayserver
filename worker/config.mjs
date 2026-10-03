@@ -10,6 +10,8 @@ const positiveInt = (value) => {
   return Number.isSafeInteger(number) ? number : null;
 };
 
+const wholeNumber = (value) => (value?.trim?.() === "0" ? 0 : positiveInt(value));
+
 // The limits, or null when donations must stay closed.
 export function readLimits(env) {
   const maxSats = positiveInt(env.MAX_SATS);
@@ -29,5 +31,9 @@ export function readSettings(env) {
     origins,
     invoiceTimeoutMs: positiveInt(env.INVOICE_TIMEOUT_MS) ?? 10_000,
     pendingDays: positiveInt(env.PENDING_DAYS) ?? 7,
+    // The global pile: where it starts, and how many bananas the Oogas eat an hour. Both are
+    // the team's to tune; these are placeholders.
+    pileStart: wholeNumber(env.PILE_START) ?? 1_000,
+    pileEatPerHour: wholeNumber(env.PILE_EAT_PER_HOUR) ?? 60,
   };
 }

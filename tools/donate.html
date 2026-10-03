@@ -10,10 +10,12 @@
   body { font: 15px/1.5 system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; color: var(--fg); background: var(--bg); }
   fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 1rem 0; padding: 1rem; }
   label { display: block; margin: 0.4rem 0; }
-  input, textarea { font: inherit; width: 100%; box-sizing: border-box; padding: 0.3rem 0.5rem; background: transparent; color: inherit; border: 1px solid var(--line); border-radius: 4px; }
+  input:not([type="checkbox"]), textarea { font: inherit; width: 100%; box-sizing: border-box; padding: 0.3rem 0.5rem; background: transparent; color: inherit; border: 1px solid var(--line); border-radius: 4px; }
   textarea { font: 12px ui-monospace, monospace; height: 6rem; }
   .open { color: var(--ok); } .closed { color: var(--bad); }
   #log { font: 12px ui-monospace, monospace; white-space: pre-wrap; }
+  ol { padding-left: 1.5rem; }
+  .alert { color: var(--bad); border: 1px solid var(--bad); border-radius: 6px; padding: 0.4rem 0.6rem; }
 </style>
 </head>
 <body>
@@ -22,19 +24,27 @@
 <code>docs/protocol.md</code>. For regtest and signet only; see <code>docs/testing.md</code>.</p>
 
 <label>API address <input id="api" value="http://localhost:8787"></label>
-<p>Donations are <strong id="status">connecting</strong></p>
+<p>Donations are <strong id="status">connecting</strong>.
+The pile has <strong id="pile">?</strong> bananas.</p>
 
 <fieldset>
   <legend>Donate</legend>
-  <label>Sats <input id="sats" type="number" min="1" value="1000"></label>
-  <label>Handle <input id="handle" maxlength="24" autocomplete="off"></label>
+  <p><span id="who">Checking sign-in</span>
+    <a id="signin" href="#" hidden>Sign in with GitHub</a>
+    <button id="signout" type="button" hidden>Sign out</button></p>
+  <label><input id="anon" type="checkbox"> Give anonymously</label>
+  <label>Sats <input id="sats" type="number" min="1" value="10000"></label>
   <label>Message <input id="message" maxlength="80" autocomplete="off"></label>
   <button id="ask" type="button">Get invoice</button>
-  <button id="note" type="button" disabled>Send note</button>
+  <button id="note" type="button" disabled>Send message</button>
   <button id="onchain" type="button" disabled>Switch to on-chain</button>
   <p id="result"></p>
+  <p id="stale" class="alert" role="alert" hidden></p>
   <textarea id="pay" readonly placeholder="The invoice, or the on-chain payment, appears here"></textarea>
 </fieldset>
+
+<h2>Leaderboard</h2>
+<ol id="board"></ol>
 
 <h2>Donations on the socket</h2>
 <div id="log"></div>
@@ -44,19 +54,22 @@
 const $ = (id) => document.getElementById(id);
 const seen = new Set();
 let request = null, invoiceId = null, lastId = null, socket = null, retryMs = 1000;
+let pile = null;
 
 const apiBase = () => $("api").value.trim().replace(/\/$/, "");
 const log = (line) => { $("log").textContent = `${new Date().toLocaleTimeString()}  ${line}\n${$("log").textContent}`; };
 const show = (text) => { $("result").textContent = text; };
-const text = () => ({ handle: $("handle").value, message: $("message").value });
+const count = (bananas) => bananas ? `${bananas.exact.toFixed(2)} bananas, ${bananas.rounded} rounded` : "no bananas: no price";
 
-async function post(path, body) {
+// Credentials go with every call, so the sign-in cookie does.
+async function call(method, path, body) {
   const started = performance.now();
   try {
     const response = await fetch(apiBase() + path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      method,
+      credentials: "include",
+      headers: body === undefined ? {} : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
     const data = response.status === 204 ? null : await response.json();
     return { status: response.status, data, ms: Math.round(performance.now() - started) };
@@ -65,23 +78,44 @@ async function post(path, body) {
   }
 }
 
+async function checkSignIn() {
+  const { status, data } = await call("GET", "/auth/me");
+  const signedIn = status === 200;
+  $("who").textContent = signedIn ? `Donating as @${data.login}.` : status === 503 ? "Sign-in isn't set up here." : "Not signed in.";
+  $("signin").hidden = signedIn || status === 503;
+  $("signout").hidden = !signedIn;
+  $("signin").href = `${apiBase()}/auth/github?return=${encodeURIComponent(location.href)}`;
+}
+
+$("signout").addEventListener("click", async () => { await call("POST", "/auth/signout", ""); checkSignIn(); });
+
 $("ask").addEventListener("click", async () => {
-  const { status, data, ms } = await post("/donations/invoice", { sats: Number($("sats").value), ...text() });
+  const body = { sats: Number($("sats").value), message: $("message").value, anon: $("anon").checked };
+  $("stale").hidden = true;
+  const { status, data, ms } = await call("POST", "/donations/invoice", body);
   if (status !== 200) return show(`${status} ${data?.error ?? ""} after ${ms} ms`);
   ({ request } = data);
   invoiceId = data.invoice.id;
   $("pay").value = data.invoice.bolt11;
   $("note").disabled = $("onchain").disabled = false;
-  show(`Invoice ${invoiceId} in ${ms} ms, payable until ${new Date(data.invoice.expires * 1000).toLocaleTimeString()}`);
+  const rate = data.rate ? `1 banana = ${data.rate.satsPerBanana} sats at $${data.rate.usdPerBtc}/BTC` : "no price";
+  show(`Invoice in ${ms} ms: ${count(data.bananas)} (${rate}), payable until ${new Date(data.invoice.expires * 1000).toLocaleTimeString()}`);
+  // The price service didn't answer: the count uses the last price, or there's none at all.
+  if (!data.rate || data.rate.stale) {
+    $("stale").textContent = data.rate
+      ? `The live price is unavailable. Bananas are counted at the last price, from ${new Date(data.rate.at).toLocaleString()}.`
+      : "No price is available. This donation counts no bananas for now.";
+    $("stale").hidden = false;
+  }
 });
 
 $("note").addEventListener("click", async () => {
-  const { status, data, ms } = await post("/donations/note", { request, ...text() });
-  show(status === 204 ? `Note saved in ${ms} ms` : `${status} ${data?.error ?? ""}`);
+  const { status, data, ms } = await call("POST", "/donations/note", { request, message: $("message").value });
+  show(status === 204 ? `Message saved in ${ms} ms` : `${status} ${data?.error ?? ""}`);
 });
 
 $("onchain").addEventListener("click", async () => {
-  const { status, data, ms } = await post("/donations/onchain", { request });
+  const { status, data, ms } = await call("POST", "/donations/onchain", { request });
   if (status !== 200) return show(`${status} ${data?.error ?? ""} after ${ms} ms`);
   $("pay").value = `bitcoin:${data.address}?amount=${(data.sats / 1e8).toFixed(8)}`;
   show(`On-chain address in ${ms} ms, for ${data.sats} sats`);
@@ -90,6 +124,22 @@ $("onchain").addEventListener("click", async () => {
 function setStatus(label, open) {
   $("status").textContent = label;
   $("status").className = open ? "open" : "closed";
+}
+
+// The pile is worked out the same way on every page: the level it was sent, less what the
+// Oogas have eaten since it arrived.
+setInterval(() => {
+  if (!pile) return;
+  const level = Math.max(0, pile.bananas - (pile.eatPerHour * (Date.now() - pile.received)) / 3_600_000);
+  $("pile").textContent = Math.floor(level).toLocaleString();
+}, 1000);
+
+function showBoard(entries) {
+  $("board").replaceChildren(...entries.map(({ handle, bananas }) => {
+    const item = document.createElement("li");
+    item.textContent = `@${handle}: ${bananas.toLocaleString()} bananas`;
+    return item;
+  }));
 }
 
 function connect() {
@@ -101,12 +151,14 @@ function connect() {
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
     if (message.type === "status") setStatus(message.open ? "open" : "closed", message.open);
+    if (message.type === "pile") pile = { ...message, received: Date.now() };
+    if (message.type === "board") showBoard(message.entries);
     if (message.type !== "donation" || seen.has(message.donation.id)) return;
     const d = message.donation;
     seen.add(d.id);
     lastId = d.id;
     const who = d.handle ? `@${d.handle}` : "anon";
-    log(`${d.sats} sats from ${who}${d.message ? `: ${d.message}` : ""}${d.id === invoiceId ? "   <- yours, thank you" : ""}`);
+    log(`${d.sats} sats from ${who}, ${count(message.bananas)}${d.message ? `: ${d.message}` : ""}${d.id === invoiceId ? "   <- yours, thank you" : ""}`);
   });
   socket.addEventListener("close", () => {
     setStatus("not connected", false);
@@ -115,7 +167,8 @@ function connect() {
   });
 }
 
-$("api").addEventListener("change", () => socket?.close());
+$("api").addEventListener("change", () => { socket?.close(); checkSignIn(); });
+checkSignIn();
 connect();
 </script>
 </body>
