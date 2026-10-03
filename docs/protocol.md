@@ -123,7 +123,7 @@ From the relay to the object:
 | `{ "type": "invoice", "request", "error" }` | `cap` when the amount is over the relay's own cap, otherwise `unavailable` |
 | `{ "type": "onchain", "request", "address", "sats" }` | The address, and what BTCPay expects on-chain |
 | `{ "type": "onchain", "request", "error": "unavailable" }` | No address |
-| `{ "type": "paid", "invoice", "sats" }` | Settled. Repeated until acknowledged |
+| `{ "type": "paid", "invoice", "sats", "method" }` | Settled, and how: `lightning`, `onchain`, or `mixed` for an invoice paid partly each way. Repeated until acknowledged |
 
 The handle and message never go down the line: the relay sees a request id and an amount.
 

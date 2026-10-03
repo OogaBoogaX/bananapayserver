@@ -207,7 +207,7 @@ export class DonationsObject {
   // Each invoice is recorded once and pushed once. D1 calls let other messages in while they
   // wait, so a repeated notice can arrive mid-way; only the call whose insert writes the row
   // pushes it.
-  async paid({ invoice, sats }) {
+  async paid({ invoice, sats, method }) {
     const [row] = this.sql.exec(
       "SELECT request, sats, handle, message FROM pending WHERE invoice = ?",
       invoice,
@@ -218,9 +218,9 @@ export class DonationsObject {
     }
     if (row.sats !== sats) return "rejected";
     const recorded = await this.env.DB.prepare(
-      "INSERT INTO donations (id, sats, handle, message, at) VALUES (?, ?, ?, ?, ?) " +
+      "INSERT INTO donations (id, sats, handle, message, at, method) VALUES (?, ?, ?, ?, ?, ?) " +
       "ON CONFLICT (id) DO NOTHING RETURNING id, sats, handle, message, at",
-    ).bind(invoice, sats, row.handle, row.message, this.platform.now()).first();
+    ).bind(invoice, sats, row.handle, row.message, this.platform.now(), method).first();
     this.sql.exec("DELETE FROM pending WHERE request = ?", row.request);
     if (!recorded) return "duplicate";
     this.broadcast({ type: "donation", donation: donationEvent(recorded) });

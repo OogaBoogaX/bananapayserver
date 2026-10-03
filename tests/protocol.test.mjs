@@ -20,7 +20,9 @@ test("parseUp accepts each message the relay sends", () => {
     { type: "invoice", request: REQUEST, error: "cap" },
     { type: "onchain", request: REQUEST, address: ADDRESS, sats: 1000 },
     { type: "onchain", request: REQUEST, error: "unavailable" },
-    { type: "paid", invoice: "Inv0ice1234", sats: 1000 },
+    { type: "paid", invoice: "Inv0ice1234", sats: 1000, method: "lightning" },
+    { type: "paid", invoice: "Inv0ice1234", sats: 1000, method: "onchain" },
+    { type: "paid", invoice: "Inv0ice1234", sats: 1000, method: "mixed" },
   ]) assert.deepEqual(parseUp(json(message)), message);
 });
 
@@ -41,7 +43,9 @@ test("anything else is dropped", () => {
   for (const text of bad) assert.equal(parseDown(text), null, text);
   for (const text of [
     ...bad,
-    json({ type: "paid", invoice: "../../etc", sats: 1 }),
+    json({ type: "paid", invoice: "../../etc", sats: 1, method: "lightning" }),
+    json({ type: "paid", invoice: "Inv0ice1234", sats: 1 }),
+    json({ type: "paid", invoice: "Inv0ice1234", sats: 1, method: "bitcoin" }),
     json({ type: "paid", invoice: "Inv0ice1234", sats: 2 ** 60 }),
     json({ type: "invoice", request: REQUEST, invoice: { id: "Inv0ice1234", bolt11: "lnbc", expires: 1 } }),
     json({ type: "invoice", request: REQUEST, invoice: { id: "Inv0ice1234", bolt11: BOLT11, expires: 1, x: 1 } }),

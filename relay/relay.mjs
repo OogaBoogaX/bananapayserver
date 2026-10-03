@@ -10,7 +10,7 @@ export class Relay {
   constructor({ btcpay, line, config, now = Date.now, log = console.log }) {
     Object.assign(this, { btcpay, line, config, now, log });
     this.open = new Map(); // invoice id → sats: made here, not yet settled or expired
-    this.unacked = new Map(); // invoice id → sats: settled, until the object acknowledges
+    this.unacked = new Map(); // invoice id → { sats, method }: settled, until the object acknowledges
     this.checking = new Set();
   }
 
@@ -80,13 +80,23 @@ export class Relay {
         return;
       }
       if (invoice.status !== "Settled") return;
-      this.open.delete(invoiceId);
       // The pile credits payments, so an invoice someone marked settled by hand doesn't count.
-      if (invoice.additionalStatus === "Marked") return this.log(`check: invoice ${invoiceId} was marked by hand`);
+      if (invoice.additionalStatus === "Marked") {
+        this.open.delete(invoiceId);
+        return this.log(`check: invoice ${invoiceId} was marked by hand`);
+      }
       const sats = invoice.currency === "BTC" ? btcToSats(invoice.amount) : null;
-      if (!sats) return this.log(`check: invoice ${invoiceId} has an amount the relay can't read`);
-      this.unacked.set(invoiceId, sats);
-      this.line.send({ type: "paid", invoice: invoiceId, sats });
+      if (!sats) {
+        this.open.delete(invoiceId);
+        return this.log(`check: invoice ${invoiceId} has an amount the relay can't read`);
+      }
+      const method = this.paidWith(await this.btcpay.paymentMethods(invoiceId));
+      // Settled with no payment to show for it shouldn't happen; the invoice stays open, so the
+      // sweep asks again and the log keeps saying so.
+      if (!method) return this.log(`check: invoice ${invoiceId} is settled, but BTCPay lists no payment for it`);
+      this.open.delete(invoiceId);
+      this.unacked.set(invoiceId, { sats, method });
+      this.line.send({ type: "paid", invoice: invoiceId, sats, method });
     } catch (error) {
       // An invoice BTCPay no longer knows will never settle.
       if (error.status === 404) this.open.delete(invoiceId);
@@ -99,7 +109,7 @@ export class Relay {
   // Sends every notice the object hasn't acknowledged. Repeats are harmless: the object
   // records each invoice once.
   flush() {
-    for (const [invoice, sats] of this.unacked) this.line.send({ type: "paid", invoice, sats });
+    for (const [invoice, { sats, method }] of this.unacked) this.line.send({ type: "paid", invoice, sats, method });
   }
 
   // Once a minute: resends what's still unacknowledged, then catches any webhook that never
@@ -115,7 +125,7 @@ export class Relay {
     for (let attempt = 0; ; attempt++) {
       try {
         await this.load();
-        this.flush();
+        await this.sweep();
         return;
       } catch (error) {
         this.log(`load: ${error.message}; trying again`);
@@ -124,15 +134,31 @@ export class Relay {
     }
   }
 
-  // After a restart, find the relay's invoices from the last day again.
+  // After a restart, find the relay's invoices from the last day again. Settled ones go back to
+  // the open list too, so the next check works out how each was paid and sends its notice; the
+  // object ignores any it already has.
   async load() {
     const since = Math.floor(this.now() / 1_000) - LOOKBACK_SECONDS;
     for (const invoice of await this.btcpay.recent(since)) {
       const sats = invoice.currency === "BTC" ? btcToSats(invoice.amount) : null;
       if (invoice.metadata?.orderId !== ORDER_ID || !sats || !INVOICE_ID.test(invoice.id)) continue;
-      if (invoice.status === "New" || invoice.status === "Processing") this.open.set(invoice.id, sats);
-      if (invoice.status === "Settled" && invoice.additionalStatus !== "Marked") this.unacked.set(invoice.id, sats);
+      if (["New", "Processing", "Settled"].includes(invoice.status) && invoice.additionalStatus !== "Marked") {
+        this.open.set(invoice.id, sats);
+      }
     }
+  }
+
+  // How the donor paid, from the payment methods that received a payment BTCPay hasn't ruled
+  // invalid: over Lightning, on-chain, or mixed if both did. Null if neither did.
+  paidWith(methods) {
+    const { lightning, onchain } = this.config.methods;
+    const paid = new Set((methods ?? [])
+      .filter((m) => (m.payments ?? []).some((payment) => payment.status !== "Invalid"))
+      .map((m) => m.paymentMethodId ?? m.paymentMethod));
+    if (paid.has(lightning) && paid.has(onchain)) return "mixed";
+    if (paid.has(lightning)) return "lightning";
+    if (paid.has(onchain)) return "onchain";
+    return null;
   }
 
   async paymentMethod(invoiceId, method) {

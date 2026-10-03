@@ -75,13 +75,14 @@ test("a payment is recorded once, acknowledged, and pushed to every page", async
   const relay = await w.connectRelay();
   const pages = [await w.connectPage(), await w.connectPage()];
   await w.invoice(relay, { sats: 1000, handle: "<b>Ooga</b>", message: "for the cave" });
-  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000 });
+  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
   assert.deepEqual(JSON.parse(relay.sent.at(-1)), { type: "ack", invoice: INVOICE, result: "recorded" });
   const donation = { id: INVOICE, sats: 1000, handle: "bOogab", message: "for the cave", at: w.platform.now() };
   for (const page of pages) assert.deepEqual(page.messages().at(-1), { type: "donation", donation });
   assert.deepEqual(w.env.DB.db.prepare("SELECT id, sats, handle, message, at FROM donations").all().map((row) => ({ ...row })), [donation]);
+  assert.equal(w.env.DB.db.prepare("SELECT method FROM donations").get().method, "lightning", "how it was paid is recorded too");
 
-  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000 });
+  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
   assert.deepEqual(JSON.parse(relay.sent.at(-1)), { type: "ack", invoice: INVOICE, result: "duplicate" });
   assert.equal(pages[0].messages().filter((m) => m.type === "donation").length, 1);
 });
@@ -93,7 +94,7 @@ test("the handle and message can follow the amount", async () => {
   const { asked } = await w.invoice(relay, { sats: 1000 });
   const noted = await w.send(post("/donations/note", { request: asked.request, handle: "Late Ooga", message: "<i>hi</i>" }));
   assert.equal(noted.status, 204);
-  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000 });
+  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
   const { donation } = page.messages().at(-1);
   assert.equal(donation.handle, "Late Ooga");
   assert.equal(donation.message, "ihii");
@@ -228,16 +229,16 @@ test("the object checks every notice the relay sends", async () => {
   const w = await world();
   const relay = await w.connectRelay();
   const page = await w.connectPage();
-  await w.relaySays(relay, { type: "paid", invoice: "NeverAsked1", sats: 1000 });
+  await w.relaySays(relay, { type: "paid", invoice: "NeverAsked1", sats: 1000, method: "lightning" });
   assert.deepEqual(JSON.parse(relay.sent.at(-1)), { type: "ack", invoice: "NeverAsked1", result: "unknown" });
   await w.invoice(relay, { sats: 1000 });
-  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 999_999 });
+  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 999_999, method: "lightning" });
   assert.deepEqual(JSON.parse(relay.sent.at(-1)), { type: "ack", invoice: INVOICE, result: "rejected" });
   const sent = relay.sent.length;
   await w.object.webSocketMessage(relay, "not the protocol");
-  await w.object.webSocketMessage(relay, JSON.stringify({ type: "paid", invoice: INVOICE, sats: 1000, extra: 1 }));
+  await w.object.webSocketMessage(relay, JSON.stringify({ type: "paid", invoice: INVOICE, sats: 1000, method: "lightning", extra: 1 }));
   assert.equal(relay.sent.length, sent, "dropped without a reply");
-  await w.object.webSocketMessage(page, JSON.stringify({ type: "paid", invoice: INVOICE, sats: 1000 }));
+  await w.object.webSocketMessage(page, JSON.stringify({ type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" }));
   assert.equal(relay.sent.length, sent, "pages can't report payments");
   assert.equal(page.messages().filter((m) => m.type === "donation").length, 0);
 });
@@ -251,16 +252,16 @@ test("if recording fails, the payment isn't acknowledged and stays pending", asy
     throw new Error("D1 is down");
   };
   const sent = relay.sent.length;
-  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000 });
+  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
   assert.equal(relay.sent.length, sent);
   w.env.DB.prepare = prepare;
-  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000 });
+  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
   assert.equal(JSON.parse(relay.sent.at(-1)).result, "recorded");
 });
 
 test("a page that reconnects gets what it missed, and no more than the cap", async () => {
   const w = await world();
-  const insert = w.env.DB.db.prepare("INSERT INTO donations (id, sats, handle, message, at) VALUES (?, ?, '', '', ?)");
+  const insert = w.env.DB.db.prepare("INSERT INTO donations (id, sats, handle, message, at, method) VALUES (?, ?, '', '', ?, 'lightning')");
   for (let i = 1; i <= REPLAY_MAX + 5; i++) insert.run(`Donation${String(i).padStart(4, "0")}`, i, i);
   const page = await w.connectPage("Donation0002");
   const replayed = page.messages().filter((m) => m.type === "donation").map((m) => m.donation.id);
@@ -314,8 +315,8 @@ test("notices that arrive together record and push the donation once", async () 
   await w.invoice(relay, { sats: 1000 });
   const sent = relay.sent.length;
   await Promise.all([
-    w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000 }),
-    w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000 }),
+    w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" }),
+    w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" }),
   ]);
   assert.equal(page.messages().filter((m) => m.type === "donation").length, 1);
   assert.equal(w.env.DB.db.prepare("SELECT COUNT(*) AS n FROM donations").get().n, 1);

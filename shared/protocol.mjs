@@ -35,7 +35,7 @@ const UP = [
   ["invoice", { request: isRequest, error: isOneOf(["cap", "unavailable"]) }],
   ["onchain", { request: isRequest, address: (v) => typeof v === "string" && ADDRESS.test(v), sats: isSats }],
   ["onchain", { request: isRequest, error: isOneOf(["unavailable"]) }],
-  ["paid", { invoice: isInvoiceId, sats: isSats }],
+  ["paid", { invoice: isInvoiceId, sats: isSats, method: isOneOf(["lightning", "onchain", "mixed"]) }],
 ];
 
 function hasKeys(value, keys) {

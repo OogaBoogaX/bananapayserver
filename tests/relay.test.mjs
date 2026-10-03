@@ -26,11 +26,13 @@ function fakeBtcpay(overrides = {}) {
       return { id: INVOICE, expirationTime: EXPIRES };
     },
     activate: async (id, method) => calls.push(["activate", id, method]),
+    // The payments each method has received; paid over Lightning unless a test says otherwise.
+    payments: { "BTC-LN": [{ status: "Settled" }], "BTC-CHAIN": [] },
     paymentMethods: async (id) => {
       calls.push(["paymentMethods", id]);
       return [
-        { paymentMethodId: "BTC-LN", destination: BOLT11, due: "0.00001000" },
-        { paymentMethodId: "BTC-CHAIN", destination: ADDRESS, due: "0.00001000" },
+        { paymentMethodId: "BTC-LN", destination: BOLT11, due: "0.00001000", payments: btcpay.payments["BTC-LN"] },
+        { paymentMethodId: "BTC-CHAIN", destination: ADDRESS, due: "0.00001000", payments: btcpay.payments["BTC-CHAIN"] },
       ];
     },
     invoice: async (id) => {
@@ -100,7 +102,7 @@ test("a settled invoice becomes a notice that repeats until acknowledged", async
   const { relay, line } = setup();
   relay.open.set(INVOICE, 1000);
   await relay.check(INVOICE);
-  assert.deepEqual(line.sent, [{ type: "paid", invoice: INVOICE, sats: 1000 }]);
+  assert.deepEqual(line.sent, [{ type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" }]);
   assert.equal(relay.open.has(INVOICE), false);
   relay.flush();
   assert.equal(line.sent.length, 2);
@@ -133,27 +135,26 @@ test("the sweep drops expired invoices, keeps waiting ones, and resends notices"
   btcpay.invoices.set("Expired0001", { id: "Expired0001", status: "Expired", amount: "0.00000500", currency: "BTC", metadata: { orderId: ORDER_ID } });
   btcpay.invoices.set("Waiting0001", { id: "Waiting0001", status: "New", amount: "0.00000500", currency: "BTC", metadata: { orderId: ORDER_ID } });
   relay.open.set("Expired0001", 500).set("Waiting0001", 500);
-  relay.unacked.set("Unacked0001", 700);
+  relay.unacked.set("Unacked0001", { sats: 700, method: "onchain" });
   await relay.sweep();
   assert.deepEqual([...relay.open.keys()], ["Waiting0001"]);
-  assert.deepEqual(line.sent, [{ type: "paid", invoice: "Unacked0001", sats: 700 }]);
+  assert.deepEqual(line.sent, [{ type: "paid", invoice: "Unacked0001", sats: 700, method: "onchain" }]);
 });
 
-test("after a restart the relay finds its invoices from the last day", async () => {
+test("after a restart the relay finds its invoices from the last day, settled ones included", async () => {
   const { relay, btcpay } = setup();
   btcpay.invoices.set("Waiting0001", { id: "Waiting0001", status: "Processing", amount: "0.00000500", currency: "BTC", metadata: { orderId: ORDER_ID } });
   btcpay.invoices.set("Marked00001", { id: "Marked00001", status: "Settled", additionalStatus: "Marked", amount: "0.00000500", currency: "BTC", metadata: { orderId: ORDER_ID } });
   await relay.load();
   assert.deepEqual(btcpay.calls, [["recent", 1_790_000_000 - 86_400]]);
-  assert.deepEqual([...relay.open], [["Waiting0001", 500]]);
-  assert.deepEqual([...relay.unacked], [[INVOICE, 1000]]);
+  assert.deepEqual([...relay.open], [[INVOICE, 1000], ["Waiting0001", 500]], "the next check sends the settled one's notice");
 });
 
 test("a payment the sweep finds is sent once, not again by the same sweep", async () => {
   const { relay, line } = setup();
   relay.open.set(INVOICE, 1000);
   await relay.sweep();
-  assert.deepEqual(line.sent, [{ type: "paid", invoice: INVOICE, sats: 1000 }]);
+  assert.deepEqual(line.sent, [{ type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" }]);
 });
 
 test("an invoice BTCPay no longer knows, or that isn't the relay's, leaves the sweep", async () => {
@@ -182,5 +183,41 @@ test("finding its invoices again keeps trying until BTCPay is up", async () => {
   await relay.loadWhenReady({ wait: async (ms) => waits.push(ms) });
   assert.deepEqual(waits, [1_000, 2_000]);
   assert.equal(logs.filter((m) => m.startsWith("load:")).length, 2);
-  assert.deepEqual(line.sent, [{ type: "paid", invoice: INVOICE, sats: 1000 }]);
+  assert.deepEqual(line.sent, [{ type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" }]);
+});
+
+test("how the donor paid comes from BTCPay's payments: Lightning, on-chain, or both", async () => {
+  const cases = [
+    [{ "BTC-LN": [{ status: "Settled" }], "BTC-CHAIN": [] }, "lightning"],
+    [{ "BTC-LN": [], "BTC-CHAIN": [{ status: "Settled" }] }, "onchain"],
+    [{ "BTC-LN": [], "BTC-CHAIN": [{ status: "Processing" }] }, "onchain"],
+    [{ "BTC-LN": [{ status: "Settled" }], "BTC-CHAIN": [{ status: "Settled" }] }, "mixed"],
+    [{ "BTC-LN": [{ status: "Invalid" }], "BTC-CHAIN": [{ status: "Settled" }] }, "onchain"],
+  ];
+  for (const [payments, method] of cases) {
+    const { relay, line, btcpay } = setup();
+    btcpay.payments = payments;
+    relay.open.set(INVOICE, 1000);
+    await relay.check(INVOICE);
+    assert.deepEqual(line.sent, [{ type: "paid", invoice: INVOICE, sats: 1000, method }], method);
+  }
+});
+
+test("a settled invoice with no payment to show for it stays open and keeps being reported", async () => {
+  const { relay, line, btcpay, logs } = setup();
+  btcpay.payments = { "BTC-LN": [{ status: "Invalid" }], "BTC-CHAIN": [] };
+  relay.open.set(INVOICE, 1000);
+  await relay.check(INVOICE);
+  assert.deepEqual(line.sent, []);
+  assert.equal(relay.open.has(INVOICE), true);
+  assert.ok(logs.some((m) => m.includes("lists no payment")));
+});
+
+test("BTCPay 1.x payment fields say how the donor paid too", async () => {
+  const { relay, line } = setup({
+    paymentMethods: async () => [{ paymentMethod: "BTC-LN", destination: BOLT11, payments: [{ status: "Settled" }] }],
+  });
+  relay.open.set(INVOICE, 1000);
+  await relay.check(INVOICE);
+  assert.equal(line.sent[0].method, "lightning");
 });

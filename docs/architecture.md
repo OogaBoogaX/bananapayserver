@@ -124,8 +124,10 @@ amount.
    published. It checks `BTCPay-Sig`, and confirms the invoice with BTCPay's API before
    trusting it. Once a minute it also sweeps its open invoices, which catches any webhook it
    missed.
-3. **Relay → Durable Object.** The relay sends `{ invoice id, sats }` up the line. It keeps the
-   message until the object acknowledges it, and resends it after a reconnect.
+3. **Relay → Durable Object.** The relay sends `{ invoice id, sats, method }` up the line,
+   where the method says whether the donor paid over Lightning or on-chain, from the payments
+   BTCPay lists. It keeps the message until the object acknowledges it, and resends it after a
+   reconnect.
 4. **Durable Object.** Records the donation in D1, ignoring repeats by invoice id, and
    acknowledges it. Then it pushes `{ id, sats, handle, message, at }` to every page socket,
    with the invoice id as `id`.

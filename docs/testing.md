@@ -66,7 +66,7 @@ Then the failure drills:
 | Stop BTCPay, start the relay, then start BTCPay | The relay logs that it's trying again, then finds its invoices once BTCPay answers |
 | Turn the webhook off and pay an invoice | The donation still arrives, within about a minute |
 | Redeliver a webhook from BTCPay's list of deliveries | No second donation |
-| Switch to on-chain, pay the address with `./docker-customer-lncli.sh sendcoins --addr <address> --amt <sats>`, and mine with `./docker-bitcoin-generate.sh 6` | The donation arrives once the store has the confirmations it requires |
+| Switch to on-chain, pay the address with `./docker-customer-lncli.sh sendcoins --addr <address> --amt <sats>`, and mine with `./docker-bitcoin-generate.sh 6` | The donation arrives once the store has the confirmations it requires, recorded with method `onchain` |
 | Ask for more than the relay's `MAX_SATS` | The page shows the `amount` error |
 | Restart the Worker while the page is open | The page reconnects and catches up on anything it missed |
 
