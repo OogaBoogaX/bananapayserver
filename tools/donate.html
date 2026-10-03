@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Donation stand-in</title>
+<style>
+  :root { --bg: #fafaf7; --fg: #1d1d1f; --line: #cfcfc8; --ok: #146c2e; --bad: #b42318; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161616; --fg: #ececec; --line: #3a3a3a; --ok: #6fd18c; --bad: #ff8a80; } }
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; color: var(--fg); background: var(--bg); }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 1rem 0; padding: 1rem; }
+  label { display: block; margin: 0.4rem 0; }
+  input, textarea { font: inherit; width: 100%; box-sizing: border-box; padding: 0.3rem 0.5rem; background: transparent; color: inherit; border: 1px solid var(--line); border-radius: 4px; }
+  textarea { font: 12px ui-monospace, monospace; height: 6rem; }
+  .open { color: var(--ok); } .closed { color: var(--bad); }
+  #log { font: 12px ui-monospace, monospace; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>Donation stand-in</h1>
+<p>Stands in for the cave until OBL's real mode exists, using the page's API in
+<code>docs/protocol.md</code>. For regtest and signet only; see <code>docs/testing.md</code>.</p>
+
+<label>API address <input id="api" value="http://localhost:8787"></label>
+<p>Donations are <strong id="status">connecting</strong></p>
+
+<fieldset>
+  <legend>Donate</legend>
+  <label>Sats <input id="sats" type="number" min="1" value="1000"></label>
+  <label>Handle <input id="handle" maxlength="24" autocomplete="off"></label>
+  <label>Message <input id="message" maxlength="80" autocomplete="off"></label>
+  <button id="ask" type="button">Get invoice</button>
+  <button id="note" type="button" disabled>Send note</button>
+  <button id="onchain" type="button" disabled>Switch to on-chain</button>
+  <p id="result"></p>
+  <textarea id="pay" readonly placeholder="The invoice, or the on-chain payment, appears here"></textarea>
+</fieldset>
+
+<h2>Donations on the socket</h2>
+<div id="log"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const seen = new Set();
+let request = null, invoiceId = null, lastId = null, socket = null, retryMs = 1000;
+
+const apiBase = () => $("api").value.trim().replace(/\/$/, "");
+const log = (line) => { $("log").textContent = `${new Date().toLocaleTimeString()}  ${line}\n${$("log").textContent}`; };
+const show = (text) => { $("result").textContent = text; };
+const text = () => ({ handle: $("handle").value, message: $("message").value });
+
+async function post(path, body) {
+  const started = performance.now();
+  try {
+    const response = await fetch(apiBase() + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = response.status === 204 ? null : await response.json();
+    return { status: response.status, data, ms: Math.round(performance.now() - started) };
+  } catch (error) {
+    return { status: 0, data: { error: error.message }, ms: Math.round(performance.now() - started) };
+  }
+}
+
+$("ask").addEventListener("click", async () => {
+  const { status, data, ms } = await post("/donations/invoice", { sats: Number($("sats").value), ...text() });
+  if (status !== 200) return show(`${status} ${data?.error ?? ""} after ${ms} ms`);
+  ({ request } = data);
+  invoiceId = data.invoice.id;
+  $("pay").value = data.invoice.bolt11;
+  $("note").disabled = $("onchain").disabled = false;
+  show(`Invoice ${invoiceId} in ${ms} ms, payable until ${new Date(data.invoice.expires * 1000).toLocaleTimeString()}`);
+});
+
+$("note").addEventListener("click", async () => {
+  const { status, data, ms } = await post("/donations/note", { request, ...text() });
+  show(status === 204 ? `Note saved in ${ms} ms` : `${status} ${data?.error ?? ""}`);
+});
+
+$("onchain").addEventListener("click", async () => {
+  const { status, data, ms } = await post("/donations/onchain", { request });
+  if (status !== 200) return show(`${status} ${data?.error ?? ""} after ${ms} ms`);
+  $("pay").value = `bitcoin:${data.address}?amount=${(data.sats / 1e8).toFixed(8)}`;
+  show(`On-chain address in ${ms} ms, for ${data.sats} sats`);
+});
+
+function setStatus(label, open) {
+  $("status").textContent = label;
+  $("status").className = open ? "open" : "closed";
+}
+
+function connect() {
+  const url = new URL(`${apiBase()}/donations/socket`);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  if (lastId) url.searchParams.set("after", lastId);
+  socket = new WebSocket(url);
+  socket.addEventListener("open", () => { retryMs = 1000; });
+  socket.addEventListener("message", (event) => {
+    const message = JSON.parse(event.data);
+    if (message.type === "status") setStatus(message.open ? "open" : "closed", message.open);
+    if (message.type !== "donation" || seen.has(message.donation.id)) return;
+    const d = message.donation;
+    seen.add(d.id);
+    lastId = d.id;
+    const who = d.handle ? `@${d.handle}` : "anon";
+    log(`${d.sats} sats from ${who}${d.message ? `: ${d.message}` : ""}${d.id === invoiceId ? "   <- yours, thank you" : ""}`);
+  });
+  socket.addEventListener("close", () => {
+    setStatus("not connected", false);
+    setTimeout(connect, retryMs);
+    retryMs = Math.min(retryMs * 2, 30000);
+  });
+}
+
+$("api").addEventListener("change", () => socket?.close());
+connect();
+</script>
+</body>
+</html>
