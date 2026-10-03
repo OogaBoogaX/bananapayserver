@@ -1,40 +1,67 @@
-// Bitcoin's price from three sources, and the banana arithmetic built on it.
+// Bitcoin's price from 2140data's service, and the banana arithmetic built on it.
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { agreedPrice, bananasOf, fetchPrice, milliBananas, rateOf } from "../worker/price.mjs";
-import { priceAnswers } from "./helpers/cloudflare.mjs";
+import { bananasOf, fetchPrice, milliBananas, PRICE_SOCKET, PRICE_URL, rateOf } from "../worker/price.mjs";
+import { FakePriceSocket, priceMessage } from "./helpers/cloudflare.mjs";
 
-const from = (answers) => async (url) => priceAnswers(answers)(String(url));
-
-test("the middle of the answers wins, and one wrong source is left out", async () => {
-  assert.equal(await fetchPrice(from({ coinbase: 99_000, kraken: 100_000.25, mempool: 101_000 })), 10_000_025);
-  assert.equal(await fetchPrice(from({ coinbase: 1, kraken: 100_000, mempool: 100_100 })), 10_005_000);
-});
-
-test("a price needs two sources that agree; one alone, or two apart, means no price this time", async () => {
-  assert.equal(await fetchPrice(from({ coinbase: null, kraken: 100_000, mempool: 100_200 })), 10_010_000);
-  assert.equal(await fetchPrice(from({ coinbase: null, kraken: null, mempool: 100_000 })), null);
-  assert.equal(await fetchPrice(from({ coinbase: null, kraken: 100_000, mempool: 90_000 })), null);
-  assert.equal(await fetchPrice(from({ coinbase: null, kraken: null, mempool: null })), null);
-  assert.equal(await fetchPrice(async () => { throw new Error("offline"); }), null);
-});
-
-test("answers that aren't prices are ignored", async () => {
-  const odd = async (url) => {
-    const host = new URL(url).hostname;
-    if (host === "api.coinbase.com") return Response.json({ data: { amount: "-5" } });
-    if (host === "api.kraken.com") return Response.json({ result: { XXBTZUSD: { c: ["100100"] } } });
-    return Response.json({ USD: 100_000 });
+// The service as fetchPrice sees it. socket is what the socket sends, as in FakePriceSocket;
+// rest is the REST API's body, or null for an error.
+function service({ socket = [priceMessage(84_626.08)], rest = { price: "84626.08" } } = {}) {
+  const asked = [];
+  const sockets = [];
+  return {
+    asked,
+    sockets,
+    socket: (url) => {
+      asked.push(url);
+      const ws = new FakePriceSocket(socket);
+      sockets.push(ws);
+      return ws;
+    },
+    fetch: async (url) => {
+      asked.push(String(url));
+      return rest === null ? new Response("down", { status: 503 }) : Response.json(rest);
+    },
   };
-  assert.equal(await fetchPrice(odd), 10_005_000);
+}
+
+test("the socket's first price is used, and the socket is closed at once", async () => {
+  const s = service({ socket: [priceMessage(84_626.08), priceMessage(90_000)] });
+  assert.deepEqual(await fetchPrice(s), { cents: 8_462_608, from: "socket" });
+  assert.deepEqual(s.asked, [PRICE_SOCKET], "REST isn't asked");
+  assert.equal(s.sockets[0].closed, true);
 });
 
-test("agreement is within 3% of the middle answer", () => {
-  assert.equal(agreedPrice([10_000_000, 10_290_000]), 10_145_000);
-  assert.equal(agreedPrice([10_000_000, 10_700_000]), null);
-  assert.equal(agreedPrice([9_000_000, 10_000_000, 10_100_000]), 10_050_000, "the far one is left out");
-  assert.equal(agreedPrice([10_000_000]), null);
+test("when the socket fails, stays quiet or can't open, the REST API answers", async () => {
+  const closes = service({ socket: null, rest: { price: "84626.08" } });
+  assert.deepEqual(await fetchPrice(closes), { cents: 8_462_608, from: "rest" });
+  assert.deepEqual(closes.asked, [PRICE_SOCKET, PRICE_URL]);
+
+  const quiet = service({ socket: [], rest: { price: "70000" } });
+  assert.deepEqual(await fetchPrice(quiet, { timeoutMs: 20 }), { cents: 7_000_000, from: "rest" });
+  assert.equal(quiet.sockets[0].closed, true, "a quiet socket is closed when its time is up");
+
+  const unopened = { ...service({ rest: { price: "70000" } }), socket: () => { throw new Error("offline"); } };
+  assert.deepEqual(await fetchPrice(unopened), { cents: 7_000_000, from: "rest" });
+});
+
+test("when neither answers, there's no price", async () => {
+  assert.equal(await fetchPrice(service({ socket: null, rest: null })), null);
+  const offline = () => { throw new Error("offline"); };
+  assert.equal(await fetchPrice({ socket: offline, fetch: async () => { throw new Error("offline"); } }), null);
+});
+
+test("answers that aren't prices are passed over", async () => {
+  const junk = ["not json", JSON.stringify({ weightedPrice: "-5" }), JSON.stringify({ weightedPrice: "1e5" }),
+    JSON.stringify({ weightedPrice: "0.001" }), JSON.stringify({ weightedPrice: null }), JSON.stringify({ price: "100000" })];
+  const s = service({ socket: [...junk, priceMessage(100_000.5)] });
+  assert.deepEqual(await fetchPrice(s), { cents: 10_000_050, from: "socket" }, "the first real price after the junk");
+
+  for (const rest of [{ price: "0" }, { price: "abc" }, { price: 1e21 }, { price: [] }, { weightedPrice: "100000" }, []]) {
+    assert.equal(await fetchPrice(service({ socket: null, rest }), { timeoutMs: 20 }), null, JSON.stringify(rest));
+  }
+  assert.deepEqual(await fetchPrice(service({ socket: null, rest: { price: 100_000 } })), { cents: 10_000_000, from: "rest" });
 });
 
 test("a banana is a dollar's worth of bitcoin, counted in thousandths and rounded half up", () => {

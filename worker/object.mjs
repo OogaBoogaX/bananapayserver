@@ -15,12 +15,9 @@ export const REPLAY_MAX = 50;
 // How many signed-in donors the leaderboard shows.
 export const BOARD_SIZE = 20;
 
-// How old the price may get before the object fetches a new one, in the background.
-export const PRICE_FRESH_MS = 60_000;
-
-// How old the price may get before an invoice waits for a new one. Older than this, it isn't
-// the price when the invoice is made.
-export const PRICE_WAIT_MS = 5 * 60_000;
+// After the price service fails to answer, how long invoices use the last price before the
+// object asks it again, so no donor waits on a service that's down.
+export const PRICE_RETRY_MS = 60_000;
 
 // Cloudflare allows an object 32,768 hibernatable sockets. Pages stop short of that, so a
 // crowd of them can never leave the relay without room for its line.
@@ -150,7 +147,7 @@ export class DonationsObject {
       request,
       invoice: { id: invoice.id, bolt11: invoice.bolt11, expires: invoice.expires },
       bananas: bananasOf(milli),
-      rate: price ? rateOf(price.cents, price.at) : null,
+      rate: price ? { ...rateOf(price.cents, price.at), stale: price.stale } : null,
     });
   }
 
@@ -214,9 +211,6 @@ export class DonationsObject {
     if (board) server.send(JSON.stringify(board));
     const after = url.searchParams.get("after");
     if (after && INVOICE_ID.test(after)) await this.replay(server, after);
-    // A donor opens the page before picking an amount, so the price is usually fresh by the
-    // time they ask for an invoice.
-    if (this.priceAge() > PRICE_FRESH_MS) this.ctx.waitUntil(this.refreshPrice());
     return this.platform.upgrade(client);
   }
 
@@ -380,40 +374,37 @@ export class DonationsObject {
     return this.boardEntries ? { type: "board", entries: this.boardEntries } : null;
   }
 
-  // Bitcoin's last known price, in cents. An invoice waits for a new one only when there's none,
-  // or the one it has is more than five minutes old, and then alongside the relay, for at most
-  // the price sources' timeout. A price over a minute old is refreshed in the background. With
-  // no price at all, a donation still goes through; it just has no bananas until someone works
-  // them out from its sats.
+  // Bitcoin's price for an invoice, in cents: a new one from 2140data's service, asked for
+  // while the relay makes the invoice, so it costs the donor no time. When the service doesn't
+  // answer, the last price it gave, marked stale so the page can say so. With no price at all,
+  // a donation still goes through; it just has no bananas until someone works them out from
+  // its sats.
   async price() {
-    const age = this.priceAge();
-    if (age > PRICE_WAIT_MS) await this.refreshPrice();
-    else if (age > PRICE_FRESH_MS) this.ctx.waitUntil(this.refreshPrice());
-    return this.sql.exec("SELECT cents, at FROM price").toArray()[0] ?? null;
+    const fresh = await this.refreshPrice();
+    const last = this.sql.exec("SELECT cents, at FROM price").toArray()[0];
+    return last ? { cents: last.cents, at: last.at, stale: !fresh } : null;
   }
 
-  priceAge() {
-    const [row] = this.sql.exec("SELECT at FROM price").toArray();
-    return row ? this.platform.now() - row.at : Infinity;
-  }
-
-  // After a failed fetch, the object waits a minute before asking again, so no donor waits on
-  // sources that are down.
+  // True when a new price came in. Invoices asking at the same time share one lookup.
   refreshPrice() {
     if (this.refreshing) return this.refreshing;
-    if (this.priceFailedAt !== null && this.platform.now() - this.priceFailedAt < PRICE_FRESH_MS) return Promise.resolve();
-    this.refreshing = fetchPrice(this.platform.fetch)
-      .then((cents) => {
-        if (cents === null) {
+    if (this.priceFailedAt !== null && this.platform.now() - this.priceFailedAt < PRICE_RETRY_MS) return Promise.resolve(false);
+    this.refreshing = fetchPrice(this.platform)
+      .then((price) => {
+        if (price === null) {
           this.priceFailedAt = this.platform.now();
-          console.error("price: fewer than two sources agreed; keeping the last price");
-          return;
+          const [last] = this.sql.exec("SELECT at FROM price").toArray();
+          const fallback = last ? `the last price, from ${new Date(last.at).toISOString()}, marked stale` : "no price";
+          console.error(`price: 2140data's service answered neither by socket nor by REST; invoices get ${fallback}`);
+          return false;
         }
+        if (price.from === "rest") console.warn("price: 2140data's socket didn't answer; its REST API did");
         this.priceFailedAt = null;
         this.sql.exec(
           "INSERT INTO price (id, cents, at) VALUES (1, ?, ?) ON CONFLICT (id) DO UPDATE SET cents = excluded.cents, at = excluded.at",
-          cents, this.platform.now(),
+          price.cents, this.platform.now(),
         );
+        return true;
       })
       .finally(() => {
         this.refreshing = null;

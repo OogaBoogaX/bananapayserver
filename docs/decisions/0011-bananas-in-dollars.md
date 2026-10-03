@@ -1,6 +1,7 @@
 # 0011. A banana is a dollar's worth of bitcoin
 
-**Status:** accepted, 2026-10-01
+**Status:** accepted, 2026-10-01. Where the price comes from is superseded by
+[0013](0013-price-from-2140data.md).
 
 ## Decision
 

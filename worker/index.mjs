@@ -11,6 +11,7 @@ const platform = {
   now: () => Date.now(),
   id: () => [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join(""),
   fetch: (input, init) => fetch(input, init),
+  socket: (url) => new WebSocket(url),
 };
 
 export class Donations extends DurableObject {

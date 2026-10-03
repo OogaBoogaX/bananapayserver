@@ -77,8 +77,8 @@ Several choices in the design are there for it:
 - The relay's line is open before anyone asks, so no request waits for a connection.
 - The page can ask for an invoice as soon as the donor picks an amount; the message follows
   before the QR shows.
-- Bitcoin's price is looked up while the relay makes the invoice, from what the object already
-  has, so pricing the bananas adds no wait.
+- Bitcoin's price is looked up while the relay makes the invoice, so pricing the bananas adds
+  no wait unless the price service is slower than the relay.
 - BTCPay makes the Lightning invoice first, and an on-chain address only if the donor
   switches.
 - The object holds the page's request open and answers it as soon as the invoice arrives.
@@ -159,13 +159,14 @@ A signed-in donor gives as their GitHub username unless they choose to give anon
 everyone else gives anonymously. See [decision 0010](decisions/0010-handles-from-github.md).
 
 **What it counts for** is set when the invoice is made: one banana is a dollar's worth of
-bitcoin. The object keeps bitcoin's price from three public sources, and a price counts only
-when at least two agree. It refreshes the price when a page connects, so it's usually fresh
-before a donor asks; an invoice waits for a new one only when the one it has is more than five
-minutes old. The price is locked into the invoice, and the donor is shown the rate and both
-counts, exact and rounded. The donation records its sats, the price and when it was fetched,
-and its bananas in thousandths, so any count can be worked out again. See
-[decision 0011](decisions/0011-bananas-in-dollars.md).
+bitcoin. For each invoice, the object asks 2140data's price service for bitcoin's price: its
+socket first, which sends the price as soon as it connects, then its REST API. If neither
+answers, the invoice uses the last price, marked stale so the page can show an alert. The
+price is locked into the invoice, and the donor is shown the rate and both counts, exact and
+rounded. The donation records its sats, the price and when it was fetched, and its bananas in
+thousandths, so any count can be worked out again. See
+[decision 0011](decisions/0011-bananas-in-dollars.md) and
+[decision 0013](decisions/0013-price-from-2140data.md).
 
 ## The pile and the leaderboard
 
@@ -237,7 +238,7 @@ In general terms. The specifics of any one machine stay out of this repository.
 | The Worker or the Durable Object | Donations close and pages stop updating. Invoices already shown still pay, and the relay keeps their notices until the object acknowledges them. |
 | D1 | Donations can't be recorded, so the object doesn't acknowledge them, and the relay keeps them. |
 | A node's exporter | That node's feed goes quiet, and the Factory shows "no signal". |
-| The price sources | Donations go on at the last price the object had, and record when it was fetched. With no price ever, they count no bananas until worked out again. |
+| The price service | Donations go on at the last price it gave, marked stale so the page shows an alert, and record when it was fetched. With no price ever, they count no bananas until worked out again. |
 | GitHub | Nobody new can sign in. Donors can still give anonymously. |
 | bananapayserver entirely | LND and BTCPay carry on. The node keeps routing. |
 

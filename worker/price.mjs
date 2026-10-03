@@ -1,48 +1,88 @@
 // Bitcoin's price in dollars, which sets what a banana costs: one banana is a dollar's worth of
-// bitcoin. Three public sources, the same ones OBL's page reads. A price counts only when at
-// least two of them agree, so one wrong source can't move it. See
+// bitcoin. The price comes from 2140data's service, which combines the exchanges' prices into
+// one: its socket first, and its REST API when the socket doesn't answer. See
 // docs/decisions/0011-bananas-in-dollars.md.
 
 // A banana's price, in US cents.
 export const BANANA_CENTS = 100;
 
-// How far apart, as a share of the price, two sources can be and still agree.
-export const AGREEMENT = 0.03;
+export const PRICE_SOCKET = "wss://2140data.io";
+export const PRICE_URL = "https://2140data.io/price";
 
-export const SOURCES = [
-  { name: "coinbase", url: "https://api.coinbase.com/v2/prices/BTC-USD/spot", read: (d) => d?.data?.amount },
-  { name: "kraken", url: "https://api.kraken.com/0/public/Ticker?pair=XBTUSD", read: (d) => d?.result?.XXBTZUSD?.c?.[0] },
-  { name: "mempool.space", url: "https://mempool.space/api/v1/prices", read: (d) => d?.USD },
-];
+// How long each way of asking gets before the next one is tried.
+export const PRICE_TIMEOUT_MS = 2_000;
 
-// Bitcoin's price in cents, or null when fewer than two sources answered and agreed.
-export async function fetchPrice(fetch, { timeoutMs = 3_000 } = {}) {
-  const answers = await Promise.all(SOURCES.map(async ({ url, read }) => {
+const PRICE = /^\d{1,12}(?:\.\d{1,8})?$/;
+const MESSAGE_MAX = 8_192;
+
+// Bitcoin's price in cents and which way it came, or null when neither answered.
+// platform: { socket(url), fetch(url, init) }.
+export async function fetchPrice(platform, { timeoutMs = PRICE_TIMEOUT_MS } = {}) {
+  const fromSocket = await priceFromSocket(platform.socket, timeoutMs);
+  if (fromSocket !== null) return { cents: fromSocket, from: "socket" };
+  const fromRest = await priceFromRest(platform.fetch, timeoutMs);
+  return fromRest === null ? null : { cents: fromRest, from: "rest" };
+}
+
+// The socket sends the price as soon as it connects, and every second after. The object takes
+// the first one and closes the socket at once: an outbound socket left open would keep the
+// object from hibernating.
+export function priceFromSocket(open, timeoutMs) {
+  return new Promise((resolve) => {
+    let ws = null;
+    let done = false;
+    const finish = (cents) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try {
+        ws?.close(1000);
+      } catch {
+        // Closing a socket that never opened can throw; there is nothing left to close.
+      }
+      resolve(cents);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
     try {
-      const response = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(timeoutMs) });
-      if (!response.ok) return null;
-      const dollars = Number(read(await response.json()));
-      return Number.isFinite(dollars) && dollars > 0 ? Math.round(dollars * 100) : null;
+      ws = open(PRICE_SOCKET);
     } catch {
-      return null;
+      return finish(null);
     }
-  }));
-  return agreedPrice(answers.filter((value) => value !== null));
+    ws.addEventListener("message", (event) => {
+      const cents = toCents(parse(event.data)?.weightedPrice);
+      if (cents !== null) finish(cents);
+    });
+    ws.addEventListener("close", () => finish(null));
+    ws.addEventListener("error", () => finish(null));
+  });
 }
 
-// The middle of the answers that sit within AGREEMENT of the middle of all of them, if at
-// least two do.
-export function agreedPrice(cents) {
-  if (cents.length < 2) return null;
-  const all = median(cents);
-  const agreeing = cents.filter((value) => Math.abs(value - all) <= all * AGREEMENT);
-  return agreeing.length >= 2 ? median(agreeing) : null;
+export async function priceFromRest(fetch, timeoutMs) {
+  try {
+    const response = await fetch(PRICE_URL, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(timeoutMs) });
+    if (!response.ok) return null;
+    return toCents(parse(await response.text())?.price);
+  } catch {
+    return null;
+  }
 }
 
-function median(values) {
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = sorted.length >> 1;
-  return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2);
+function parse(text) {
+  if (typeof text !== "string" || text.length > MESSAGE_MAX) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+// The service writes prices as strings of dollars, such as "84626.08".
+function toCents(value) {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const text = String(value);
+  if (!PRICE.test(text)) return null;
+  const cents = Math.round(Number(text) * 100);
+  return cents > 0 ? cents : null;
 }
 
 // Thousandths of a banana for an amount in sats, at a price in cents per bitcoin, rounded half

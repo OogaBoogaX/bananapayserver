@@ -1,11 +1,12 @@
 // Stand-ins for the parts of the Workers runtime the Worker and its object use: the object's
 // SQL storage and D1 (both SQLite, here through node:sqlite), hibernatable sockets, the
-// object's namespace, and the price sources. Enough to run front.mjs and object.mjs under
-// node --test.
+// object's namespace, and 2140data's price service. Enough to run front.mjs and object.mjs
+// under node --test.
 
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { DonationsObject } from "../../worker/object.mjs";
+import { PRICE_SOCKET, PRICE_URL } from "../../worker/price.mjs";
 
 export const OPEN = 1;
 
@@ -116,21 +117,33 @@ export function fakeCtx() {
   };
 }
 
-// The three price sources' answers for a price in dollars; null makes a source fail.
-export function priceAnswers({ coinbase = 100_000, kraken = 100_000, mempool = 100_000 } = {}) {
-  const answer = (dollars, body) => (dollars === null ? new Response("down", { status: 503 }) : Response.json(body));
-  return (url) => {
-    const host = new URL(url).hostname;
-    if (host === "api.coinbase.com") return answer(coinbase, { data: { amount: String(coinbase), currency: "USD" } });
-    if (host === "api.kraken.com") return answer(kraken, { error: [], result: { XXBTZUSD: { c: [String(kraken), "1"] } } });
-    if (host === "mempool.space") return answer(mempool, { USD: mempool });
-    return new Response("unexpected", { status: 500 });
-  };
+// 2140data's price socket. messages are what it sends once it connects, in order; null closes
+// it instead, and an empty list leaves it quiet.
+export class FakePriceSocket extends EventTarget {
+  constructor(messages) {
+    super();
+    this.closed = false;
+    queueMicrotask(() => {
+      if (messages === null) return this.dispatchEvent(new Event("close"));
+      for (const data of messages) {
+        if (!this.closed) this.dispatchEvent(Object.assign(new Event("message"), { data }));
+      }
+    });
+  }
+
+  close() {
+    this.closed = true;
+  }
 }
 
-// Deterministic time and ids, plain objects where the runtime would make a 101 response, and
-// price sources that answer $100,000 unless a test says otherwise.
-export function fakePlatform({ start = Date.UTC(2026, 9, 1, 12), prices = priceAnswers() } = {}) {
+// One of the socket's messages: the combined price, and each exchange's.
+export const priceMessage = (dollars) =>
+  JSON.stringify({ weightedPrice: String(dollars), prices: { bitstamp: dollars, kraken: dollars } });
+
+// Deterministic time and ids, plain objects where the runtime would make a 101 response, and a
+// price service whose socket and REST API both say $100,000 unless a test says otherwise. A
+// price of null makes that way fail.
+export function fakePlatform({ start = Date.UTC(2026, 9, 1, 12), prices = {} } = {}) {
   let time = start;
   let counter = 0;
   const platform = {
@@ -141,11 +154,18 @@ export function fakePlatform({ start = Date.UTC(2026, 9, 1, 12), prices = priceA
     advance: (ms) => {
       time += ms;
     },
+    prices: { socket: 100_000, rest: 100_000, ...prices },
     fetched: [],
-    respond: prices,
-    fetch: async (url, init) => {
+    fetch: async (url) => {
       platform.fetched.push(String(url));
-      return platform.respond(String(url), init);
+      const { rest } = platform.prices;
+      if (String(url) !== PRICE_URL || rest === null) return new Response("unavailable", { status: 503 });
+      return Response.json({ price: String(rest) });
+    },
+    socket: (url) => {
+      platform.fetched.push(url);
+      const { socket } = platform.prices;
+      return new FakePriceSocket(url !== PRICE_SOCKET || socket === null ? null : [priceMessage(socket)]);
     },
   };
   return platform;

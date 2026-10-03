@@ -78,7 +78,7 @@ Then the failure drills:
 | Restart the Worker while the page is open | The page reconnects and catches up on anything it missed |
 | Sign in with GitHub and donate, then donate again with "Give anonymously" | The first appears on the leaderboard under your username; the second only adds to the pile |
 | Open a second page and watch both for a few minutes | Both show the same pile, falling at the same rate |
-| Stop the price sources answering, for example by taking the machine offline briefly, and donate | The donation still goes through, counted at the last price; `price_at` in D1 shows when that was |
+| Stop the price service answering, for example by taking the machine offline briefly, and donate | The donation still goes through, counted at the last price; the page shows an alert, and `price_at` in D1 shows when that price was fetched |
 
 ## Stage 2: Cloudflare and Tor
 

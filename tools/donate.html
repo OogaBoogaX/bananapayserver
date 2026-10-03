@@ -15,6 +15,7 @@
   .open { color: var(--ok); } .closed { color: var(--bad); }
   #log { font: 12px ui-monospace, monospace; white-space: pre-wrap; }
   ol { padding-left: 1.5rem; }
+  .alert { color: var(--bad); border: 1px solid var(--bad); border-radius: 6px; padding: 0.4rem 0.6rem; }
 </style>
 </head>
 <body>
@@ -38,6 +39,7 @@ The pile has <strong id="pile">?</strong> bananas.</p>
   <button id="note" type="button" disabled>Send message</button>
   <button id="onchain" type="button" disabled>Switch to on-chain</button>
   <p id="result"></p>
+  <p id="stale" class="alert" role="alert" hidden></p>
   <textarea id="pay" readonly placeholder="The invoice, or the on-chain payment, appears here"></textarea>
 </fieldset>
 
@@ -89,6 +91,7 @@ $("signout").addEventListener("click", async () => { await call("POST", "/auth/s
 
 $("ask").addEventListener("click", async () => {
   const body = { sats: Number($("sats").value), message: $("message").value, anon: $("anon").checked };
+  $("stale").hidden = true;
   const { status, data, ms } = await call("POST", "/donations/invoice", body);
   if (status !== 200) return show(`${status} ${data?.error ?? ""} after ${ms} ms`);
   ({ request } = data);
@@ -97,6 +100,13 @@ $("ask").addEventListener("click", async () => {
   $("note").disabled = $("onchain").disabled = false;
   const rate = data.rate ? `1 banana = ${data.rate.satsPerBanana} sats at $${data.rate.usdPerBtc}/BTC` : "no price";
   show(`Invoice in ${ms} ms: ${count(data.bananas)} (${rate}), payable until ${new Date(data.invoice.expires * 1000).toLocaleTimeString()}`);
+  // The price service didn't answer: the count uses the last price, or there's none at all.
+  if (!data.rate || data.rate.stale) {
+    $("stale").textContent = data.rate
+      ? `The live price is unavailable. Bananas are counted at the last price, from ${new Date(data.rate.at).toLocaleString()}.`
+      : "No price is available. This donation counts no bananas for now.";
+    $("stale").hidden = false;
+  }
 });
 
 $("note").addEventListener("click", async () => {

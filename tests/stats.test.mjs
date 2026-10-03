@@ -3,8 +3,9 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BOARD_SIZE, DonationsObject, PRICE_WAIT_MS } from "../worker/object.mjs";
-import { fakeCtx, fakeD1, fakePlatform, priceAnswers } from "./helpers/cloudflare.mjs";
+import { BOARD_SIZE, DonationsObject, PRICE_RETRY_MS } from "../worker/object.mjs";
+import { PRICE_SOCKET, PRICE_URL } from "../worker/price.mjs";
+import { fakeCtx, fakeD1, fakePlatform } from "./helpers/cloudflare.mjs";
 import { bolt11For, INVOICE } from "./helpers/values.mjs";
 import { EXPIRES, sessionCookie, world } from "./helpers/world.mjs";
 
@@ -25,68 +26,71 @@ test("the rate is fetched once, locked into the invoice, and recorded with the d
   const { response } = await w.invoice(relay, { sats: 25_000 }, () => ({ id: INVOICE, bolt11: bolt11For(25_000), expires: EXPIRES }));
   const reply = await response.json();
   assert.deepEqual(reply.bananas, { exact: 25, rounded: 25 });
-  assert.deepEqual(reply.rate, { usdPerBtc: 100_000, satsPerBanana: 1000, at: w.platform.now() });
-  assert.equal(w.platform.fetched.length, 3, "one ask of each source");
+  assert.deepEqual(reply.rate, { usdPerBtc: 100_000, satsPerBanana: 1000, at: w.platform.now(), stale: false });
+  assert.deepEqual(w.platform.fetched, [PRICE_SOCKET], "one ask, by socket");
   const priced = w.platform.now();
 
   // Bitcoin halves before the donor pays; the donation still counts what they were shown.
-  w.platform.advance(PRICE_WAIT_MS + 1);
-  w.platform.respond = priceAnswers({ coinbase: 50_000, kraken: 50_000, mempool: 50_000 });
-  await w.connectPage();
-  await w.ctx.settle();
+  w.platform.advance(HOUR);
+  w.platform.prices = { socket: 50_000, rest: 50_000 };
   await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 25_000, method: "lightning" });
   const row = w.env.DB.db.prepare("SELECT sats, price_cents, price_at, banana_cents, milli FROM donations").get();
   assert.deepEqual({ ...row }, { sats: 25_000, price_cents: 10_000_000, price_at: priced, banana_cents: 100, milli: 25_000 });
 });
 
-test("a price over a minute old is refreshed in the background; over five, the invoice waits for a new one", async () => {
+test("every invoice gets a new price: from the socket, or from REST when the socket doesn't answer", async (t) => {
+  const warnings = t.mock.method(console, "warn", () => {});
   const w = await world();
   const relay = await w.connectRelay();
-  await w.invoice(relay, { sats: 1000 });
   const answer = (id) => () => ({ id, bolt11: bolt11For(1000), expires: EXPIRES });
+  await w.invoice(relay, { sats: 1000 });
 
-  w.platform.advance(61_000);
-  w.platform.respond = priceAnswers({ coinbase: 50_000, kraken: 50_000, mempool: 50_000 });
-  const second = await w.invoice(relay, { sats: 1000 }, answer("Inv0ice0002"));
-  assert.equal((await second.response.json()).rate.usdPerBtc, 100_000, "a minute old: used as it is");
-  await w.ctx.settle();
-  const third = await w.invoice(relay, { sats: 1000 }, answer("Inv0ice0003"));
-  assert.deepEqual((await third.response.json()).bananas, { exact: 0.5, rounded: 1 }, "the refresh landed for the next");
+  w.platform.advance(1_000);
+  w.platform.prices = { socket: null, rest: 80_000 };
+  const second = await (await w.invoice(relay, { sats: 1000 }, answer("Inv0ice0002"))).response.json();
+  assert.deepEqual(second.rate, { usdPerBtc: 80_000, satsPerBanana: 1250, at: w.platform.now(), stale: false });
+  assert.deepEqual(w.platform.fetched, [PRICE_SOCKET, PRICE_SOCKET, PRICE_URL]);
+  assert.match(warnings.mock.calls[0].arguments[0], /socket didn't answer; its REST API did/);
 
-  w.platform.advance(PRICE_WAIT_MS + 1);
-  w.platform.respond = priceAnswers({ coinbase: 80_000, kraken: 80_000, mempool: 80_000 });
-  const fourth = await w.invoice(relay, { sats: 1000 }, answer("Inv0ice0004"));
-  assert.equal((await fourth.response.json()).rate.usdPerBtc, 80_000, "five minutes old: the invoice waited for a new price");
+  w.platform.prices = { socket: 90_000, rest: 80_000 };
+  const third = await (await w.invoice(relay, { sats: 1000 }, answer("Inv0ice0003"))).response.json();
+  assert.equal(third.rate.usdPerBtc, 90_000, "back on the socket");
+
+  const asked = w.platform.fetched.length;
+  await w.connectPage();
+  assert.equal(w.platform.fetched.length, asked, "a page connecting doesn't ask");
 });
 
-test("a page connecting refreshes an old price before anyone asks for an invoice", async () => {
+test("when neither answers, invoices get the last price marked stale, and nobody waits on the service for a minute", async (t) => {
+  const errors = t.mock.method(console, "error", () => {});
   const w = await world();
   const relay = await w.connectRelay();
+  const answer = (id) => () => ({ id, bolt11: bolt11For(1000), expires: EXPIRES });
   await w.invoice(relay, { sats: 1000 });
-  w.platform.advance(PRICE_WAIT_MS + 1);
-  w.platform.respond = priceAnswers({ coinbase: 70_000, kraken: 70_000, mempool: 70_000 });
-  await w.connectPage();
-  await w.ctx.settle();
-  const fetched = w.platform.fetched.length;
-  const { response } = await w.invoice(relay, { sats: 1000 }, () => ({ id: "Inv0ice0002", bolt11: bolt11For(1000), expires: EXPIRES }));
-  assert.equal((await response.json()).rate.usdPerBtc, 70_000);
-  assert.equal(w.platform.fetched.length, fetched, "the invoice didn't fetch again");
+  const priced = w.platform.now();
+
+  w.platform.advance(HOUR);
+  w.platform.prices = { socket: null, rest: null };
+  const second = await (await w.invoice(relay, { sats: 1000 }, answer("Inv0ice0002"))).response.json();
+  assert.deepEqual(second.rate, { usdPerBtc: 100_000, satsPerBanana: 1000, at: priced, stale: true });
+  assert.deepEqual(second.bananas, { exact: 1, rounded: 1 }, "counted at the last price");
+  assert.equal(errors.mock.calls.length, 1);
+  assert.match(errors.mock.calls[0].arguments[0], /answered neither by socket nor by REST.*the last price, from 2026-10-01T12:00:00.000Z, marked stale/);
+
+  const asked = w.platform.fetched.length;
+  const third = await (await w.invoice(relay, { sats: 1000 }, answer("Inv0ice0003"))).response.json();
+  assert.equal(third.rate.stale, true);
+  assert.equal(w.platform.fetched.length, asked, "no second attempt within the minute");
+
+  w.platform.advance(PRICE_RETRY_MS + 1);
+  w.platform.prices = { socket: 70_000, rest: 70_000 };
+  const fourth = await (await w.invoice(relay, { sats: 1000 }, answer("Inv0ice0004"))).response.json();
+  assert.deepEqual(fourth.rate, { usdPerBtc: 70_000, satsPerBanana: 1429, at: w.platform.now(), stale: false });
 });
 
-test("after the sources fail, nobody waits on them again for a minute", async () => {
-  const w = await world({}, { prices: priceAnswers({ coinbase: null, kraken: null, mempool: null }) });
-  const relay = await w.connectRelay();
-  await w.invoice(relay, { sats: 1000 });
-  assert.equal(w.platform.fetched.length, 3);
-  await w.invoice(relay, { sats: 1000 }, () => ({ id: "Inv0ice0002", bolt11: bolt11For(1000), expires: EXPIRES }));
-  assert.equal(w.platform.fetched.length, 3, "no second attempt within the minute");
-  w.platform.advance(61_000);
-  await w.invoice(relay, { sats: 1000 }, () => ({ id: "Inv0ice0003", bolt11: bolt11For(1000), expires: EXPIRES }));
-  assert.equal(w.platform.fetched.length, 6);
-});
-
-test("with no price anywhere, the donation still goes through, worth no bananas until worked out again", async () => {
-  const w = await world({}, { prices: priceAnswers({ coinbase: null, kraken: null, mempool: null }) });
+test("with no price anywhere, the donation still goes through, worth no bananas until worked out again", async (t) => {
+  const errors = t.mock.method(console, "error", () => {});
+  const w = await world({}, { prices: { socket: null, rest: null } });
   const relay = await w.connectRelay();
   const page = await w.connectPage();
   const { response } = await w.invoice(relay, { sats: 1000 });
@@ -97,6 +101,7 @@ test("with no price anywhere, the donation still goes through, worth no bananas 
   assert.equal(typed(page, "donation")[0].bananas, null);
   assert.equal(typed(page, "pile").length, 1, "the pile doesn't move");
   assert.deepEqual({ ...w.env.DB.db.prepare("SELECT sats, price_cents, milli FROM donations").get() }, { sats: 1000, price_cents: null, milli: null });
+  assert.match(errors.mock.calls[0].arguments[0], /invoices get no price$/);
 });
 
 test("everyone sees one pile: it starts full, the Oogas eat at a fixed rate, and donations add to it", async () => {

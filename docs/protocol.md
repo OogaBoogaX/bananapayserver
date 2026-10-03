@@ -54,7 +54,7 @@ as soon as the donor picks it, and the message afterwards.
   "request": "3f0c…32 hex characters",
   "invoice": { "id": "BTCPay invoice id", "bolt11": "lnbc…", "expires": 1790000900 },
   "bananas": { "exact": 10, "rounded": 10 },
-  "rate": { "usdPerBtc": 100000, "satsPerBanana": 1000, "at": 1790000000000 }
+  "rate": { "usdPerBtc": 100000, "satsPerBanana": 1000, "at": 1790000000000, "stale": false }
 }
 ```
 
@@ -62,8 +62,10 @@ as soon as the donor picks it, and the message afterwards.
 on-chain. Keep it in memory, never in a URL. `expires` is in unix seconds. A banana is a
 dollar's worth of bitcoin at the price in `rate`, which is locked into this invoice: the donor
 is shown the rate and both counts, and the donation counts `exact` bananas. `rate.at` is when
-the price was fetched, in milliseconds. Both are null in the rare case that no price is
-available; the donation still goes through.
+the price was fetched, in milliseconds. `rate.stale` is true when the price service didn't
+answer and the count uses the last price it gave, from `rate.at`; the page shows an alert
+saying so. `bananas` and `rate` are both null in the rare case that there has never been a
+price, and the page shows an alert for that too. Either way, the donation still goes through.
 
 ### `POST /donations/note`
 
