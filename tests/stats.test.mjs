@@ -27,7 +27,7 @@ test("the rate is fetched once, locked into the invoice, and recorded with the d
   const reply = await response.json();
   assert.deepEqual(reply.bananas, { exact: 25, rounded: 25 });
   assert.deepEqual(reply.rate, { usdPerBtc: 100_000, satsPerBanana: 1000, at: w.platform.now(), stale: false });
-  assert.deepEqual(w.platform.fetched, [PRICE_SOCKET], "one ask, by socket");
+  assert.deepEqual(w.platform.fetched, [PRICE_URL], "one ask, by REST");
   const priced = w.platform.now();
 
   // Bitcoin halves before the donor pays; the donation still counts what they were shown.
@@ -38,7 +38,7 @@ test("the rate is fetched once, locked into the invoice, and recorded with the d
   assert.deepEqual({ ...row }, { sats: 25_000, price_cents: 10_000_000, price_at: priced, banana_cents: 100, milli: 25_000 });
 });
 
-test("every invoice gets a new price: from the socket, or from REST when the socket doesn't answer", async (t) => {
+test("every invoice gets a new price: from REST, or from the socket when REST doesn't answer", async (t) => {
   const warnings = t.mock.method(console, "warn", () => {});
   const w = await world();
   const relay = await w.connectRelay();
@@ -46,15 +46,15 @@ test("every invoice gets a new price: from the socket, or from REST when the soc
   await w.invoice(relay, { sats: 1000 });
 
   w.platform.advance(1_000);
-  w.platform.prices = { socket: null, rest: 80_000 };
+  w.platform.prices = { rest: null, socket: 80_000 };
   const second = await (await w.invoice(relay, { sats: 1000 }, answer("Inv0ice0002"))).response.json();
   assert.deepEqual(second.rate, { usdPerBtc: 80_000, satsPerBanana: 1250, at: w.platform.now(), stale: false });
-  assert.deepEqual(w.platform.fetched, [PRICE_SOCKET, PRICE_SOCKET, PRICE_URL]);
-  assert.match(warnings.mock.calls[0].arguments[0], /socket didn't answer; its REST API did/);
+  assert.deepEqual(w.platform.fetched, [PRICE_URL, PRICE_URL, PRICE_SOCKET]);
+  assert.match(warnings.mock.calls[0].arguments[0], /REST API didn't answer; its socket did/);
 
-  w.platform.prices = { socket: 90_000, rest: 80_000 };
+  w.platform.prices = { rest: 90_000, socket: 80_000 };
   const third = await (await w.invoice(relay, { sats: 1000 }, answer("Inv0ice0003"))).response.json();
-  assert.equal(third.rate.usdPerBtc, 90_000, "back on the socket");
+  assert.equal(third.rate.usdPerBtc, 90_000, "back on REST");
 
   const asked = w.platform.fetched.length;
   await w.connectPage();
@@ -75,7 +75,7 @@ test("when neither answers, invoices get the last price marked stale, and nobody
   assert.deepEqual(second.rate, { usdPerBtc: 100_000, satsPerBanana: 1000, at: priced, stale: true });
   assert.deepEqual(second.bananas, { exact: 1, rounded: 1 }, "counted at the last price");
   assert.equal(errors.mock.calls.length, 1);
-  assert.match(errors.mock.calls[0].arguments[0], /answered neither by socket nor by REST.*the last price, from 2026-10-01T12:00:00.000Z, marked stale/);
+  assert.match(errors.mock.calls[0].arguments[0], /answered neither by REST nor by socket.*the last price, from 2026-10-01T12:00:00.000Z, marked stale/);
 
   const asked = w.platform.fetched.length;
   const third = await (await w.invoice(relay, { sats: 1000 }, answer("Inv0ice0003"))).response.json();

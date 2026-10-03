@@ -395,10 +395,10 @@ export class DonationsObject {
           this.priceFailedAt = this.platform.now();
           const [last] = this.sql.exec("SELECT at FROM price").toArray();
           const fallback = last ? `the last price, from ${new Date(last.at).toISOString()}, marked stale` : "no price";
-          console.error(`price: 2140data's service answered neither by socket nor by REST; invoices get ${fallback}`);
+          console.error(`price: 2140data's service answered neither by REST nor by socket; invoices get ${fallback}`);
           return false;
         }
-        if (price.from === "rest") console.warn("price: 2140data's socket didn't answer; its REST API did");
+        if (price.from === "socket") console.warn("price: 2140data's REST API didn't answer; its socket did");
         this.priceFailedAt = null;
         this.sql.exec(
           "INSERT INTO price (id, cents, at) VALUES (1, ?, ?) ON CONFLICT (id) DO UPDATE SET cents = excluded.cents, at = excluded.at",

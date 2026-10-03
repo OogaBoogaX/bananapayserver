@@ -1,7 +1,7 @@
 // Bitcoin's price in dollars, which sets what a banana costs: one banana is a dollar's worth of
 // bitcoin. The price comes from 2140data's service, which combines the exchanges' prices into
-// one: its socket first, and its REST API when the socket doesn't answer. See
-// docs/decisions/0011-bananas-in-dollars.md.
+// one: its REST API first, and its socket when the REST API doesn't answer. See decisions 0011
+// and 0013 in docs/decisions/.
 
 // A banana's price, in US cents.
 export const BANANA_CENTS = 100;
@@ -18,10 +18,10 @@ const MESSAGE_MAX = 8_192;
 // Bitcoin's price in cents and which way it came, or null when neither answered.
 // platform: { socket(url), fetch(url, init) }.
 export async function fetchPrice(platform, { timeoutMs = PRICE_TIMEOUT_MS } = {}) {
-  const fromSocket = await priceFromSocket(platform.socket, timeoutMs);
-  if (fromSocket !== null) return { cents: fromSocket, from: "socket" };
   const fromRest = await priceFromRest(platform.fetch, timeoutMs);
-  return fromRest === null ? null : { cents: fromRest, from: "rest" };
+  if (fromRest !== null) return { cents: fromRest, from: "rest" };
+  const fromSocket = await priceFromSocket(platform.socket, timeoutMs);
+  return fromSocket === null ? null : { cents: fromSocket, from: "socket" };
 }
 
 // The socket sends the price as soon as it connects, and every second after. The object takes

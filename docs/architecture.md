@@ -160,7 +160,7 @@ everyone else gives anonymously. See [decision 0010](decisions/0010-handles-from
 
 **What it counts for** is set when the invoice is made: one banana is a dollar's worth of
 bitcoin. For each invoice, the object asks 2140data's price service for bitcoin's price: its
-socket first, which sends the price as soon as it connects, then its REST API. If neither
+REST API first, then its socket, which sends the price as soon as it connects. If neither
 answers, the invoice uses the last price, marked stale so the page can show an alert. The
 price is locked into the invoice, and the donor is shown the rate and both counts, exact and
 rounded. The donation records its sats, the price and when it was fetched, and its bananas in
