@@ -12,7 +12,10 @@
 	// The relay dials its workers.dev address. Pages never call it directly.
 	"workers_dev": true,
 	"preview_urls": false,
-	"observability": { "enabled": true },
+	// The Worker's own log lines are kept, such as the price service's failures. Cloudflare's
+	// invocation logs are off: they would keep each request's headers, and so visitors'
+	// addresses and the relay's, for days.
+	"observability": { "enabled": true, "logs": { "invocation_logs": false } },
 	"durable_objects": {
 		"bindings": [{ "name": "DONATIONS", "class_name": "Donations" }]
 	},

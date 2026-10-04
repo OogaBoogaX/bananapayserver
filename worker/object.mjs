@@ -7,6 +7,7 @@ import { invoiceMatches } from "../shared/bolt11.mjs";
 import { donationEvent } from "../shared/donation.mjs";
 import { parseUp } from "../shared/protocol.mjs";
 import { readLimits, readSettings } from "./config.mjs";
+import { relayAuthorized } from "./relay-token.mjs";
 import { BANANA_CENTS, bananasOf, fetchPrice, milliBananas, rateOf } from "./price.mjs";
 
 // The most donations a reconnecting page is sent to catch up.
@@ -110,6 +111,9 @@ export class DonationsObject {
       case "/page":
         return this.page(request, url);
       case "/relay":
+        // Checked here as well as at the front door: another Worker in the account could
+        // bind this object and reach it without passing through the front.
+        if (!(await relayAuthorized(request, this.env))) return json({ error: "unauthorized" }, 401);
         return this.relay();
     }
     return json({ error: "not found" }, 404);

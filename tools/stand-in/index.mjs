@@ -10,6 +10,8 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const visitor = request.headers.get("CF-Connecting-IP") ?? "local";
+    // Only the page's own calls, as OBL's Worker checks with its fromSite.
+    if (!fromSite(request, url)) return Response.json({ error: "forbidden" }, { status: 403 });
     try {
       if (url.pathname === "/donations/socket") return await env.DONATIONS.fetch(socketRequest(request, url, visitor));
       const method = CALLS[url.pathname];
@@ -20,7 +22,7 @@ export default {
         headers: { "Content-Type": request.headers.get("Content-Type") ?? "" },
         body: request.body,
       });
-      if (method === "invoice") return await env.DONATIONS.invoice(call, donorOf(request), visitor);
+      if (method === "invoice") return await env.DONATIONS.invoice(call, donorOf(request, url), visitor);
       return await env.DONATIONS[method](call, visitor);
     } catch {
       // bananapayserver can't be reached, so the page hears that donations are closed.
@@ -39,8 +41,16 @@ function socketRequest(request, url, visitor) {
   return new Request(url, { headers });
 }
 
-// The test donor the page named, or nobody. bananapayserver checks the shape.
-function donorOf(request) {
+// A call from the page itself: a matching Origin, or same-origin fetch metadata.
+function fromSite(request, url) {
+  const origin = request.headers.get("Origin");
+  return origin ? origin === url.origin : request.headers.get("Sec-Fetch-Site") === "same-origin";
+}
+
+// The test donor the page named, or nobody, and only on this machine: anywhere else a browser
+// could name anyone. bananapayserver checks the shape.
+function donorOf(request, url) {
+  if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") return null;
   const id = request.headers.get("X-Test-Donor-Id"), login = request.headers.get("X-Test-Donor-Login");
   return id || login ? { id: Number(id), login: login ?? "" } : null;
 }

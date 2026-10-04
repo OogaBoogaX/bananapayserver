@@ -32,13 +32,13 @@ point anything here at a node holding funds you would mind losing.
 
 ## How it works
 
-A small program, the relay, runs beside BTCPay Server on each donating node's machine and
-dials out a WebSocket to a Cloudflare Worker. A page asks its own Worker, Ooga Booga Land's,
-for an invoice, and that Worker passes the call on over a service binding; the request goes
-down the relay's line, BTCPay makes the invoice, and the reply carries it back to the page. When the donor pays, BTCPay tells the relay, the relay tells the Worker's Durable
-Object, and the object records the donation in D1 and pushes it to every page. Operators'
-Foundry exporters post their public events to the same Worker. Nothing ever connects in to a
-node.
+A small program, the relay, runs beside BTCPay Server on each donating node's machine and dials
+out a WebSocket to a Cloudflare Worker. A page asks its own Worker, Ooga Booga Land's, for an
+invoice, and that Worker passes the call on over a service binding; the request goes down the
+relay's line, BTCPay makes the invoice, and the reply carries it back to the page. When the
+donor pays, BTCPay tells the relay, the relay tells the Worker's Durable Object, and the object
+records the donation in D1 and pushes it to every page. Operators' Foundry exporters post their
+public events to the same Worker. Nothing ever connects in to a node.
 
 ## What it is not
 

@@ -9,9 +9,9 @@ Pages never call this Worker directly. OBL's own Worker serves the page and sign
 with GitHub. It passes the page's donation calls on over a service binding to a named
 entrypoint, `PageApi`, which only a binding can reach. Beside each call it passes the donor's
 GitHub id and username, or nobody, and the address the call came from. This Worker's public
-address serves only the relay's line. Its own GitHub sign-in, the secrets that ran it and the
-list of allowed origins go. OBL's staging Worker binds to `bananapayserver-staging` and its
-production Worker to `bananapayserver-production`.
+address takes only the relay's line, until Foundry's exporters post there too. Its own GitHub
+sign-in, the secrets that ran it and the list of allowed origins go. OBL's staging Worker binds
+to `bananapayserver-staging` and its production Worker to `bananapayserver-production`.
 
 ## Alternatives
 
@@ -39,13 +39,17 @@ Worker forwarded by mistake, because the donor is never read from a header at al
 ## Consequences
 
 - **This Worker trusts OBL's Worker to say who is giving.** It checks the shape, a numeric id
-  and a valid GitHub username, but can't check the sign-in itself. Whoever controls OBL's
-  Worker, or can deploy any Worker in the same Cloudflare account, could put any GitHub user's
-  name on a donation. That reaches the leaderboard, never the money or a node. The page that
-  shows the QR is already OBL's to serve.
+  and a GitHub username, but can't check the sign-in itself. Whoever controls OBL's Worker, or
+  any other Worker in the same Cloudflare account, can bind the entrypoint or the object and
+  put any GitHub user's name on a donation, which reaches the leaderboard.
 - **Both Workers live in one Cloudflare account,** as a binding requires. That account's
-  admins and OBL's CI, which deploys with an account-wide token, can deploy this Worker too.
-  The account's ownership and OBL's deploy workflows matter here as much as there.
+  admins and OBL's CI, which deploys with an account-wide token, can deploy over this Worker
+  too, and a Worker that isn't this one can send donors' payments anywhere. That never reaches
+  a node or its funds, and the page that shows the QR is already OBL's to serve, but the
+  account's ownership and OBL's deploy workflows matter here as much as there.
+- **The object checks the relay's token itself,** as well as the front door. Another Worker in
+  the account could bind the object directly, and without that check it could open the relay's
+  line and answer invoice requests with its own.
 - **OBL's Worker takes on the checks this Worker made for browsers.** It checks the origin,
   runs its Worker first for `/donations/*`, builds each call from the page's body alone, sets
   the visitor's address, and answers "closed" when a call fails. See

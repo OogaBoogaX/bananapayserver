@@ -34,6 +34,13 @@ tests_dir() {
   echo "$BTCPAY_DIR/BTCPayServer.Tests"
 }
 
+# Compose on BTCPay's development project and no other, whatever directory this runs from.
+compose() {
+  local dir
+  dir="$(tests_dir)"
+  docker compose -p btcpayservertests -f "$dir/docker-compose.yml" "$@"
+}
+
 container() {
   docker ps -q --filter label=com.docker.compose.project=btcpayservertests --filter "label=com.docker.compose.service=$1"
 }
@@ -51,9 +58,13 @@ wait_for() {
 
 synced() { [ "$("$1" getinfo | jq -r .synced_to_chain)" = true ]; }
 
+channel_active() {
+  customer listchannels | jq -e --arg id "$1" '.channels | any(.remote_pubkey == $id and .active)'
+}
+
 cmd_up() {
   docker info >/dev/null 2>&1 || fail "Docker isn't answering. On a Mac, start Docker Desktop; if it runs but this still fails, set DOCKER_HOST=unix://\$HOME/.docker/run/docker.sock"
-  (cd "$(tests_dir)" && docker compose up -d dev)
+  compose up -d dev
   wait_for "bitcoind" bitcoin getblockcount
   # Spendable coins, then a fresh block, so the Lightning nodes count the chain as current.
   if [ "$(bitcoin getblockcount)" -lt 101 ]; then mine 101; fi
@@ -62,7 +73,10 @@ cmd_up() {
   wait_for "the customer node" synced customer
   local merchant_id
   merchant_id="$(merchant getinfo | jq -r .identity_pubkey)"
-  if customer listchannels | jq -e --arg id "$merchant_id" '.channels | any(.remote_pubkey == $id and .active)' >/dev/null; then
+  # Any channel to the merchant counts: after a restart it stays inactive until the peers
+  # reconnect, and a new one is pending until mined.
+  if customer listchannels | jq -e --arg id "$merchant_id" '.channels | any(.remote_pubkey == $id)' >/dev/null ||
+    customer pendingchannels | jq -e --arg id "$merchant_id" '.pending_open_channels | any(.channel.remote_node_pub == $id)' >/dev/null; then
     echo "The customer node already has a channel to the merchant node."
   else
     echo "Opening a channel from the customer node to the merchant node."
@@ -72,8 +86,8 @@ cmd_up() {
     customer connect "$(merchant getinfo | jq -r '.uris[0]')" >/dev/null 2>&1 || true
     customer openchannel "$merchant_id" 5000000 >/dev/null
     mine 6
-    wait_for "the channel" sh -c "docker exec $(container customer_lnd) lncli --no-macaroons --rpcserver localhost:10008 listchannels | jq -e '.channels | any(.active)'"
   fi
+  wait_for "the channel to be active" channel_active "$merchant_id"
   echo "Up. Next, run BTCPay from source (docs/testing.md), then: scripts/regtest.sh setup"
 }
 
@@ -91,6 +105,9 @@ cmd_setup() {
   admin="$(curl -sf -X POST -H "$JSON" -u "$user:$password" \
     -d '{"label": "store setup (regtest)", "permissions": ["unrestricted"]}' "$API/api-keys" | jq -r .apiKey)"
   auth="Authorization: token $admin"
+  # The unrestricted key is for this setup only, so it goes however setup ends.
+  # Expanded now: the trap runs after this function's locals are gone.
+  trap "curl -s -o /dev/null -X DELETE -H '$auth' '$API/api-keys/current'" EXIT
   store="$(curl -sf -X POST -H "$JSON" -H "$auth" \
     -d "$(jq -n --arg n "$STORE_NAME" '{name: $n, defaultCurrency: "BTC"}')" "$API/stores" | jq -r .id)"
   # On-chain: the watch-only regtest wallet from BTCPay's own development setup.
@@ -110,7 +127,6 @@ cmd_setup() {
   curl -sf -o /dev/null -X POST -H "$JSON" -H "$auth" \
     -d "$(jq -n --arg s "$webhook_secret" '{url: "http://localhost:8080/btcpay", secret: $s, enabled: true, automaticRedelivery: true, authorizedEvents: {everything: false, specificEvents: ["InvoiceSettled"]}}')" \
     "$API/stores/$store/webhooks"
-  curl -sf -o /dev/null -X DELETE -H "$auth" "$API/api-keys/current"
 
   # Local test values; a deployment sets its own limits and never commits them.
   umask 077
@@ -138,19 +154,20 @@ EOF
 }
 
 cmd_pay() {
-  local bolt11="${1:-}" decoded
+  local bolt11="${1:-}" decoded merchant_id
   [[ "$bolt11" == lnbcrt* ]] || fail "give a regtest invoice, lnbcrt…"
   decoded="$(customer decodepayreq "$bolt11")"
-  echo "$decoded" | jq -e --arg n "$STORE_NAME" '.description | startswith("Paid to " + $n)' >/dev/null ||
-    fail "that invoice isn't from the store scripts/regtest.sh set up"
+  merchant_id="$(merchant getinfo | jq -r .identity_pubkey)"
+  echo "$decoded" | jq -e --arg id "$merchant_id" '.destination == $id' >/dev/null ||
+    fail "that invoice doesn't pay the local merchant node"
   echo "Paying $(echo "$decoded" | jq -r .num_satoshis) sats from the customer node."
   customer payinvoice --force --json "$bolt11" | jq -r '"Payment: " + .status'
 }
 
-cmd_down() { (cd "$(tests_dir)" && docker compose down); }
+cmd_down() { compose down; }
 
 cmd_reset() {
-  (cd "$(tests_dir)" && docker compose down -v)
+  compose down -v
   rm -rf "$ROOT/.wrangler/state" "$ROOT/tools/stand-in/.wrangler/state"
   rm -f "$ROOT/relay/.env" "$ROOT/.dev.vars"
   echo "Reset. Start again with: scripts/regtest.sh up"

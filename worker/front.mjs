@@ -6,14 +6,16 @@
 
 import { MESSAGE_MAX, sanitize } from "../shared/donation.mjs";
 import { readLimits, readSettings } from "./config.mjs";
+import { relayAuthorized } from "./relay-token.mjs";
 
 const MAX_BODY = 1024;
 const INVOICE_ID = /^[A-Za-z0-9]{8,64}$/;
 const REQUEST = /^[0-9a-f]{32}$/;
 const VISITOR_MAX = 64;
 
-// GitHub's rule for usernames: letters, digits and single hyphens, at most 39 characters.
-export const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+// A GitHub username: letters, digits and hyphens, at most 39 characters. GitHub's rule today
+// also forbids a hyphen at the end or two in a row, but older accounts still have them.
+export const LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
 
 // The public address: the relay's line and nothing else.
 export async function handle(request, env) {
@@ -37,7 +39,7 @@ export const pageApi = (env) => ({
 // Who gave it comes from OBL's sign-in, never from the request body. A signed-in donor can
 // still give anonymously.
 async function invoice(request, env, donor, visitor) {
-  if (!isDonor(donor)) return reply({ error: "invalid" }, 400);
+  if (!isDonor(donor) || !visitor) return reply({ error: "invalid" }, 400);
   const body = await readBody(request, ["sats", "message", "anon"], ["sats"]);
   if (body.error) return reply({ error: body.error }, body.status);
   const limits = readLimits(env);
@@ -52,6 +54,7 @@ async function invoice(request, env, donor, visitor) {
 }
 
 async function note(request, env, visitor) {
+  if (!visitor) return reply({ error: "invalid" }, 400);
   const body = await readBody(request, ["request", "message"], ["request"]);
   if (body.error) return reply({ error: body.error }, body.status);
   const message = cleanMessage(body.value);
@@ -60,6 +63,7 @@ async function note(request, env, visitor) {
 }
 
 async function onchain(request, env, visitor) {
+  if (!visitor) return reply({ error: "invalid" }, 400);
   const body = await readBody(request, ["request"], ["request"]);
   if (body.error) return reply({ error: body.error }, body.status);
   if (!REQUEST.test(String(body.value.request))) return reply({ error: "invalid" }, 400);
@@ -71,29 +75,20 @@ function socket(request, env) {
   if (url.pathname !== "/donations/socket") return reply({ error: "not found" }, 404);
   if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return reply({ error: "upgrade" }, 426);
   const after = url.searchParams.get("after");
-  if (after !== null && !INVOICE_ID.test(after)) return reply({ error: "invalid" }, 400);
+  const visitor = visitorOf(request.headers.get("X-Client"));
+  if ((after !== null && !INVOICE_ID.test(after)) || !visitor) return reply({ error: "invalid" }, 400);
   const target = new URL("https://object/page");
   if (after) target.searchParams.set("after", after);
-  return stub(env).fetch(target, { headers: forwarded(request, visitorOf(request.headers.get("X-Client"))) });
+  return stub(env).fetch(target, { headers: forwarded(request, visitor) });
 }
 
 async function relay(request, env) {
   if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return reply({ error: "upgrade" }, 426);
   if (!(await relayAuthorized(request, env))) return reply({ error: "unauthorized" }, 401);
-  return stub(env).fetch("https://object/relay", { headers: forwarded(request, "") });
-}
-
-// The relay presents a random token; the Worker holds only its SHA-256, as a secret.
-export async function relayAuthorized(request, env) {
-  const expected = String(env.RELAY_TOKEN_SHA256 ?? "").toLowerCase();
-  if (!/^[0-9a-f]{64}$/.test(expected)) return false;
-  const match = /^Bearer ([A-Za-z0-9_-]{32,128})$/.exec(request.headers.get("Authorization") ?? "");
-  if (!match) return false;
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(match[1]));
-  const actual = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-  let difference = 0;
-  for (let i = 0; i < expected.length; i++) difference |= expected.charCodeAt(i) ^ actual.charCodeAt(i);
-  return difference === 0;
+  // The object checks the token again, so it goes along.
+  const headers = forwarded(request, "");
+  headers.set("Authorization", request.headers.get("Authorization"));
+  return stub(env).fetch("https://object/relay", { headers });
 }
 
 // Nobody, or a GitHub account exactly as OBL's sign-in knows it: the numeric id, which survives
@@ -105,8 +100,9 @@ const isDonor = (donor) =>
     Number.isSafeInteger(donor.id) && donor.id > 0 &&
     typeof donor.login === "string" && LOGIN.test(donor.login));
 
-// The visitor's address goes to the object for rate limiting only. It's never stored.
-const visitorOf = (visitor) => (typeof visitor === "string" ? visitor.slice(0, VISITOR_MAX) : "");
+// The visitor's address goes to the object for rate limiting only. It's never stored. A call
+// without one is refused, rather than counted with every other such call.
+const visitorOf = (visitor) => (typeof visitor === "string" && visitor.length > 0 ? visitor.slice(0, VISITOR_MAX) : null);
 
 // The message, cleaned with OBL's rules, or null when it isn't text.
 const cleanMessage = ({ message = "" }) => (typeof message === "string" ? sanitize(message, MESSAGE_MAX) : null);

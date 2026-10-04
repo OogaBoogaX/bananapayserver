@@ -58,9 +58,10 @@ account. Staging deploys from the branch under test; production deploys only fro
 5. **Then OBL adds its binding**, and not before: until OBL's Worker has one, it treats
    donations as off.
 
-Production is the same with `production` in place of `staging`. The Worker's logs are on, so
-the price service's failures and anything else the Worker logs can be read in Cloudflare's
-dashboard.
+Production is the same with `production` in place of `staging`. The Worker's own log lines,
+such as the price service's failures, can be read in Cloudflare's dashboard. Cloudflare's
+invocation logs are off, because they would keep each request's headers, and so visitors'
+addresses and the relay's, for days.
 
 ## The relay
 

@@ -50,15 +50,16 @@ internet can't. Staging binds to `bananapayserver-staging` and production to
   the numeric id, which survives a rename, and the username, exactly as GitHub gives them. It
   is null when nobody is signed in. Anything else is refused as `invalid`.
 - **`visitor`** is the address the page's call came from, `CF-Connecting-IP`, for rate limits.
-  It is never stored.
+  It is never stored. A call without one is refused as `invalid`, rather than counted with
+  every other such call.
 - **The socket's request** goes to `/donations/socket`, with `after` when there is one, the
   WebSocket headers, and `X-Client` set to the visitor's address, replacing anything the
-  browser sent.
+  browser sent. Without `X-Client` it is refused.
 
 OBL's Worker also checks that the calls and the socket come from its own site, runs the
 Worker first for `/donations/*`, answers `{ "error": "closed" }` with 503 when this Worker
 throws or can't be reached, and treats donations as off while it has no binding. This Worker's
-public address serves only the relay's line.
+public address takes only the relay's line, until Foundry's exporters post there too.
 
 [`tools/stand-in/index.mjs`](../tools/stand-in/index.mjs) does all of this for local testing,
 except the sign-in.
@@ -154,8 +155,10 @@ with 429.
 
 The relay opens `wss://<the Worker's public address>/relay` with
 `Authorization: Bearer <token>`. The Worker hashes the token with SHA-256 and compares it, in
-constant time, with `RELAY_TOKEN_SHA256`, the only form in which it holds the token. A newer
-line replaces an older one, which the object closes with code 4000.
+constant time, with `RELAY_TOKEN_SHA256`, the only form in which it holds the token. The
+Durable Object checks it again, since another Worker in the account could reach the object
+without passing through the front door. A newer line replaces an older one, which the object
+closes with code 4000.
 
 ### Keepalive
 

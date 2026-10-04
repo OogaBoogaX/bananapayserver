@@ -175,6 +175,44 @@ test("who gave it is only ever OBL's signed-in donor, in exactly the expected sh
   assert.equal(notARequest.status, 400, "a call carries a request, never a bare body");
 });
 
+test("the object itself refuses a line without the relay's token, however it's reached", async () => {
+  const w = await world();
+  const object = w.env.DONATIONS.get(w.env.DONATIONS.idFromName("donations"));
+  const bare = await object.fetch("https://object/relay", { headers: { Upgrade: "websocket" } });
+  assert.equal(bare.status, 401, "another Worker binding the object can't open a line");
+  const wrong = await object.fetch("https://object/relay", { headers: { Upgrade: "websocket", Authorization: "Bearer wrong-token-wrong-token-wrong-token" } });
+  assert.equal(wrong.status, 401);
+  assert.equal(w.ctx.getWebSockets("relay").length, 0);
+  await w.connectRelay();
+  assert.equal(w.ctx.getWebSockets("relay").length, 1, "the relay, through the front door, still gets in");
+});
+
+test("a call without the visitor's address is refused, not counted with every other", async () => {
+  const w = await world();
+  const relay = await w.connectRelay();
+  for (const visitor of [undefined, "", 42]) {
+    const calls = [
+      w.page.invoice(call("/donations/invoice", { sats: 1000 }), null, visitor),
+      w.page.note(call("/donations/note", { request: "e".repeat(32) }), visitor),
+      w.page.onchain(call("/donations/onchain", { request: "e".repeat(32) }), visitor),
+    ];
+    for (const response of await Promise.all(calls)) assert.equal(response.status, 400, JSON.stringify(visitor));
+  }
+  const socket = await w.page.fetch(upgrade("/donations/socket"));
+  assert.equal(socket.status, 400, "a socket without X-Client");
+  assert.equal(relay.sent.length, 0);
+});
+
+test("an older GitHub username, with a hyphen at the end, still gives as itself", async () => {
+  const w = await world();
+  const relay = await w.connectRelay();
+  const page = await w.connectPage();
+  await w.invoice(relay, { sats: 1000 }, undefined, { donor: donor("old--name-", 99) });
+  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+  const [{ donation }] = page.messages().filter((m) => m.type === "donation");
+  assert.equal(donation.handle, "old--name-");
+});
+
 test("a signed-in donation carries the GitHub login, unless the donor gives anonymously", async () => {
   const longest = "o".repeat(39);
   for (const [who, anon, handle, githubId] of [
