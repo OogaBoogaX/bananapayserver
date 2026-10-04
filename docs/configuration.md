@@ -40,28 +40,11 @@ which signs donors in and checks origins; see
 
 ### Deploying
 
-By hand, never from CI, with `CLOUDFLARE_ACCOUNT_ID` set to the account OBL's Workers use,
-since a service binding needs both Workers in one account. The config files don't name the
-account. Staging deploys from the branch under test; production deploys only from `main`.
-
-1. **Once:** create the database with
-   `npx wrangler@4.146.0 d1 create bananapayserver-staging`, put its id in
-   `wrangler.staging.jsonc`, and commit it. An id isn't a secret.
-2. **Once, and whenever they change:** set the limits and `RELAY_TOKEN_SHA256` with
-   `wrangler secret put`.
-3. **Apply D1's migrations before deploying the Worker that needs them**, with
-   `npx wrangler@4.146.0 d1 migrations apply bananapayserver-staging --remote` and
-   `--config wrangler.staging.jsonc`. The Worker records each donation with the columns the
-   latest migration adds; without them it can't, and payments pile up unacknowledged at the
-   relay until the migration is applied.
-4. **Deploy** with `npx wrangler@4.146.0 deploy --config wrangler.staging.jsonc`.
-5. **Then OBL adds its binding**, and not before: until OBL's Worker has one, it treats
-   donations as off.
-
-Production is the same with `production` in place of `staging`. The Worker's own log lines,
-such as the price service's failures, can be read in Cloudflare's dashboard. Cloudflare's
-invocation logs are off, because they would keep each request's headers, and so visitors'
-addresses and the relay's, for days.
+By hand, never from CI, into the account OBL's Workers use; production only from `main`.
+[`cloudflare.md`](cloudflare.md) has the steps for both environments, and for OBL's side of the
+binding. The Worker's own log lines, such as the price service's failures, can be read in
+Cloudflare's dashboard. Cloudflare's invocation logs are off, because they would keep each
+request's headers, and so visitors' addresses and the relay's, for days.
 
 ## The relay
 

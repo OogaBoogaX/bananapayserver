@@ -91,8 +91,8 @@ The same steps against `bananapayserver-staging` on Cloudflare, called by OBL's 
 Worker, with a signet BTCPay and LND whose relay connects over Tor. Signet coins are
 worthless, but the payments are real ones on a public test network.
 
-1. **Deploy `bananapayserver-staging`** as [`configuration.md`](configuration.md#deploying)
-   describes.
+1. **Deploy `bananapayserver-staging`** as [`cloudflare.md`](cloudflare.md) describes, with
+   OBL's side of the binding.
 2. **A signet BTCPay and LND,** isolated from anything that holds real funds, with the relay
    pointed at `wss://<staging's workers.dev address>/relay` through Tor's SOCKS proxy, without
    `DIRECT`.
