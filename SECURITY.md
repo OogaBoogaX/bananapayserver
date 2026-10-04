@@ -56,7 +56,8 @@ speed matters more than our schedule.
   batches;
 - anything that reveals where a node is, through the server, its logs or its replies;
 - anything that joins donations to a node's feed, or one node's data to another's;
-- signing in as someone else, or making a donation count for someone it didn't come from;
+- making a donation count for someone it didn't come from, including by reaching the page's
+  calls other than through OBL's Worker;
 - changing what a donation counts for in bananas, on the pile or the leaderboard;
 - any way for this server to reach a node, or for any part of it to gain a credential for a
   node beyond the relay's BTCPay key;

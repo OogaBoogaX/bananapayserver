@@ -1,42 +1,67 @@
 # Protocol
 
-The two interfaces this repository defines: the page's API, which Ooga Booga Land's
-`donations.js` calls, and the relay's line. Both are checked at the receiving end and drop
-anything that doesn't match exactly. The flows they carry are in
+The two interfaces this repository defines: the page's calls, which reach the Worker through
+Ooga Booga Land's own Worker, and the relay's line. Both are checked at the receiving end and
+drop anything that doesn't match exactly. The flows they carry are in
 [`architecture.md`](architecture.md).
 
-Status: v0.1, written with the first implementation. Until it has run against a real node,
+Status: v0.2. Pages now reach the Worker through OBL's Worker; see
+[decision 0014](decisions/0014-pages-through-obl.md). Until it has run against a real node,
 expect changes, and change both ends together.
 
-## The page's API
+## The page's calls
 
-Served by the Worker. JSON in and out, at most 1 KiB per request. A browser may call it only
-from an allowed origin, and every call is made with `credentials: "include"`, so the sign-in
-cookie goes with it. An error is `{ "error": "<name>" }`:
+The page calls its own Worker, OBL's, which signs donors in with GitHub and passes donation
+calls on to this Worker over a service binding. The page sees the paths below on its own
+origin, with the bodies, replies and errors below, unchanged. JSON in and out, at most 1 KiB
+per request. An error is `{ "error": "<name>" }`:
 
 | Status | `error` | Meaning |
 |---|---|---|
 | 400 | `invalid` | The request is malformed |
 | 400 | `amount` | The amount is outside the Worker's limits or above the node's own cap |
-| 401 | `signed out` | `/auth/me` only: nobody is signed in |
-| 403 | `origin` | The page's origin isn't allowed |
 | 404 | `unknown` | No such request |
 | 410 | `expired` | The invoice has expired |
 | 413 | `too large` | The body is over 1 KiB |
 | 415 | `invalid` | The body isn't `application/json` |
 | 429 | `busy` | Too many requests this minute; try again in the next one |
-| 503 | `closed` | Donations are closed: the relay isn't connected, didn't answer in time, or a limit isn't configured |
-| 503 | `sign-in unavailable` | `/auth/me` only: sign-in isn't set up on this deployment |
+| 503 | `closed` | Donations are closed: the relay isn't connected, didn't answer in time, a limit isn't configured, or this Worker can't be reached |
 
-### Signing in
+### How OBL's Worker passes them on
 
-- **`GET /auth/github?return=<page>`** is a page to navigate to, not a call. It goes to GitHub
-  and comes back to `return`, which must be on an allowed origin, signed in.
-- **`GET /auth/me`** answers `{ "login": "ooga-dev" }`, or 401 when nobody is signed in.
-- **`POST /auth/signout`** forgets the sign-in and answers 204.
+OBL's Worker binds to this Worker's `PageApi` entrypoint, which a binding can reach and the
+internet can't. Staging binds to `bananapayserver-staging` and production to
+`bananapayserver-production`:
 
-The sign-in is a cookie on the API's own domain, so the API has to be served from the same
-site as the page, such as a subdomain of `oogabooga.land`.
+```jsonc
+"services": [{ "binding": "DONATIONS", "service": "bananapayserver-staging", "entrypoint": "PageApi" }]
+```
+
+| The page calls | OBL's Worker calls | And returns |
+|---|---|---|
+| `POST /donations/invoice` | `invoice(request, donor, visitor)` | the `Response`, as it is |
+| `POST /donations/note` | `note(request, visitor)` | the `Response`, as it is |
+| `POST /donations/onchain` | `onchain(request, visitor)` | the `Response`, as it is |
+| `GET /donations/socket` | `fetch(request)` | the socket's upgrade |
+
+- **`request`** is a new request carrying only the page's body and its `Content-Type`, never
+  the browser's own request, whose cookies carry OBL's session.
+- **`donor`** is the signed-in donor's GitHub account, `{ "id": 4242, "login": "ooga-dev" }`:
+  the numeric id, which survives a rename, and the username, exactly as GitHub gives them. It
+  is null when nobody is signed in. Anything else is refused as `invalid`.
+- **`visitor`** is the address the page's call came from, `CF-Connecting-IP`, for rate limits.
+  It is never stored.
+- **The socket's request** goes to `/donations/socket`, with `after` when there is one, the
+  WebSocket headers, and `X-Client` set to the visitor's address, replacing anything the
+  browser sent.
+
+OBL's Worker also checks that the calls and the socket come from its own site, runs the
+Worker first for `/donations/*`, answers `{ "error": "closed" }` with 503 when this Worker
+throws or can't be reached, and treats donations as off while it has no binding. This Worker's
+public address serves only the relay's line.
+
+[`tools/stand-in/index.mjs`](../tools/stand-in/index.mjs) does all of this for local testing,
+except the sign-in.
 
 ### `POST /donations/invoice`
 
@@ -44,7 +69,7 @@ site as the page, such as a subdomain of `oogabooga.land`.
 { "sats": 10000, "message": "for the cave", "anon": false }
 ```
 
-`message` and `anon` are optional. Who gave it comes from the sign-in, never from the body: a
+`message` and `anon` are optional. Who gave it comes from OBL's sign-in, never from the body: a
 signed-in donor gives as their GitHub username unless `anon` is true, and anyone else gives
 anonymously. The Worker cleans the message with OBL's rules. A page can send the amount alone
 as soon as the donor picks it, and the message afterwards.
@@ -97,12 +122,13 @@ A WebSocket. The page sends nothing on it; a page that does is closed with code 
 connects, it receives the status, the pile and the leaderboard, then anything it missed. After
 that:
 
-- `{ "type": "status", "open": true }` whenever the relay's line opens or closes, so the page
-  can say donations are closed before anyone tries.
+- `{ "type": "status", "open": true, "network": "signet" }` whenever the relay's line opens or
+  closes, so the page can say donations are closed before anyone tries. `network` is the
+  network this deployment takes payments on, so a page can label test donations.
 - `{ "type": "donation", "donation": { "id", "sats", "handle", "message", "at" }, "bananas": { "exact", "rounded" } }`
   for each payment. `donation` is OBL's contract exactly, with the invoice id as `id`, the
-  GitHub username or `""` as `handle`, and `at` in milliseconds. The donor's page recognizes
-  its own invoice id.
+  GitHub username or `""` as `handle`, and `at` in milliseconds. A username arrives whole, up
+  to GitHub's 39 characters. The donor's page recognizes its own invoice id.
 - `{ "type": "pile", "bananas": 980.5, "at": 1790000000000, "eatPerHour": 60 }` after each
   donation that counts. Every page works the pile out the same way: `bananas`, less
   `eatPerHour` for each hour since the message arrived, never below zero. Show whole bananas.
@@ -114,8 +140,9 @@ that:
 newer ones. Leave it out on a first visit. A donation recorded while a replay is on its way
 can reach the page twice, so ignore an id the page has already played.
 
-GitHub usernames run to 39 characters, so OBL's `HANDLE_MAX` of 24 has to grow to 39 for
-`handle` to arrive whole.
+Donations are the record, so they stay when a donor deletes their OBL account, and a donor
+who comes back keeps their history. Whether the leaderboard shows an account that is gone is
+the page's choice.
 
 The object keeps its page sockets below Cloudflare's limit for one object, so the relay's
 line always has room. Past that, and past the visitor's rate limit, a new socket is refused
@@ -125,10 +152,10 @@ with 429.
 
 ### Opening
 
-The relay opens `wss://<api host>/relay` with `Authorization: Bearer <token>`. The Worker
-hashes the token with SHA-256 and compares it, in constant time, with `RELAY_TOKEN_SHA256`,
-the only form in which it holds the token. A newer line replaces an older one, which the
-object closes with code 4000.
+The relay opens `wss://<the Worker's public address>/relay` with
+`Authorization: Bearer <token>`. The Worker hashes the token with SHA-256 and compares it, in
+constant time, with `RELAY_TOKEN_SHA256`, the only form in which it holds the token. A newer
+line replaces an older one, which the object closes with code 4000.
 
 ### Keepalive
 
