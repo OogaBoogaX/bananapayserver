@@ -205,7 +205,7 @@ export class DonationsObject {
     const [client, server] = this.platform.pair();
     server.serializeAttachment({ role: "page" });
     this.ctx.acceptWebSocket(server, ["page"]);
-    server.send(JSON.stringify({ type: "status", open: this.line() !== null }));
+    server.send(JSON.stringify(this.statusMessage(this.line() !== null)));
     server.send(JSON.stringify(this.pileMessage(this.platform.now())));
     const board = await this.board();
     if (board) server.send(JSON.stringify(board));
@@ -241,7 +241,7 @@ export class DonationsObject {
     const [client, server] = this.platform.pair();
     server.serializeAttachment({ role: "relay" });
     this.ctx.acceptWebSocket(server, ["relay"]);
-    this.broadcast({ type: "status", open: true });
+    this.broadcast(this.statusMessage(true));
     return this.platform.upgrade(client);
   }
 
@@ -415,13 +415,18 @@ export class DonationsObject {
   webSocketClose(ws) {
     // The closing socket may still read as open inside this handler, so it's left out.
     if (ws.deserializeAttachment()?.role !== "relay" || this.line(ws) !== null) return;
-    this.broadcast({ type: "status", open: false });
+    this.broadcast(this.statusMessage(false));
     // Nobody waits out a timeout on a line that's gone.
     for (const { resolve } of [...this.waiting.values()]) resolve(null);
   }
 
   webSocketError(ws) {
     this.webSocketClose(ws);
+  }
+
+  // Whether donations are open, and on which network, so a page can label test donations.
+  statusMessage(open) {
+    return { type: "status", open, network: readSettings(this.env).network };
   }
 
   line(excluding = null) {

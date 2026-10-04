@@ -25,10 +25,8 @@ export function readLimits(env) {
 // Settings that are not limits. A missing or unknown network also closes donations.
 export function readSettings(env) {
   const network = isNetwork(env.NETWORK) ? env.NETWORK : null;
-  const origins = String(env.ALLOWED_ORIGINS ?? "").split(",").map((o) => o.trim()).filter(Boolean);
   return {
     network,
-    origins,
     invoiceTimeoutMs: positiveInt(env.INVOICE_TIMEOUT_MS) ?? 10_000,
     pendingDays: positiveInt(env.PENDING_DAYS) ?? 7,
     // The global pile: where it starts, and how many bananas the Oogas eat an hour. Both are

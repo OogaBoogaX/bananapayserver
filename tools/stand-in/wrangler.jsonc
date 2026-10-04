@@ -1,0 +1,10 @@
+// The stand-in for OBL's Worker, for testing on one machine; see index.mjs and docs/testing.md.
+// Never deployed. Its binding finds a local bananapayserver run with wrangler.staging.jsonc.
+{
+	"name": "bananapayserver-stand-in",
+	"main": "index.mjs",
+	"compatibility_date": "2026-09-30",
+	"workers_dev": false,
+	"assets": { "directory": "./public", "run_worker_first": ["/donations/*"] },
+	"services": [{ "binding": "DONATIONS", "service": "bananapayserver-staging", "entrypoint": "PageApi" }]
+}

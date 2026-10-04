@@ -176,7 +176,6 @@ export const ENV = {
   RATE_PER_IP: "5",
   RATE_GLOBAL: "50",
   NETWORK: "regtest",
-  ALLOWED_ORIGINS: "https://oogabooga.land",
   INVOICE_TIMEOUT_MS: "200",
 };
 

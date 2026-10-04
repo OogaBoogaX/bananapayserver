@@ -1,8 +1,8 @@
-// The entry point Cloudflare runs. Everything here is wiring to the Workers runtime; the logic
+// The entry points Cloudflare runs. Everything here is wiring to the Workers runtime; the logic
 // lives in front.mjs and object.mjs, which the tests run without it.
 
-import { DurableObject } from "cloudflare:workers";
-import { handle } from "./front.mjs";
+import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+import { handle, pageApi } from "./front.mjs";
 import { DonationsObject } from "./object.mjs";
 
 const platform = {
@@ -37,6 +37,27 @@ export class Donations extends DurableObject {
   }
 }
 
+// The page's calls, from OBL's Worker over its service binding. A named entrypoint is reachable
+// only through a binding, never from the internet. See docs/protocol.md.
+export class PageApi extends WorkerEntrypoint {
+  invoice(request, donor, visitor) {
+    return pageApi(this.env).invoice(request, donor, visitor);
+  }
+
+  note(request, visitor) {
+    return pageApi(this.env).note(request, visitor);
+  }
+
+  onchain(request, visitor) {
+    return pageApi(this.env).onchain(request, visitor);
+  }
+
+  fetch(request) {
+    return pageApi(this.env).fetch(request);
+  }
+}
+
+// The public address, which takes only the relay's line.
 export default {
-  fetch: (request, env) => handle(request, env, platform),
+  fetch: (request, env) => handle(request, env),
 };
