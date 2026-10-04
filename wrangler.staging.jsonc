@@ -25,7 +25,7 @@
 			"binding": "DB",
 			"database_name": "bananapayserver-staging",
 			// Set when the database is created; an id isn't a secret.
-			"database_id": "REPLACE_WITH_D1_DATABASE_ID",
+			"database_id": "221116af-5484-4f4b-9f71-3c2289b15819",
 			"migrations_dir": "migrations"
 		}
 	],
