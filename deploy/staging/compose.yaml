@@ -3,7 +3,7 @@
 # node that holds real funds, so it is fenced off from everything on that machine. See
 # docs/staging.md and decision 0016.
 #
-#   docker compose -p obl-staging up -d
+#   sudo ./firewall.sh && docker compose -p obl-staging up -d
 #
 # Nothing here publishes a port. Only the Tor container reaches the internet: bitcoind and LND
 # reach signet through it, and the relay reaches bananapayserver-staging through it. Every
@@ -12,7 +12,9 @@
 name: obl-staging
 
 x-service: &service
-  restart: unless-stopped
+  # Nothing starts by itself, not even after a reboot: the firewall's rules don't outlive one,
+  # and have to be back before the stack is.
+  restart: "no"
   security_opt: ["no-new-privileges:true"]
   cap_drop: [ALL]
   logging:

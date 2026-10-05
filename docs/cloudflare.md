@@ -67,7 +67,7 @@ Once, from a checkout of the branch under review, with `CLOUDFLARE_ACCOUNT_ID` s
 5. **Set the limits.** `npx wrangler@4.146.0 secret put <name> -c wrangler.staging.jsonc` for
    each of `MAX_SATS`, `RATE_PER_IP` and `RATE_GLOBAL`, typing the value at the prompt.
 6. **Set the relay's token hash, once the staging relay exists.** Whoever sets up the signet
-   stack on the node's machine generates the relay's token there and hands over only its
+   stack on its machine generates the relay's token there and hands over only its
    SHA-256, which is set the same way as `RELAY_TOKEN_SHA256`; see [`staging.md`](staging.md).
    The token never leaves that machine. Until then the Worker has no relay, and staging says
    donations are closed.

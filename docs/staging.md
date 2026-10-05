@@ -2,9 +2,10 @@
 
 `bananapayserver-staging` takes donations on signet through a stack of its own: bitcoind on
 mutinynet, NBXplorer, Postgres, BTCPay, LND, Tor, and the relay that connects them to the
-Worker. While the node is a proof of concept, it runs on the same machine as the node, which
-holds real funds, so it is fenced off from that node and from the machine. When the node moves
-to production, staging moves off it, most likely to a cloud server; see
+Worker. For donation testing while the node is a proof of concept, it runs on a team member's
+machine, beside a mainnet node that holds real funds, with its owner's agreement. It is fenced
+off from that node and from the machine, and runs only while it's needed. After the proof of
+concept, staging moves to a cloud server; see
 [decision 0016](decisions/0016-staging-beside-the-node.md).
 The files are in [`deploy/staging/`](../deploy/staging/).
 
@@ -24,12 +25,14 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
 - **Caps:** memory, CPU and process limits on every container, rotated logs, a pruned chain,
   and no container with extra privileges.
 - **Pinned:** every image by digest.
+- **Nothing starts by itself,** not after a crash and not after a reboot. The firewall's rules
+  don't outlive a reboot, so they go back up first, and only then the stack.
 
 ## What the machine needs
 
 - Linux with Docker Engine, Docker Compose v2, iptables, git and openssl.
-- About 10 GB of free disk: about 3 GB of images, a few GB for the pruned chain, and logs
-  capped at 30 MB a container.
+- About 10 GB of free disk where Docker keeps its data: about 3 GB of images, a few GB for the
+  pruned chain, and logs capped at 30 MB a container.
 - About 3 GB of free memory. The caps add up to a little over 4 GB at the very most.
 - A folder of its own for the stack, outside wherever the node's operating system keeps its
   apps.
@@ -60,7 +63,17 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
    - **`WORKER_URL`:** `wss://bananapayserver-staging.<account subdomain>.workers.dev/relay`.
    - **`RELAY_MAX_SATS`:** the team's cap for staging.
 
-3. **Build and start everything but the relay,** which waits for step 6:
+3. **Put up the firewall,** as root, before anything starts. It works from the subnets in
+   `.env`, so the stack's networks don't need to exist yet:
+
+   ```bash
+   sudo ./firewall.sh
+   ```
+
+   The rules last until the next reboot, unless the machine's own firewall tools save them. Run
+   `firewall.sh` again after a reboot, before the stack starts.
+
+4. **Build and start everything but the relay,** which waits for step 6:
 
    ```bash
    docker compose -p obl-staging build relay
@@ -70,14 +83,8 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
    docker compose -p obl-staging up -d tor bitcoind postgres nbxplorer lnd btcpay
    ```
 
-4. **Put up the firewall,** as root, now that the stack's networks exist:
-
-   ```bash
-   sudo ./firewall.sh
-   ```
-
-   Then check it. From Tor's network, the machine and its LAN must be out of reach. With the
-   machine's LAN address and a port it listens on, such as SSH's:
+   Then check the firewall. From Tor's network, the machine and its LAN must be out of reach.
+   With the machine's LAN address and a port it listens on, such as SSH's:
 
    ```bash
    docker run --rm --network obl-staging_outside obl-staging-relay node -e "const s = require('net').connect(+process.argv[2], process.argv[1]); s.setTimeout(4000); s.on('connect', () => { console.log('REACHABLE: the firewall is not working'); process.exit(1); }); s.on('error', () => console.log('blocked')); s.on('timeout', () => { console.log('blocked'); process.exit(0); });" <LAN address> 22
@@ -89,9 +96,6 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
    ```bash
    docker network inspect obl-staging_front --format '{{(index .IPAM.Config 0).Gateway}}'
    ```
-
-   The rules last until the next reboot, unless the machine's own firewall tools save them. Run
-   `firewall.sh` again after a reboot, before the stack starts.
 
 5. **Wait for the chain.** bitcoind syncs mutinynet through Tor, which takes hours.
 
@@ -155,11 +159,14 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
 ## Running it
 
 - **Logs:** `docker compose -p obl-staging logs --tail 50 <service>`.
-- **Stop and start:** `docker compose -p obl-staging stop`, then `up -d`. After a reboot, run
-  `firewall.sh` first.
+- **Between tests:** `docker compose -p obl-staging stop`, which frees the memory and keeps the
+  chain, so the next test doesn't wait for a sync.
+- **Start again,** after a stop, a crash or a reboot: `sudo ./firewall.sh`, then
+  `docker compose -p obl-staging up -d`. `firewall.sh` skips rules that are already there.
 - **Update:** pull the branch, then `docker compose -p obl-staging up -d --build`.
-- **Remove:** `docker compose -p obl-staging down -v`, which deletes staging's chain, wallets
-  and BTCPay. Signet only. Then remove the firewall rules.
+- **Remove,** when testing is done: `docker compose -p obl-staging down -v`, which deletes
+  staging's chain, wallets and BTCPay. Signet only. The firewall's rules then guard nothing,
+  and go at the next reboot.
 - **Secrets:** `.env` holds the relay's token, BTCPay's keys and its admin's password. It stays
   readable by its owner only, and is never copied off this machine.
 - **BTCPay's pages** aren't published, and setup doesn't need them. If someone ever does, a
@@ -188,7 +195,7 @@ regtest, with a payer node, and points the relay at a Worker running on the work
 proves the wiring before anything touches the machine, in minutes rather than hours:
 
 1. `.env` from the example, with any placeholder for `SIGNET_PEER` and `RELAY_MAX_SATS` set.
-2. `export COMPOSE_FILE=compose.yaml:compose.rehearsal.yaml`, then step 3's commands, adding
+2. `export COMPOSE_FILE=compose.yaml:compose.rehearsal.yaml`, then step 4's commands, adding
    `payer` to the services.
 3. Mine 101 blocks to an address from `payer`, using `generatetoaddress` with
    `bitcoin-cli -datadir=/data` in the `bitcoind` container.

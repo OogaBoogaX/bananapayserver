@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The staging stack's fence, for the Linux machine it runs on. Run as root after the stack has
-# started once, so its networks exist, and again after every reboot unless the machine's own
+# The staging stack's fence, for the Linux machine it runs on. Run as root before the stack
+# starts, and again after every reboot before starting it again, unless the machine's own
 # firewall saves the rules. See docs/staging.md.
 #
 # - The outside network, where Tor alone reaches the internet, can't reach this machine or any
