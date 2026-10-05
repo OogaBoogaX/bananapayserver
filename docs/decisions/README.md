@@ -36,6 +36,7 @@ means writing a new record.
 | [0013](0013-price-from-2140data.md) | Bitcoin's price comes from 2140data's service | accepted |
 | [0014](0014-pages-through-obl.md) | Pages reach donations through OBL's Worker | proposed |
 | [0015](0015-staging-deploys-on-push.md) | Staging deploys on push, through Cloudflare's Git connection | proposed |
+| [0016](0016-staging-beside-the-node.md) | Staging runs beside the node, fenced off | proposed |
 
 ## Waiting for a record
 

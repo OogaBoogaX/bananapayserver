@@ -68,8 +68,9 @@ Once, from a checkout of the branch under review, with `CLOUDFLARE_ACCOUNT_ID` s
    each of `MAX_SATS`, `RATE_PER_IP` and `RATE_GLOBAL`, typing the value at the prompt.
 6. **Set the relay's token hash, once the staging relay exists.** Whoever sets up the signet
    stack on the node's machine generates the relay's token there and hands over only its
-   SHA-256, which is set the same way as `RELAY_TOKEN_SHA256`. The token never leaves that
-   machine. Until then the Worker has no relay, and staging says donations are closed.
+   SHA-256, which is set the same way as `RELAY_TOKEN_SHA256`; see [`staging.md`](staging.md).
+   The token never leaves that machine. Until then the Worker has no relay, and staging says
+   donations are closed.
 7. **Check it.** The Worker's address should answer `426` at `/relay`, which wants a WebSocket,
    and `404` to a `POST` at `/donations/invoice`, because pages never reach it directly. In the
    dashboard, the Worker's invocation logs should be off: they would keep every request's

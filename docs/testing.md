@@ -93,9 +93,9 @@ worthless, but the payments are real ones on a public test network.
 
 1. **Deploy `bananapayserver-staging`** as [`cloudflare.md`](cloudflare.md) describes, with
    OBL's side of the binding.
-2. **A signet BTCPay and LND,** isolated from anything that holds real funds, with the relay
-   pointed at `wss://<staging's workers.dev address>/relay` through Tor's SOCKS proxy, without
-   `DIRECT`.
+2. **The staging stack:** a signet BTCPay and LND, isolated from anything that holds real
+   funds, with the relay reaching `bananapayserver-staging` through Tor, as
+   [`staging.md`](staging.md) describes.
 3. **OBL adds its staging binding,** and its staging page goes live, labelled as test because
    the status message says `signet`.
 4. **Stage 1's steps and drills** again, paying from a signet wallet.

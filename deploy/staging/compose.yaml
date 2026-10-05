@@ -1,0 +1,206 @@
+# bananapayserver's staging stack: a signet BTCPay, its own Lightning node, and the relay that
+# connects them to bananapayserver-staging. Signet coins are worthless, but this runs beside a
+# node that holds real funds, so it is fenced off from everything on that machine. See
+# docs/staging.md and decision 0016.
+#
+#   docker compose -p obl-staging up -d
+#
+# Nothing here publishes a port. Only the Tor container reaches the internet: bitcoind and LND
+# reach signet through it, and the relay reaches bananapayserver-staging through it. Every
+# other network is internal to Docker, with no way out.
+
+name: obl-staging
+
+x-service: &service
+  restart: unless-stopped
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  logging:
+    driver: json-file
+    options: { max-size: 10m, max-file: "3" }
+
+services:
+  tor:
+    <<: *service
+    image: btcpayserver/tor:0.4.9.13@sha256:41d43f0a35b997aa60191823d80dd434f86b3799e15d1e77246ae1f77c42d9cc
+    # The image's own config opens Tor's control port to every container; this turns it off, and
+    # takes SOCKS connections from the stack's own networks only.
+    command:
+      - tor
+      - --ControlPort
+      - "0"
+      - --SocksPolicy
+      - accept ${BACKEND_SUBNET:?},accept ${FRONT_SUBNET:?},reject *
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    networks:
+      backend: { ipv4_address: "${TOR_BACKEND_IP:?}" }
+      front: { ipv4_address: "${TOR_FRONT_IP:?}" }
+      outside: {}
+    volumes: ["tor:/home/tor/.tor"]
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+
+  bitcoind:
+    <<: *service
+    image: btcpayserver/mutinynet:c23afab47fbe@sha256:9255b4acea6d1e78c4185d397aa0057d7289a2917562f3645728cff1563a2536
+    environment:
+      BITCOIN_NETWORK: signet
+      # Mutinynet, the public signet with 30-second blocks, pruned to keep the disk small. Every
+      # peer is reached through Tor.
+      BITCOIN_EXTRA_ARGS: |-
+        rpcuser=${BITCOIN_RPC_USER:?}
+        rpcpassword=${BITCOIN_RPC_PASSWORD:?}
+        rpcport=43782
+        rpcbind=0.0.0.0
+        rpcallowip=${BACKEND_SUBNET:?}
+        port=39388
+        whitelist=${BACKEND_SUBNET:?}
+        disablewallet=1
+        prune=550
+        dbcache=200
+        maxconnections=16
+        zmqpubrawblock=tcp://0.0.0.0:28332
+        zmqpubrawtx=tcp://0.0.0.0:28333
+        proxy=${TOR_BACKEND_IP:?}:9050
+        listenonion=0
+        discover=0
+        dnsseed=0
+        addnode=${SIGNET_PEER:?}
+        signetchallenge=512102f7561d208dd9ae99bf497273e16f389bdbd6c4742ddb8e6b216e64fa2928ad8f51ae
+        signetblocktime=30
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    networks: [backend]
+    volumes: ["bitcoin:/data"]
+    stop_grace_period: 1m
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 256
+
+  postgres:
+    <<: *service
+    image: postgres:18.1@sha256:1090bc3a8ccfb0b55f78a494d76f8d603434f7e4553543d6e807bc7bd6bbd17f
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+    cap_add: [CHOWN, DAC_OVERRIDE, DAC_READ_SEARCH, FOWNER, SETGID, SETUID]
+    networks: [backend]
+    volumes: ["postgres:/var/lib/postgresql"]
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 256
+
+  nbxplorer:
+    <<: *service
+    image: nicolasdorier/nbxplorer:2.6.10@sha256:7d2ab1f6ce38e301cba98a4f85bfbfcf2912d5034bd88af056f9d60e5511f911
+    environment:
+      NBXPLORER_NETWORK: signet
+      NBXPLORER_CHAINS: btc
+      NBXPLORER_BIND: 0.0.0.0:32838
+      NBXPLORER_BTCRPCURL: http://bitcoind:43782/
+      NBXPLORER_BTCRPCUSER: ${BITCOIN_RPC_USER:?}
+      NBXPLORER_BTCRPCPASSWORD: ${BITCOIN_RPC_PASSWORD:?}
+      NBXPLORER_BTCNODEENDPOINT: bitcoind:39388
+      NBXPLORER_POSTGRES: User ID=postgres;Password=${POSTGRES_PASSWORD:?};Host=postgres;Port=5432;Database=nbxplorer
+      # Only BTCPay calls it, on the backend network, which nothing outside the stack can reach.
+      NBXPLORER_NOAUTH: 1
+    networks: [backend]
+    volumes: ["nbxplorer:/datadir"]
+    depends_on: [bitcoind, postgres]
+    mem_limit: 512m
+    cpus: 0.5
+    pids_limit: 512
+
+  lnd:
+    <<: *service
+    image: btcpayserver/lnd:v0.21.3-beta-2@sha256:24d71a7679d0ce2f8c0599f0c295b3ae0f8d85a03422190758b550736306c0e6
+    environment:
+      LND_CHAIN: btc
+      LND_ENVIRONMENT: signet
+      LND_EXPLORERURL: http://nbxplorer:32838/
+      LND_REST_LISTEN_HOST: https://lnd:8080
+      # Every peer is reached through Tor, and BTCPay reaches it on the backend network with an
+      # invoice-only macaroon that setup.sh bakes.
+      LND_EXTRA_ARGS: |
+        restlisten=0.0.0.0:8080
+        rpclisten=127.0.0.1:10009
+        tlsextradomain=lnd
+        bitcoin.node=bitcoind
+        bitcoind.rpchost=bitcoind:43782
+        bitcoind.rpcuser=${BITCOIN_RPC_USER:?}
+        bitcoind.rpcpass=${BITCOIN_RPC_PASSWORD:?}
+        bitcoind.zmqpubrawblock=tcp://bitcoind:28332
+        bitcoind.zmqpubrawtx=tcp://bitcoind:28333
+        bitcoin.signetchallenge=512102f7561d208dd9ae99bf497273e16f389bdbd6c4742ddb8e6b216e64fa2928ad8f51ae
+        tor.active=1
+        tor.socks=${TOR_BACKEND_IP:?}:9050
+    networks: [backend]
+    volumes: ["lnd:/data"]
+    depends_on: [bitcoind, nbxplorer]
+    stop_grace_period: 1m
+    mem_limit: 768m
+    cpus: 0.75
+    pids_limit: 256
+
+  btcpay:
+    <<: *service
+    image: btcpayserver/btcpayserver:2.4.4@sha256:c264aa08cd32a469bd30d41978b73dc8bb2de1503ce67bdb0ab8fd5d934fb614
+    environment:
+      BTCPAY_NETWORK: signet
+      BTCPAY_CHAINS: btc
+      BTCPAY_BIND: 0.0.0.0:49392
+      BTCPAY_ROOTPATH: /
+      BTCPAY_POSTGRES: User ID=postgres;Password=${POSTGRES_PASSWORD:?};Host=postgres;Port=5432;Database=btcpayserver
+      BTCPAY_EXPLORERPOSTGRES: User ID=postgres;Password=${POSTGRES_PASSWORD:?};Host=postgres;Port=5432;Database=nbxplorer
+      BTCPAY_BTCEXPLORERURL: http://nbxplorer:32838/
+    networks: [backend, front]
+    volumes: ["btcpay:/datadir"]
+    depends_on: [nbxplorer, postgres]
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 512
+
+  relay:
+    <<: *service
+    build:
+      context: ../..
+      dockerfile: relay/Dockerfile
+    image: obl-staging-relay
+    pull_policy: build
+    read_only: true
+    # Empty until setup.sh has run; the relay refuses to start without them.
+    environment:
+      WORKER_URL: ${WORKER_URL:-}
+      RELAY_TOKEN: ${RELAY_TOKEN:-}
+      TOR_SOCKS: ${TOR_FRONT_IP:?}:9050
+      BTCPAY_URL: http://btcpay:49392
+      BTCPAY_STORE_ID: ${BTCPAY_STORE_ID:-}
+      BTCPAY_API_KEY: ${BTCPAY_API_KEY:-}
+      BTCPAY_WEBHOOK_SECRET: ${BTCPAY_WEBHOOK_SECRET:-}
+      MAX_SATS: ${RELAY_MAX_SATS:-}
+      WEBHOOK_LISTEN: 0.0.0.0:8080
+    networks: [front]
+    depends_on: [btcpay, tor]
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+
+networks:
+  # bitcoind, NBXplorer, Postgres, LND, BTCPay and Tor. No way out.
+  backend:
+    internal: true
+    ipam: { config: [{ subnet: "${BACKEND_SUBNET:?}" }] }
+  # BTCPay, the relay and Tor: all the relay can reach. No way out.
+  front:
+    internal: true
+    ipam: { config: [{ subnet: "${FRONT_SUBNET:?}" }] }
+  # Tor alone, to the internet. firewall.sh keeps it off this machine and its LAN.
+  outside:
+    ipam: { config: [{ subnet: "${OUTSIDE_SUBNET:?}" }] }
+
+volumes:
+  tor:
+  bitcoin:
+  postgres:
+  nbxplorer:
+  lnd:
+  btcpay:
