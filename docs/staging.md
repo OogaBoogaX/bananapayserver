@@ -42,10 +42,10 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
 1. **Get the code** into that folder, on the branch being staged:
 
    ```bash
-   git clone https://github.com/OogaBoogaX/bananapayserver.git
+   git clone --branch <branch> https://github.com/OogaBoogaX/bananapayserver.git
    ```
 
-   Then `cd bananapayserver/deploy/staging` and `git switch <branch>`.
+   Then `cd bananapayserver/deploy/staging`. Every later step runs from there.
 
 2. **Fill in `.env`,** from [`.env.example`](../deploy/staging/.env.example):
 
