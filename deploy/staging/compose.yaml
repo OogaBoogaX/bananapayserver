@@ -121,7 +121,8 @@ services:
       LND_EXPLORERURL: http://nbxplorer:32838/
       LND_REST_LISTEN_HOST: https://lnd:8080
       # Every peer is reached through Tor, and BTCPay reaches it on the backend network with an
-      # invoice-only macaroon that setup.sh bakes.
+      # invoice-only macaroon that setup.sh bakes. No signetchallenge: LND checks bitcoind's
+      # network by its first block, which every signet shares, and refuses to start with one.
       LND_EXTRA_ARGS: |
         restlisten=0.0.0.0:8080
         rpclisten=127.0.0.1:10009
@@ -132,7 +133,6 @@ services:
         bitcoind.rpcpass=${BITCOIN_RPC_PASSWORD:?}
         bitcoind.zmqpubrawblock=tcp://bitcoind:28332
         bitcoind.zmqpubrawtx=tcp://bitcoind:28333
-        bitcoin.signetchallenge=512102f7561d208dd9ae99bf497273e16f389bdbd6c4742ddb8e6b216e64fa2928ad8f51ae
         tor.active=1
         tor.socks=${TOR_BACKEND_IP:?}:9050
     networks: [backend]
