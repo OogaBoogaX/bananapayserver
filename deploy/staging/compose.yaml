@@ -76,6 +76,13 @@ services:
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
     networks: [backend]
     volumes: ["bitcoin:/data"]
+    # Healthy once its RPC answers, after it has loaded the chain. LND waits for that.
+    healthcheck:
+      test: ["CMD", "bitcoin-cli", "-datadir=/data", "getblockcount"]
+      interval: 15s
+      timeout: 10s
+      start_period: 10m
+      retries: 3
     stop_grace_period: 1m
     mem_limit: 1g
     cpus: 1.0
@@ -89,6 +96,14 @@ services:
     cap_add: [CHOWN, DAC_OVERRIDE, DAC_READ_SEARCH, FOWNER, SETGID, SETUID]
     networks: [backend]
     volumes: ["postgres:/var/lib/postgresql"]
+    # Healthy once it takes connections over the network. Its first start sets up its data
+    # behind a server that doesn't, and NBXplorer and BTCPay give up on a refused connection.
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "postgres"]
+      interval: 5s
+      timeout: 5s
+      start_period: 2m
+      retries: 3
     mem_limit: 512m
     cpus: 0.5
     pids_limit: 256
@@ -111,7 +126,9 @@ services:
       NBXPLORER_NOAUTH: 1
     networks: [backend]
     volumes: ["nbxplorer:/datadir"]
-    depends_on: [bitcoind, postgres]
+    depends_on:
+      bitcoind: { condition: service_started }
+      postgres: { condition: service_healthy }
     mem_limit: 512m
     cpus: 0.5
     pids_limit: 512
@@ -141,7 +158,9 @@ services:
         tor.socks=${TOR_BACKEND_IP:?}:9050
     networks: [backend]
     volumes: ["lnd:/data"]
-    depends_on: [bitcoind, nbxplorer]
+    depends_on:
+      bitcoind: { condition: service_healthy }
+      nbxplorer: { condition: service_started }
     stop_grace_period: 1m
     mem_limit: 768m
     cpus: 0.75
@@ -161,7 +180,9 @@ services:
       BTCPAY_BTCEXPLORERURL: http://nbxplorer:32838/
     networks: [backend, front]
     volumes: ["btcpay:/datadir"]
-    depends_on: [nbxplorer, postgres]
+    depends_on:
+      nbxplorer: { condition: service_started }
+      postgres: { condition: service_healthy }
     mem_limit: 1g
     cpus: 1.0
     pids_limit: 512
