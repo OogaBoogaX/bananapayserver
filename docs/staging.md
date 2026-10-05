@@ -23,7 +23,8 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
 - **Nothing shared with the mainnet node:** its own data, keys, wallets, macaroons and secrets.
   BTCPay reaches its own LND with a macaroon that can only make and read invoices.
 - **Caps:** memory, CPU and process limits on every container, rotated logs, a pruned chain,
-  and no container with extra privileges.
+  and no container with extra privileges. Memory limits also need the kernel's memory
+  controller, so bitcoind's caches and the .NET heaps have limits of their own.
 - **Pinned:** every image by digest.
 - **Nothing starts by itself,** not after a crash and not after a reboot. The firewall's rules
   don't outlive a reboot, so they go back up first, and only then the stack.
@@ -34,6 +35,10 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
 - About 10 GB of free disk where Docker keeps its data: about 3 GB of images, a few GB for the
   pruned chain, and logs capped at 30 MB a container.
 - About 3 GB of free memory. The caps add up to a little over 4 GB at the very most.
+- The kernel's memory controller, or Docker ignores the memory caps: `docker info` warns
+  `No memory limit support`. Raspberry Pi kernels ship with it off, and turning it on means
+  changing the kernel's boot settings and rebooting. Without it, watch `free -h` while staging
+  runs, and stop it if less than about 1 GB is available.
 - A folder of its own for the stack, outside wherever the node's operating system keeps its
   apps.
 

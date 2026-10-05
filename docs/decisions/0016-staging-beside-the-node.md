@@ -61,7 +61,9 @@ fences held from inside the containers.
 - **Syncing over Tor is slow,** and depends on Tor exits that allow mutinynet's ports. If they
   stop, staging stops syncing. Clearnet would need a decision of its own.
 - **Staging takes disk and memory from the machine,** within its caps: about 10 GB and 3 GB.
-  It's stopped between tests, and work on the machine's own node comes first.
+  It's stopped between tests, and work on the machine's own node comes first. Where the
+  kernel doesn't enforce memory limits, only the programs' own limits hold, and the operator
+  watches the machine's memory.
 - **It ends with the proof of concept.** Staging then moves to a cloud server, with the same
   compose file. A cloud server has no node to hide, so that move is also when to revisit the
   Tor-only fence, the firewall and restarting by itself.

@@ -51,6 +51,7 @@ services:
       # Mutinynet, the public signet with 30-second blocks, pruned to keep the disk small. Every
       # peer is reached through Tor. A proxy turns listening off, so listen=1 turns it back on
       # for NBXplorer, which connects as a peer; the network is internal, so nothing else can.
+      # dbcache and maxmempool bound its memory where the kernel doesn't enforce mem_limit.
       BITCOIN_EXTRA_ARGS: |-
         rpcuser=${BITCOIN_RPC_USER:?}
         rpcpassword=${BITCOIN_RPC_PASSWORD:?}
@@ -63,6 +64,7 @@ services:
         disablewallet=1
         prune=550
         dbcache=200
+        maxmempool=50
         maxconnections=16
         zmqpubrawblock=tcp://0.0.0.0:28332
         zmqpubrawtx=tcp://0.0.0.0:28333
@@ -124,6 +126,9 @@ services:
       NBXPLORER_POSTGRES: User ID=postgres;Password=${POSTGRES_PASSWORD:?};Host=postgres;Port=5432;Database=nbxplorer
       # Only BTCPay calls it, on the backend network, which nothing outside the stack can reach.
       NBXPLORER_NOAUTH: 1
+      # 384 MiB for its heap, what .NET would take from mem_limit, for kernels that don't
+      # enforce it.
+      DOTNET_GCHeapHardLimit: "0x18000000"
     networks: [backend]
     volumes: ["nbxplorer:/datadir"]
     depends_on:
@@ -178,6 +183,9 @@ services:
       BTCPAY_POSTGRES: User ID=postgres;Password=${POSTGRES_PASSWORD:?};Host=postgres;Port=5432;Database=btcpayserver
       BTCPAY_EXPLORERPOSTGRES: User ID=postgres;Password=${POSTGRES_PASSWORD:?};Host=postgres;Port=5432;Database=nbxplorer
       BTCPAY_BTCEXPLORERURL: http://nbxplorer:32838/
+      # 768 MiB for its heap, what .NET would take from mem_limit, for kernels that don't
+      # enforce it.
+      DOTNET_GCHeapHardLimit: "0x30000000"
     networks: [backend, front]
     volumes: ["btcpay:/datadir"]
     depends_on:
