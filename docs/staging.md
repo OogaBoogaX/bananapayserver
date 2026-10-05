@@ -2,8 +2,10 @@
 
 `bananapayserver-staging` takes donations on signet through a stack of its own: bitcoind on
 mutinynet, NBXplorer, Postgres, BTCPay, LND, Tor, and the relay that connects them to the
-Worker. It runs on the same machine as a node that holds real funds, so it is fenced off from
-that node and from the machine; see [decision 0016](decisions/0016-staging-beside-the-node.md).
+Worker. While the node is a proof of concept, it runs on the same machine as the node, which
+holds real funds, so it is fenced off from that node and from the machine. When the node moves
+to production, staging moves off it, most likely to a cloud server; see
+[decision 0016](decisions/0016-staging-beside-the-node.md).
 The files are in [`deploy/staging/`](../deploy/staging/).
 
 The machine's operator deploys it, by hand. Nothing pushes to the machine, CI included.

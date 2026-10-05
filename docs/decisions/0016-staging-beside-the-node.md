@@ -1,12 +1,13 @@
 # 0016. Staging runs beside the node, fenced off
 
-**Status:** proposed, 2026-10-05
+**Status:** accepted, 2026-10-05, for as long as the node is a proof of concept.
 
 ## Decision
 
-Staging's signet stack runs on the same machine as the mainnet node, as its own Docker project:
-bitcoind on mutinynet, NBXplorer, Postgres, BTCPay, LND, Tor, and the relay that connects them
-to `bananapayserver-staging`. It is fenced off from the node and the machine:
+While the node is a proof of concept, staging's signet stack runs on the same machine as the
+mainnet node, as its own Docker project: bitcoind on mutinynet, NBXplorer, Postgres, BTCPay,
+LND, Tor, and the relay that connects them to `bananapayserver-staging`. It is fenced off from
+the node and the machine:
 
 - **Nothing listens outside Docker.** No published ports.
 - **Only Tor reaches the internet.** The other networks are internal to Docker, and bitcoind,
@@ -19,7 +20,8 @@ to `bananapayserver-staging`. It is fenced off from the node and the machine:
   pinned by digest.
 
 The machine's operator deploys it, by hand. Nothing pushes to the machine. See
-[`staging.md`](../staging.md).
+[`staging.md`](../staging.md). When the node moves to production, staging moves off it, most
+likely to a cloud server.
 
 ## Alternatives
 
@@ -51,4 +53,6 @@ fences held from inside the containers.
 - **Syncing over Tor is slow,** and depends on Tor exits that allow mutinynet's ports. If they
   stop, staging stops syncing. Clearnet would need a decision of its own.
 - **Staging takes disk and memory from the node,** within its caps: about 10 GB and 3 GB.
-- **When a machine of its own exists,** staging moves there, with the same compose file.
+- **It ends when the node goes to production.** Staging then moves off the node's machine, most
+  likely to a cloud server, with the same compose file. A cloud server has no node to hide, so
+  that move is also when to revisit the Tor-only fence and the firewall.
