@@ -99,8 +99,9 @@ Once, from a checkout of the branch under review, with `CLOUDFLARE_ACCOUNT_ID` s
 ## Staging: OBL's side
 
 In OBL's repository and through its own process, only once `bananapayserver-staging` exists,
-since a deploy with a binding to a missing Worker fails. OBL's CI deploys staging on every
-merge to `rock`.
+since a deploy with a binding to a missing Worker fails. OBL's staging deploys only when
+someone runs its *Deploy Cloudflare staging* workflow by hand, from a branch in OBL's own
+repository.
 
 - **The binding,** in OBL's `wrangler.staging.jsonc`:
 
