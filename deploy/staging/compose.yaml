@@ -149,6 +149,9 @@ services:
       # Every peer is reached through Tor, and BTCPay reaches it on the backend network with an
       # invoice-only macaroon that setup.sh bakes. No signetchallenge: LND checks bitcoind's
       # network by its first block, which every signet shares, and refuses to start with one.
+      # No network map: LND checks each announced channel against the pruned chain, fetching
+      # old blocks over Tor, and stops reading its peer meanwhile, so the peer times out. It
+      # only receives, over its own channels, which don't need the map.
       LND_EXTRA_ARGS: |
         restlisten=0.0.0.0:8080
         rpclisten=127.0.0.1:10009
@@ -161,6 +164,7 @@ services:
         bitcoind.zmqpubrawtx=tcp://bitcoind:28333
         tor.active=1
         tor.socks=${TOR_BACKEND_IP:?}:9050
+        numgraphsyncpeers=0
     networks: [backend]
     volumes: ["lnd:/data"]
     depends_on:
