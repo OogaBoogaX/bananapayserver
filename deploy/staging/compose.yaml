@@ -49,7 +49,8 @@ services:
     environment:
       BITCOIN_NETWORK: signet
       # Mutinynet, the public signet with 30-second blocks, pruned to keep the disk small. Every
-      # peer is reached through Tor.
+      # peer is reached through Tor. A proxy turns listening off, so listen=1 turns it back on
+      # for NBXplorer, which connects as a peer; the network is internal, so nothing else can.
       BITCOIN_EXTRA_ARGS: |-
         rpcuser=${BITCOIN_RPC_USER:?}
         rpcpassword=${BITCOIN_RPC_PASSWORD:?}
@@ -57,6 +58,7 @@ services:
         rpcbind=0.0.0.0
         rpcallowip=${BACKEND_SUBNET:?}
         port=39388
+        listen=1
         whitelist=${BACKEND_SUBNET:?}
         disablewallet=1
         prune=550
@@ -95,7 +97,9 @@ services:
     <<: *service
     image: nicolasdorier/nbxplorer:2.6.10@sha256:7d2ab1f6ce38e301cba98a4f85bfbfcf2912d5034bd88af056f9d60e5511f911
     environment:
-      NBXPLORER_NETWORK: signet
+      # Mutinynet by NBitcoin's own name for it. As plain signet, NBXplorer would greet bitcoind
+      # with the default signet's network magic, and bitcoind would drop it.
+      NBXPLORER_NETWORK: mutinynet
       NBXPLORER_CHAINS: btc
       NBXPLORER_BIND: 0.0.0.0:32838
       NBXPLORER_BTCRPCURL: http://bitcoind:43782/
@@ -147,7 +151,8 @@ services:
     <<: *service
     image: btcpayserver/btcpayserver:2.4.4@sha256:c264aa08cd32a469bd30d41978b73dc8bb2de1503ce67bdb0ab8fd5d934fb614
     environment:
-      BTCPAY_NETWORK: signet
+      # The same network as NBXplorer's.
+      BTCPAY_NETWORK: mutinynet
       BTCPAY_CHAINS: btc
       BTCPAY_BIND: 0.0.0.0:49392
       BTCPAY_ROOTPATH: /
