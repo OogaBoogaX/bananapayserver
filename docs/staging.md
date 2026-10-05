@@ -134,28 +134,32 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
    donations are open, on signet. Requests now reach this machine, so tell the team to lower
    staging's `RATE_GLOBAL`.
 
-8. **Fund LND.** Get an address:
+8. **Fund LND** with a small on-chain balance, about 50,000 sats. LND only accepts a channel
+   when it holds a reserve for fee bumping. Get an address:
 
    ```bash
    docker compose -p obl-staging exec lnd lncli -n signet newaddress p2wkh
    ```
 
-   Send it signet coins from mutinynet's faucet, and wait for `lncli -n signet walletbalance`
-   to show them confirmed. Blocks come every 30 seconds.
+   Send it signet coins from mutinynet's faucet, which needs a GitHub sign-in and caps what it
+   gives a day across everything it does, so leave room for paying test invoices. Wait for
+   `lncli -n signet walletbalance` to show them confirmed. Blocks come every 30 seconds.
 
 9. **Make room to receive.** LND can only receive through a channel with balance on the other
-   side. Open one to a well-connected mutinynet node, such as the faucet's, whose
-   `pubkey@host:port` its page lists, and push half of it across:
+   side. Ask the faucet to open one to LND, keeping the balance on its side. The faucet can't
+   reach LND, so LND connects to the faucet's node first, staying connected, with the
+   `pubkey@host:port` the faucet's page lists:
 
    ```bash
-   docker compose -p obl-staging exec lnd lncli -n signet connect <pubkey>@<host>:<port>
+   docker compose -p obl-staging exec lnd lncli -n signet connect --perm <pubkey>@<host>:<port>
    ```
 
-   ```bash
-   docker compose -p obl-staging exec lnd lncli -n signet openchannel --node_key <pubkey> --local_amt 1000000 --push_amt 500000
-   ```
-
-   It's usable once `lncli -n signet listchannels` shows it active, a few blocks later.
+   Once `lncli -n signet listpeers` shows it, fill in the faucet's channel form: a capacity
+   above staging's cap, nothing pushed, and as the connection string LND's `identity_pubkey`
+   alone, from `lncli -n signet getinfo`. Without a host, the faucet opens the channel over
+   LND's own connection. It's usable once `lncli -n signet listchannels` shows it active, a
+   few blocks later, and its `remote_balance` is the most LND can receive, so
+   `RELAY_MAX_SATS` stays below it.
 
 10. **Donate.** Once OBL's staging Worker has its binding, donate from OBL's staging page and
     pay the `lntbs…` invoice from a signet wallet, or the faucet's own Lightning payer. The
