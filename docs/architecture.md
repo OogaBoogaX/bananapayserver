@@ -344,8 +344,8 @@ Not settled yet. Each gets a decision record when it is.
 - **The Cloudflare account and the deploy rights.** A service binding needs both Workers in
   one account, so this Worker goes in the account OBL's Workers use. It should belong to the
   team, jointly, with more than one admin. Whoever can deploy there can change this Worker,
-  and OBL's CI deploys with an account-wide token. Staging's own builds would hold one too;
-  [decision 0015](decisions/0015-staging-deploys-on-push.md) proposes them.
+  and OBL's CI deploys with an account-wide token. Staging's manual GitHub Action holds a
+  deployment token too; [decision 0018](decisions/0018-staging-github-action.md) records its scope.
 - **How pages get node feeds.** Foundry's docs say pages poll once a minute. With the object's
   sockets, pushing them is cheap too.
 
