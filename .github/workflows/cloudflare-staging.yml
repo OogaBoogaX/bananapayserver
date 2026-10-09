@@ -21,6 +21,12 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Check selected branch
+        run: |
+          if [ ! -f wrangler.staging.jsonc ] || [ ! -f .github/deploy/package-lock.json ]; then
+            echo '::error::Selected branch must contain wrangler.staging.jsonc and .github/deploy/package-lock.json.'
+            exit 1
+          fi
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node }}
