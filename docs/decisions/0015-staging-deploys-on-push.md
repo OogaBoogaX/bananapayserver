@@ -1,7 +1,7 @@
 # 0015. Staging deploys on push, through Cloudflare's Git connection
 
-**Status:** proposed, 2026-10-04. Once accepted, it settles how
-[0009](0009-toolchain.md) runs Wrangler for staging; production's deploys stay by hand.
+**Status:** proposed, 2026-10-04. [0018](0018-staging-github-action.md) proposes replacing this
+deployment design, pending review.
 
 ## Decision
 

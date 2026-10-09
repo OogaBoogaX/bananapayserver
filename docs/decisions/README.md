@@ -35,9 +35,10 @@ means writing a new record.
 | [0012](0012-global-pile.md) | One global pile | accepted |
 | [0013](0013-price-from-2140data.md) | Bitcoin's price comes from 2140data's service | accepted; added to by 0017 once accepted |
 | [0014](0014-pages-through-obl.md) | Pages reach donations through OBL's Worker | proposed |
-| [0015](0015-staging-deploys-on-push.md) | Staging deploys on push, through Cloudflare's Git connection | proposed |
+| [0015](0015-staging-deploys-on-push.md) | Staging deploys on push, through Cloudflare's Git connection | proposed; 0018 proposes superseding it |
 | [0016](0016-staging-beside-the-node.md) | Staging runs beside a mainnet node, fenced off | accepted, for donation testing while the node is a proof of concept |
 | [0017](0017-tally-and-fresh-rate.md) | The board's tally, and a fresh rate while pages are open | proposed |
+| [0018](0018-staging-github-action.md) | Staging deploys through a manual GitHub Action | proposed |
 
 ## Waiting for a record
 

@@ -77,5 +77,5 @@ Also out of scope: attacks requiring physical access to a node's machine.
 
 ## Supported versions
 
-None yet. Nothing from this repository is deployed, and nothing here has run against a real
-node. This section becomes meaningful with the first deployment.
+There is no supported production release yet. The signet staging Worker is deployed; reports
+about it follow the same private reporting process above.

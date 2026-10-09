@@ -40,8 +40,8 @@ which signs donors in and checks origins; see
 
 ### Deploying
 
-Into the account OBL's Workers use. Staging deploys on each push to its branch, through
-Cloudflare's Git connection ([decision 0015](decisions/0015-staging-deploys-on-push.md));
+Into the account OBL's Workers use. Staging deploys through a manually dispatched GitHub Action,
+from the selected branch ([decision 0018](decisions/0018-staging-github-action.md));
 production deploys by hand, and only from `main`. [`cloudflare.md`](cloudflare.md) has the steps
 for both environments, and for OBL's side of the binding. A setting that isn't in the config
 file, such as `PILE_START`, is set with `wrangler secret put`: a deploy removes plain variables

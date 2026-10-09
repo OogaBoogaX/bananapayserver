@@ -1,0 +1,7 @@
+{
+	"name": "bananapayserver-deploy",
+	"private": true,
+	"devDependencies": {
+		"wrangler": "4.146.0"
+	}
+}
