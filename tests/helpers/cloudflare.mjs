@@ -12,7 +12,16 @@ export const OPEN = 1;
 
 export function fakeStorage() {
   const db = new DatabaseSync(":memory:");
+  let alarm = null;
   return {
+    // The object's one alarm. Nothing fires it here: the tests do, the way the runtime would.
+    getAlarm: async () => alarm,
+    setAlarm: async (time) => {
+      alarm = Number(time);
+    },
+    deleteAlarm: async () => {
+      alarm = null;
+    },
     sql: {
       exec(query, ...bindings) {
         // Several statements at once, like the schema, run without results.

@@ -48,8 +48,8 @@ the node's machine.
 | **Relay** | the BTCPay key, the webhook secret, its credential for the line | Keeps the line open, asks BTCPay for invoices, takes BTCPay's webhook, reports payments |
 | **Worker** | the SHA-256 of the relay's credential | The front door: checks the relay's credential and every call OBL's Worker passes on, and takes the exporters' batches |
 | **OBL's Worker** (OBL's, not this repository's) | its GitHub app's secret and its sessions | Serves the page, signs donors in, and passes donation calls on with who is giving and from where |
-| **Durable Object** | pending requests, until paid or expired; bitcoin's last price; the pile | Holds the relay's line and every page's socket, matches payments to requests, pushes donations, the pile and the leaderboard |
-| **D1** | donation records with their banana counts, each signed-in donor's total, feed history | Keeps what the object replays when a page reconnects; a feed, not a ledger |
+| **Durable Object** | pending requests, until paid or expired; bitcoin's last price; the pile | Holds the relay's line and every page's socket, matches payments to requests, pushes donations, the pile, the leaderboard and the tally |
+| **D1** | donation records with their banana counts, each signed-in donor's total, the tally, feed history | Keeps what the object replays when a page reconnects; a feed, not a ledger |
 
 Nothing in that table can spend from a node, and nothing in it can reach one.
 
@@ -194,8 +194,15 @@ bananas, and a trigger adds to it only when a donation is actually recorded. Ano
 donations count toward the pile but never appear on the board. Both are pushed to every page
 when they change.
 
-Neither belongs along a production line in the Lightning cave. Banana counts follow donation
-amounts closely, and joined to a line they could expose its balance.
+**The tally** is the donations board's figures: every donation recorded, all time, and the
+last seven days by the hour, with the rate the kiosk quotes. D1 keeps it with a trigger, like
+the leaderboard's totals, so it counts each donation once and nothing sums the donations to
+show it. The object pushes it after each donation and whenever the rate changes, and its alarm
+checks the price every five minutes while pages are open. See
+[decision 0017](decisions/0017-tally-and-fresh-rate.md).
+
+None of them belongs along a production line in the Lightning cave. Banana counts follow
+donation amounts closely, and joined to a line they could expose its balance.
 
 ## Node event feeds
 

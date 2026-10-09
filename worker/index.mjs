@@ -35,6 +35,10 @@ export class Donations extends DurableObject {
   webSocketError(ws, error) {
     return this.object.webSocketError(ws, error);
   }
+
+  alarm() {
+    return this.object.alarm();
+  }
 }
 
 // The page's calls, from OBL's Worker over its service binding. A named entrypoint is reachable

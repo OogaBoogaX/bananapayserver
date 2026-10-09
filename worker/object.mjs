@@ -1,7 +1,8 @@
 // The Durable Object: the one place where the relay's line, every page's socket and the
-// pending requests meet, and where the global pile and the leaderboard are kept. It accepts
-// sockets with the Hibernation API, so an idle line costs no duration. It checks every message
-// from the relay before acting on it.
+// pending requests meet, and where the global pile, the leaderboard and the board's tally are
+// kept. It accepts sockets with the Hibernation API, so an idle line costs no duration, and its
+// one alarm wakes it only while pages are open. It checks every message from the relay before
+// acting on it.
 
 import { invoiceMatches } from "../shared/bolt11.mjs";
 import { donationEvent } from "../shared/donation.mjs";
@@ -20,12 +21,20 @@ export const BOARD_SIZE = 20;
 // object asks it again, so no donor waits on a service that's down.
 export const PRICE_RETRY_MS = 60_000;
 
+// How old the price beside the tally may get while pages are open, and how often the alarm
+// checks it. See decision 0017.
+export const PRICE_FRESH_MS = 5 * 60_000;
+
+// The tally's hours: the current one and those before it, seven days in all.
+export const TALLY_HOURS = 7 * 24;
+
 // Cloudflare allows an object 32,768 hibernatable sockets. Pages stop short of that, so a
 // crowd of them can never leave the relay without room for its line.
 export const PAGE_SOCKETS_MAX = 30_000;
 
 const INVOICE_ID = /^[A-Za-z0-9]{8,64}$/;
 const OPEN = 1;
+const HOUR = 3_600_000;
 const DAY = 86_400_000;
 
 const BECH32 = "[02-9ac-hj-np-z]{11,87}";
@@ -66,6 +75,10 @@ const MIGRATIONS = [
   );
   CREATE TABLE finished (invoice TEXT PRIMARY KEY, at INTEGER NOT NULL);
   CREATE INDEX finished_at ON finished (at);`,
+  // When the price service last failed, so the tally's rate stays stale after the object has
+  // slept, and the rate the pages last got with the tally, so an unchanged one isn't sent again.
+  `ALTER TABLE price ADD COLUMN failed INTEGER;
+  CREATE TABLE tally_rate (id INTEGER PRIMARY KEY CHECK (id = 1), rate TEXT NOT NULL);`,
 ];
 
 export class DonationsObject {
@@ -81,6 +94,9 @@ export class DonationsObject {
     this.boardEntries = null;
     this.boardAsked = 0;
     this.boardShown = 0;
+    this.tallyFigures = null;
+    this.tallyAsked = 0;
+    this.tallyShown = 0;
     this.refreshing = null;
     this.priceFailedAt = null;
   }
@@ -139,6 +155,8 @@ export class DonationsObject {
       this.ask(line, { type: "invoice", request, sats }, invoiceTimeoutMs),
       this.price(),
     ]);
+    // The pages' tally follows the price this lookup got, without holding up the donor.
+    this.ctx.waitUntil(this.pushRateIfChanged());
     const invoice = reply?.invoice;
     // The rate is locked here, so the donor's count is what they were shown, however long the
     // payment takes.
@@ -213,8 +231,17 @@ export class DonationsObject {
     server.send(JSON.stringify(this.pileMessage(this.platform.now())));
     const board = await this.board();
     if (board) server.send(JSON.stringify(board));
+    const tally = await this.tally();
+    if (tally) {
+      server.send(JSON.stringify(tally));
+      if (this.sentRate() === null) this.markRateSent(tally.rate);
+    }
     const after = url.searchParams.get("after");
     if (after && INVOICE_ID.test(after)) await this.replay(server, after);
+    // A page never waits for a price. One older than five minutes is refreshed once the page
+    // has what's known, and the alarm keeps it fresh while pages stay.
+    this.ctx.waitUntil(this.freshenRate());
+    await this.scheduleFreshening();
     return this.platform.upgrade(client);
   }
 
@@ -309,6 +336,7 @@ export class DonationsObject {
         const board = await this.board({ refresh: true });
         if (board) this.broadcast(board);
       }
+      await this.pushTally({ refresh: true });
     }
     return inserted ? "recorded" : "duplicate";
   }
@@ -397,6 +425,7 @@ export class DonationsObject {
       .then((price) => {
         if (price === null) {
           this.priceFailedAt = this.platform.now();
+          this.sql.exec("UPDATE price SET failed = ? WHERE id = 1", this.priceFailedAt);
           const [last] = this.sql.exec("SELECT at FROM price").toArray();
           const fallback = last ? `the last price, from ${new Date(last.at).toISOString()}, marked stale` : "no price";
           console.error(`price: 2140data's service answered neither by REST nor by socket; invoices get ${fallback}`);
@@ -405,7 +434,8 @@ export class DonationsObject {
         if (price.from === "socket") console.warn("price: 2140data's REST API didn't answer; its socket did");
         this.priceFailedAt = null;
         this.sql.exec(
-          "INSERT INTO price (id, cents, at) VALUES (1, ?, ?) ON CONFLICT (id) DO UPDATE SET cents = excluded.cents, at = excluded.at",
+          "INSERT INTO price (id, cents, at, failed) VALUES (1, ?, ?, NULL) " +
+          "ON CONFLICT (id) DO UPDATE SET cents = excluded.cents, at = excluded.at, failed = NULL",
           price.cents, this.platform.now(),
         );
         return true;
@@ -414,6 +444,123 @@ export class DonationsObject {
         this.refreshing = null;
       });
     return this.refreshing;
+  }
+
+  // The board's figures from D1, kept up to date there with each donation recorded: every
+  // donation, all time, and the last seven days by the hour, with the rate beside them. Kept in
+  // memory between donations; null if D1 can't be read and nothing is kept.
+  async tally({ refresh = false } = {}) {
+    if (refresh || !this.tallyFigures) {
+      const asked = ++this.tallyAsked;
+      try {
+        const [overall, hours] = await Promise.all([
+          this.env.DB.prepare("SELECT count, sats, milli, last FROM tally WHERE id = 1").first(),
+          this.env.DB.prepare("SELECT hour, sats, milli FROM tally_hours WHERE hour >= ? ORDER BY hour")
+            .bind(this.tallySince()).all(),
+        ]);
+        if (!overall) throw new Error("D1 has no tally row");
+        if (asked > this.tallyShown) {
+          this.tallyShown = asked;
+          this.tallyFigures = { ...overall, hours: hours.results };
+        }
+      } catch (error) {
+        console.error("reading the tally failed:", error.message);
+      }
+    }
+    if (!this.tallyFigures) return null;
+    const { count, sats, milli, last, hours } = this.tallyFigures;
+    const since = this.tallySince();
+    return {
+      type: "tally",
+      count,
+      sats,
+      bananas: milli / 1000,
+      last: last ?? null,
+      hours: hours.filter((h) => h.hour >= since).map((h) => [h.hour, h.sats, h.milli / 1000]),
+      rate: this.currentRate(),
+    };
+  }
+
+  // The start of the earliest hour the tally shows.
+  tallySince() {
+    const now = this.platform.now();
+    return now - (now % HOUR) - (TALLY_HOURS - 1) * HOUR;
+  }
+
+  // The last price, as the invoice reply gives it, marked stale while the service isn't
+  // answering. Null with no price ever.
+  currentRate() {
+    const [last] = this.sql.exec("SELECT cents, at, failed FROM price").toArray();
+    return last ? { ...rateOf(last.cents, last.at), stale: last.failed !== null } : null;
+  }
+
+  sentRate() {
+    return this.sql.exec("SELECT rate FROM tally_rate").toArray()[0]?.rate ?? null;
+  }
+
+  markRateSent(rate) {
+    this.sql.exec(
+      "INSERT INTO tally_rate (id, rate) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET rate = excluded.rate",
+      rateKey(rate),
+    );
+  }
+
+  // Every page gets the tally: after a donation, with its figures read again; after a new
+  // price, only when the rate changed, so pages never get the same tally twice.
+  async pushTally({ refresh = false } = {}) {
+    const tally = await this.tally({ refresh });
+    if (!tally) return;
+    this.markRateSent(tally.rate);
+    this.broadcast(tally);
+  }
+
+  // Marked as sent before anything waits, so lookups that finish together send it once.
+  async pushRateIfChanged() {
+    const rate = this.currentRate();
+    if (rateKey(rate) === this.sentRate()) return;
+    this.markRateSent(rate);
+    await this.pushTally();
+  }
+
+  // A price older than five minutes is asked for again, sharing a lookup already on its way
+  // and keeping 0013's minute after a failure, then the pages hear if the rate changed.
+  async freshenRate() {
+    try {
+      const [last] = this.sql.exec("SELECT at FROM price").toArray();
+      if (!last || this.platform.now() - last.at >= PRICE_FRESH_MS) await this.refreshPrice();
+      await this.pushRateIfChanged();
+    } catch (error) {
+      console.error("freshening the rate failed:", error.message);
+    }
+  }
+
+  // The object has one alarm, and this is all it's used for. Set when a page connects and none
+  // is due.
+  async scheduleFreshening() {
+    if ((await this.ctx.storage.getAlarm()) === null) {
+      await this.ctx.storage.setAlarm(this.freshenAt());
+    }
+  }
+
+  // When the price turns five minutes old, or five minutes from now if it already has, as when
+  // the service isn't answering.
+  freshenAt() {
+    const now = this.platform.now();
+    const [last] = this.sql.exec("SELECT at FROM price").toArray();
+    const due = last ? last.at + PRICE_FRESH_MS : 0;
+    return due > now ? due : now + PRICE_FRESH_MS;
+  }
+
+  // While pages are open, the price beside the tally is never much more than five minutes old.
+  // With none open, the alarm isn't set again and the object sleeps; the relay's line doesn't
+  // keep it going. Between alarms, pages' sockets hibernate, as they always do.
+  async alarm() {
+    if (this.ctx.getWebSockets("page").length === 0) return;
+    try {
+      await this.freshenRate();
+    } finally {
+      await this.ctx.storage.setAlarm(this.freshenAt());
+    }
   }
 
   webSocketClose(ws) {
@@ -516,6 +663,10 @@ const json = (body, status = 200) =>
 
 const closed = () => json({ error: "closed" }, 503);
 const busy = () => json({ error: "busy" }, 429);
+
+// What a page shows of a rate: the price and whether it's stale, not when it was fetched. A
+// tally goes out again only when this changes.
+const rateKey = (rate) => (rate ? `${rate.usdPerBtc} ${rate.stale}` : "none");
 
 // OBL's donation event, unchanged, with what it counted for in bananas alongside.
 const donationMessage = (row) => ({ type: "donation", donation: donationEvent(row), bananas: bananasOf(row.milli ?? null) });

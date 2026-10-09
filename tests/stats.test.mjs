@@ -148,8 +148,8 @@ test("the leaderboard lists signed-in donors by bananas, and anonymous donations
     { handle: "ooga-one", bananas: 8 },
   ]);
   assert.equal(typed(page, "board").length, 4, "one board on connect, then one per signed-in donation");
-  const after = page.messages().slice(-3).map((m) => m.type);
-  assert.deepEqual(after, ["donation", "pile", "board"]);
+  const after = page.messages().slice(-4).map((m) => m.type);
+  assert.deepEqual(after, ["donation", "pile", "board", "tally"]);
 });
 
 test("a renamed GitHub login keeps its bananas, and the board shows the new name", async () => {
@@ -184,7 +184,7 @@ test("an object made before the stats gets the new columns and tables in place",
   new DonationsObject(ctx, env, fakePlatform());
   const row = ctx.storage.sql.exec("SELECT request, github_id, price_cents, milli FROM pending").one();
   assert.deepEqual({ ...row }, { request: "r", github_id: null, price_cents: null, milli: null });
-  assert.equal(ctx.storage.sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 2);
+  assert.equal(ctx.storage.sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 3);
   new DonationsObject(ctx, env, fakePlatform());
   assert.equal(ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM pending").one().n, 1, "a second start changes nothing");
 });
