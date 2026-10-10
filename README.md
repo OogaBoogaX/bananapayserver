@@ -60,6 +60,7 @@ public events to the same Worker. Nothing ever connects in to a node.
 | [`docs/protocol.md`](docs/protocol.md) | The page's calls, the relay's line, and what the relay needs from BTCPay |
 | [`docs/configuration.md`](docs/configuration.md) | Every setting, which ones are limits and secrets, and what the relay's container needs |
 | [`docs/cloudflare.md`](docs/cloudflare.md) | What has to be done on Cloudflare, for staging and production, on both sides of the binding |
+| [`docs/staging.md`](docs/staging.md) | The signet staging stack beside a mainnet node: its fence, how to run it, and how to rehearse it |
 | [`docs/testing.md`](docs/testing.md) | How to test end to end, from a payment on regtest to the cave |
 | [`docs/decisions/`](docs/decisions/) | Choices that are expensive to revisit, and why they were made |
 
