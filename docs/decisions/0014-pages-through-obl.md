@@ -1,7 +1,7 @@
 # 0014. Pages reach donations through OBL's Worker
 
-**Status:** proposed, 2026-10-03. Once accepted, it supersedes where
-[0010](0010-handles-from-github.md) runs sign-in; handles still come from GitHub.
+**Status:** accepted, 2026-10-09. Supersedes where [0010](0010-handles-from-github.md) runs
+sign-in; handles still come from GitHub.
 
 ## Decision
 
