@@ -1,12 +1,15 @@
 // Read-only boundary checks: no invoices or payments, and no relay credential.
+// Staging by default; --production selects the separate PRODUCTION_WORKER_URL.
 import assert from "node:assert/strict";
 import { request } from "node:https";
 
-assert.ok(process.env.STAGING_WORKER_URL, "Set the staging STAGING_WORKER_URL variable");
-const url = new URL(process.env.STAGING_WORKER_URL);
+const environment = process.argv.includes("--production") ? "production" : "staging";
+const variable = `${environment.toUpperCase()}_WORKER_URL`;
+assert.ok(process.env[variable], `Set the ${environment} ${variable} variable`);
+const url = new URL(process.env[variable]);
 assert.equal(url.protocol, "https:");
-assert.match(url.hostname, /^bananapayserver-staging\.[a-z0-9-]+\.workers\.dev$/);
-assert.equal(url.origin + "/", url.href, "Set STAGING_WORKER_URL to the Worker's base URL");
+assert.match(url.hostname, new RegExp(`^bananapayserver-${environment}\\.[a-z0-9-]+\\.workers\\.dev$`));
+assert.equal(url.origin + "/", url.href, `Set ${variable} to the Worker's base URL`);
 
 if (!process.argv.includes("--config-only")) {
   for (const [path, options, expected] of [
@@ -29,7 +32,7 @@ if (!process.argv.includes("--config-only")) {
         resolve(response.statusCode);
       });
       req.on("error", reject);
-      req.setTimeout(15000, () => req.destroy(new Error("Staging check timed out")));
+      req.setTimeout(15000, () => req.destroy(new Error(`${environment} check timed out`)));
       req.end();
     });
     assert.equal(status, expected, `${options.method ?? "GET"} ${path}`);

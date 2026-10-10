@@ -175,6 +175,33 @@ Only what has passed staging, and only from `main`; see
 4. **OBL's side,** the binding to `bananapayserver-production` in OBL's production config, and
    OBL's production deploy, which is run by hand. That deploy is the launch.
 
+The production D1 database is recorded in `wrangler.production.jsonc`. Reuse it, apply all
+pending migrations before deploying, and never copy staging's rows or secrets into it. The
+Worker uses the same source, `DONATIONS` Durable Object class, and `PageApi` entrypoint as
+staging, with its own object namespace and `NETWORK=mainnet`.
+
+Run the same read-only public checks after a production deploy, with `PRODUCTION_WORKER_URL`
+set to its HTTPS base address in the terminal:
+
+```bash
+node scripts/check-staging.mjs --production
+```
+
+This expects `/relay` to return `426`, an unauthenticated WebSocket upgrade to return `401`,
+and public `POST /donations/invoice` to return `404`. It creates no invoice or payment.
+
+For OBL's launch, its production config needs:
+
+```jsonc
+"services": [{ "binding": "DONATIONS", "service": "bananapayserver-production", "entrypoint": "PageApi" }]
+```
+
+OBL also needs `/donations/*` in `run_worker_first` and the forwarding code described in
+[`protocol.md`](protocol.md#how-obls-worker-passes-them-on). Before that launch, set the
+production limits and the hash supplied by the production relay's operator through Wrangler's
+secret prompts. Donations stay closed while required limits or the relay are absent; creating
+the Cloudflare resources alone does not enable mainnet donations.
+
 ## Never
 
 - Deploy production before staging passes, or from anywhere but `main`.
