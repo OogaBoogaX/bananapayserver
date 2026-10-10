@@ -125,7 +125,7 @@ cmd_setup() {
   token="$(openssl rand -hex 32)"
   webhook_secret="$(openssl rand -hex 32)"
   curl -sf -o /dev/null -X POST -H "$JSON" -H "$auth" \
-    -d "$(jq -n --arg s "$webhook_secret" '{url: "http://localhost:8080/btcpay", secret: $s, enabled: true, automaticRedelivery: true, authorizedEvents: {everything: false, specificEvents: ["InvoiceSettled"]}}')" \
+    -d "$(jq -n --arg s "$webhook_secret" '{url: "http://localhost:8080/btcpay", secret: $s, enabled: true, automaticRedelivery: true, authorizedEvents: {everything: false, specificEvents: ["InvoiceSettled", "InvoiceReceivedPayment", "InvoicePaymentSettled"]}}')" \
     "$API/stores/$store/webhooks"
 
   # Local test values; a deployment sets its own limits and never commits them.

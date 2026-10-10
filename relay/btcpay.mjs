@@ -58,15 +58,23 @@ export class BTCPay {
     return this.#call("GET", `/invoices/${id(invoiceId)}`);
   }
 
-  // The relay's invoices made since a time, in unix seconds, that may still need its attention.
-  recent(sinceSeconds) {
-    const query = new URLSearchParams({ orderId: ORDER_ID, startDate: String(sinceSeconds), take: "500" });
-    for (const status of ["New", "Processing", "Settled"]) query.append("status", status);
-    return this.#call("GET", `/invoices?${query}`);
+  // The relay's invoices made since a time, in unix seconds, that may still need its attention,
+  // every page of them: expired ones too, since one can be paid late.
+  async recent(sinceSeconds, { take = 500 } = {}) {
+    const invoices = [];
+    for (let skip = 0; ; skip += take) {
+      const query = new URLSearchParams({ orderId: ORDER_ID, startDate: String(sinceSeconds), skip: String(skip), take: String(take) });
+      for (const status of ["New", "Processing", "Settled", "Expired"]) query.append("status", status);
+      const page = await this.#call("GET", `/invoices?${query}`);
+      if (!Array.isArray(page)) throw new Error("BTCPay's list of invoices isn't a list");
+      invoices.push(...page);
+      if (page.length < take) return invoices;
+    }
   }
 
   async #call(method, path, body) {
-    const response = await this.fetch(new URL(this.store + path, this.url), {
+    // Joined as text, so a path in BTCPAY_URL, as behind a proxy, is kept.
+    const response = await this.fetch(new URL(this.url.replace(/\/+$/, "") + this.store + path), {
       method,
       headers: {
         Authorization: `token ${this.apiKey}`,

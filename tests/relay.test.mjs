@@ -192,6 +192,32 @@ test("a sweep still going when the next is due lets it finish instead of startin
   assert.deepEqual(reads, ["Slow0000001", "Next0000001"]);
 });
 
+test("an invoice paid in full after it expired counts, once BTCPay settles the payment", async () => {
+  const { relay, line, btcpay, logs } = setup();
+  btcpay.invoices.set(INVOICE, { ...btcpay.invoices.get(INVOICE), status: "Expired", additionalStatus: "PaidLate" });
+  btcpay.payments = { "BTC-LN": [], "BTC-CHAIN": [{ status: "Processing" }] };
+  await relay.check(INVOICE);
+  assert.deepEqual(line.sent, [], "not while it's still confirming");
+  assert.equal(relay.open.get(INVOICE), 1000, "the sweep keeps looking");
+  btcpay.payments["BTC-CHAIN"] = [{ status: "Settled" }];
+  await relay.sweep();
+  assert.deepEqual(line.sent, [{ type: "paid", invoice: INVOICE, sats: 1000, method: "onchain" }]);
+  assert.ok(logs.some((m) => m.includes("paid after it expired")));
+
+  const other = setup();
+  other.btcpay.invoices.set(INVOICE, { ...other.btcpay.invoices.get(INVOICE), status: "Expired", additionalStatus: "PaidPartial" });
+  await other.relay.check(INVOICE);
+  assert.deepEqual(other.line.sent, [], "paid in part isn't paid");
+});
+
+test("after a restart the relay finds an invoice paid late too", async () => {
+  const { relay, btcpay } = setup();
+  btcpay.invoices.set(INVOICE, { ...btcpay.invoices.get(INVOICE), status: "Expired", additionalStatus: "PaidLate" });
+  btcpay.invoices.set("Expired0001", { id: "Expired0001", status: "Expired", amount: "0.00000500", currency: "BTC", metadata: { orderId: ORDER_ID } });
+  await relay.load();
+  assert.deepEqual([...relay.open.keys()], [INVOICE]);
+});
+
 test("the sweep drops expired invoices, keeps waiting ones, and resends notices", async () => {
   const { relay, line, btcpay } = setup();
   btcpay.invoices.set("Expired0001", { id: "Expired0001", status: "Expired", amount: "0.00000500", currency: "BTC", metadata: { orderId: ORDER_ID } });

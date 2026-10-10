@@ -108,11 +108,14 @@ export class Relay {
         this.open.delete(invoiceId);
         return;
       }
-      if (invoice.status === "Expired" || invoice.status === "Invalid") {
+      // Paid in full after it expired, which only an on-chain payment can be. It counts, as the
+      // donor gave and the node has it, once BTCPay has settled every payment.
+      const late = invoice.status === "Expired" && invoice.additionalStatus === "PaidLate";
+      if ((invoice.status === "Expired" && !late) || invoice.status === "Invalid") {
         this.open.delete(invoiceId);
         return;
       }
-      if (invoice.status !== "Settled") return;
+      if (invoice.status !== "Settled" && !late) return;
       // The pile credits payments, so an invoice someone marked settled by hand doesn't count.
       if (invoice.additionalStatus === "Marked") {
         this.open.delete(invoiceId);
@@ -123,7 +126,14 @@ export class Relay {
         this.open.delete(invoiceId);
         return this.log(`check: invoice ${invoiceId} has an amount the relay can't read`);
       }
-      const method = this.paidWith(await this.btcpay.paymentMethods(invoiceId));
+      const methods = await this.btcpay.paymentMethods(invoiceId);
+      if (late && !allSettled(methods)) {
+        // Still confirming: the sweep looks again each minute until it settles.
+        this.open.set(invoiceId, sats);
+        return;
+      }
+      if (late) this.log(`check: invoice ${invoiceId} was paid after it expired; counting it`);
+      const method = this.paidWith(methods);
       // Settled with no payment to show for it shouldn't happen; the invoice stays open, so the
       // sweep asks again and the log keeps saying so.
       if (!method) return this.log(`check: invoice ${invoiceId} is settled, but BTCPay lists no payment for it`);
@@ -180,7 +190,8 @@ export class Relay {
     for (const invoice of await this.btcpay.recent(since)) {
       const sats = invoice.currency === "BTC" ? btcToSats(invoice.amount) : null;
       if (invoice.metadata?.orderId !== ORDER_ID || !sats || !INVOICE_ID.test(invoice.id)) continue;
-      if (["New", "Processing", "Settled"].includes(invoice.status) && invoice.additionalStatus !== "Marked") {
+      const late = invoice.status === "Expired" && invoice.additionalStatus === "PaidLate";
+      if ((["New", "Processing", "Settled"].includes(invoice.status) || late) && invoice.additionalStatus !== "Marked") {
         this.open.set(invoice.id, sats);
       }
     }
@@ -206,4 +217,10 @@ export class Relay {
     if (!found?.destination) throw new Error(`BTCPay gave no ${method} destination`);
     return found;
   }
+}
+
+// True when every payment BTCPay hasn't ruled invalid is settled, and there is one.
+function allSettled(methods) {
+  const payments = (methods ?? []).flatMap((m) => m.payments ?? []).filter((payment) => payment.status !== "Invalid");
+  return payments.length > 0 && payments.every((payment) => payment.status === "Settled");
 }

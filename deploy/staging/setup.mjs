@@ -84,7 +84,7 @@ try {
       secret: webhookSecret,
       enabled: true,
       automaticRedelivery: true,
-      authorizedEvents: { everything: false, specificEvents: ["InvoiceSettled"] },
+      authorizedEvents: { everything: false, specificEvents: ["InvoiceSettled", "InvoiceReceivedPayment", "InvoicePaymentSettled"] },
     },
   });
   const token = secret();

@@ -33,7 +33,7 @@ line.on("up", () => relay.flush());
 const server = createWebhookServer({
   secret: config.webhookSecret,
   storeId: config.btcpay.storeId,
-  onSettled: (invoiceId) => relay.check(invoiceId),
+  onPayment: (invoiceId) => relay.check(invoiceId),
 });
 server.listen(config.listen.port, config.listen.host, () => log(`webhook: listening on port ${config.listen.port}`));
 

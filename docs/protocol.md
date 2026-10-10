@@ -241,6 +241,11 @@ What the relay does with it:
 - Each invoice is in BTC, carries `metadata.orderId` `bananapayserver`, and has lazy payment
   methods. The relay activates Lightning at once and on-chain only when the donor switches.
 - A payment counts once BTCPay's API, not the webhook, says the invoice is `Settled` and it
-  wasn't marked settled by hand.
+  wasn't marked settled by hand. An invoice paid in full after it expired, `Expired` with
+  `PaidLate`, which only an on-chain payment can be, counts too, once every payment on it is
+  settled.
+- The webhook sends the relay to look at an invoice when it settles and when it receives a
+  payment, since a late payment settles nothing.
 - Once a minute, the relay checks every open invoice of its own, which catches any webhook
-  that never arrived. After a restart, it finds its invoices from the last day again.
+  that never arrived. After a restart, it finds its invoices from the last day again, every
+  page of BTCPay's list, late-paid ones included.
