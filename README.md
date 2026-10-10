@@ -9,7 +9,7 @@ is the relay's BTCPay key, which can only create and view invoices on one store.
 
 ## Status
 
-**Pre-alpha. Nothing here is deployed.**
+**Pre-alpha. The signet staging Worker is deployed.**
 
 The design came first, so the boundaries were decided rather than discovered: the
 architecture, the rules it keeps, and the decisions behind it. The donation path now follows

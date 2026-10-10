@@ -7,9 +7,9 @@
 	"name": "bananapayserver-production",
 	"main": "worker/index.mjs",
 	"compatibility_date": "2026-09-30",
-	// No public address yet: where the production relay dials is still open. Pages never call
-	// this Worker directly.
-	"workers_dev": false,
+	// The production relay dials this Worker's workers.dev address (decision 0019). It takes only
+	// the relay's line; pages never call this Worker directly.
+	"workers_dev": true,
 	"preview_urls": false,
 	// The Worker's own log lines are kept, such as the price service's failures. Cloudflare's
 	// invocation logs are off: they would keep each request's headers, and so visitors'
