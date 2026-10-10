@@ -24,7 +24,9 @@ Settled once, with the account's owners, before anything is deployed:
   login required for every member. Nobody shares a login or a token.
 - **Staging deploys through a manual GitHub Action; production by hand.** A maintainer chooses
   the branch to deploy; see [decision 0018](decisions/0018-staging-github-action.md). Production is
-  deployed by a person signed in as themselves, and has no deploy token.
+  deployed by a person signed in as themselves, and has no deploy token of its own. Staging's
+  token can still deploy it, since Cloudflare can't limit a token to one Worker, so the
+  `staging` environment's reviewers are what keep it to staging.
 - **OBL's CI deploys with an account-wide token,** so it can deploy over bananapayserver's
   Workers too. OBL's workflow actions should be pinned to exact commits, and its production
   token kept in a GitHub environment that needs a reviewer.
@@ -40,9 +42,10 @@ Settled once, with the account's owners, before anything is deployed:
 - Node 22 or newer and git. Install Wrangler, Cloudflare's command-line tool, with
   `npm ci --prefix .github/deploy --ignore-scripts`. The deployment lockfile pins version
   4.146.0 and its dependencies with integrity hashes, without running install scripts.
-- The environment's limits, from the team: the largest donation in sats (`MAX_SATS`), and the
+- The environment's limits, from the team: the largest donation in sats (`MAX_SATS`), the
   invoice requests allowed per visitor and for everyone together each minute (`RATE_PER_IP`,
-  `RATE_GLOBAL`). They're typed at a prompt, and never go in a file, a commit or a chat. See
+  `RATE_GLOBAL`), and the page sockets one visitor may hold open (`SOCKETS_PER_IP`). They're
+  typed at a prompt, and never go in a file, a commit or a chat. See
   [`configuration.md`](configuration.md) for every setting.
 
 ## Staging: bananapayserver's side
@@ -85,8 +88,8 @@ Run `node --test --test-timeout=60000` before applying migrations or deploying b
      deploy -c wrangler.staging.jsonc
    ```
 
-5. **Set missing limits.** Run this for `MAX_SATS`, then repeat with `RATE_PER_IP` and
-   `RATE_GLOBAL` in its place, typing each value at the prompt.
+5. **Set missing limits.** Run this for `MAX_SATS`, then repeat with `RATE_PER_IP`,
+   `RATE_GLOBAL` and `SOCKETS_PER_IP` in its place, typing each value at the prompt.
 
    ```bash
    node .github/deploy/node_modules/wrangler/bin/wrangler.js \
@@ -107,12 +110,21 @@ Run `node --test --test-timeout=60000` before applying migrations or deploying b
 
    | Setting | Value |
    |---|---|
-   | Secret `CLOUDFLARE_API_TOKEN` | A token with Workers Scripts → Edit and D1 → Edit, scoped to the target account |
-   | Variable `CLOUDFLARE_ACCOUNT_ID` | That account's id |
-   | Variable `STAGING_WORKER_URL` | The existing staging Worker's HTTPS `workers.dev` address, used for smoke checks |
+   | Secret `CLOUDFLARE_API_TOKEN` | A token with Workers Scripts → Edit and D1 → Edit, scoped to the target account, with an expiry |
+   | Secret `CLOUDFLARE_ACCOUNT_ID` | That account's id |
+   | Secret `STAGING_WORKER_URL` | The existing staging Worker's HTTPS `workers.dev` address, used for smoke checks |
 
-   The token can edit other Workers in that account; keep its permissions to those above,
-   and restrict who can run deployments through the environment's protections. Worker limits
+   The account id and the address are secrets, not variables, because the Action's logs are
+   public: GitHub hides secrets there, and the workflow hides the address's account
+   subdomain wherever Wrangler prints it.
+
+   The token can edit every Worker in that account, production's and OBL's included, and the
+   workflow runs from whatever branch is chosen. So the environment needs these protections,
+   which only GitHub's settings can give: required reviewers, with self-review prevented, a
+   branch rule, and no bypass for administrators. Before approving a run, a reviewer checks
+   what the branch changes against `main` in `.github/`, `scripts/` and
+   `wrangler.staging.jsonc`. The workflow also refuses a config that isn't
+   `bananapayserver-staging` on signet, which catches a mistake but not malice. Worker limits
    and `RELAY_TOKEN_SHA256` stay in Cloudflare. The Action preserves them and never needs their
    values in GitHub.
 
@@ -134,7 +146,7 @@ Run `node --test --test-timeout=60000` before applying migrations or deploying b
    Until the workflow reaches `main`, a maintainer can use steps 1–7 from the reviewed branch
    with no Cloudflare build or Action deployment running. The deploy command always names the
    config file. Afterwards, the secret list should still include `MAX_SATS`, `RATE_PER_IP`,
-   `RATE_GLOBAL` and `RELAY_TOKEN_SHA256`.
+   `RATE_GLOBAL`, `SOCKETS_PER_IP` and `RELAY_TOKEN_SHA256`.
 
    ```bash
    node .github/deploy/node_modules/wrangler/bin/wrangler.js \
@@ -170,8 +182,9 @@ Only what has passed staging, and only from `main`; see
    [decision 0019](decisions/0019-production-relay-address.md).
 2. **Workers Paid** on the account.
 3. **bananapayserver's side,** the staging steps with `production` in place of `staging`,
-   except step 8: production isn't connected to the repository. It has its own secrets:
-   production limits and a separate relay token. Nothing from staging is reused.
+   except step 8: production has no Action and no deploy token, and a maintainer deploys it
+   by hand from `main`. It has its own secrets: production limits and a separate relay
+   token. Nothing from staging is reused.
 4. **OBL's side,** the binding to `bananapayserver-production` in OBL's production config, and
    OBL's production deploy, which is run by hand. That deploy is the launch.
 
@@ -183,10 +196,9 @@ Only what has passed staging, and only from `main`; see
 - Add routes, custom domains or preview URLs beyond what this page says, or turn invocation
   logs on.
 - Create an API token for deploying bananapayserver, other than the staging Action's token.
-- Connect production to the repository, turn preview builds on, or leave a build's deploy
-  command at its default.
-- Reconnect Workers Builds while the Action is the staging deployer, deploy by hand or set a
-  secret while another deployment is running, or change either Worker's code in the dashboard.
+- Connect either Worker to the repository through Workers Builds, or turn preview builds on.
+- Deploy by hand or set a secret while another deployment is running, or change either
+  Worker's code in the dashboard.
 
 ## Reporting back
 

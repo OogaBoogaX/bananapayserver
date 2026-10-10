@@ -35,6 +35,7 @@ class Connection extends EventEmitter {
     this.received = [];
     this.pongs = 0;
     this.answerPings = true;
+    this.answerClose = true;
     let buffered = Buffer.alloc(0);
     socket.on("data", (chunk) => {
       buffered = Buffer.concat([buffered, chunk]);
@@ -76,7 +77,7 @@ class Connection extends EventEmitter {
       this.emit("pong");
     } else if (opcode === 0x8) {
       this.closeFrame = payload;
-      this.socket.end(frame(0x8, payload.subarray(0, 2)));
+      if (this.answerClose) this.socket.end(frame(0x8, payload.subarray(0, 2)));
     }
   }
 

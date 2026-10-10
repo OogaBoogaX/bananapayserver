@@ -184,6 +184,7 @@ export const ENV = {
   MAX_SATS: "100000",
   RATE_PER_IP: "5",
   RATE_GLOBAL: "50",
+  SOCKETS_PER_IP: "5",
   NETWORK: "regtest",
   INVOICE_TIMEOUT_MS: "200",
 };

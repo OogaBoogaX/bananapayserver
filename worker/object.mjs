@@ -5,7 +5,7 @@
 // acting on it.
 
 import { invoiceMatches } from "../shared/bolt11.mjs";
-import { donationEvent } from "../shared/donation.mjs";
+import { donationEvent, HANDLE_MAX, MESSAGE_MAX, sanitize } from "../shared/donation.mjs";
 import { parseUp } from "../shared/protocol.mjs";
 import { readLimits, readSettings } from "./config.mjs";
 import { relayAuthorized } from "./relay-token.mjs";
@@ -20,6 +20,15 @@ export const BOARD_SIZE = 20;
 // After the price service fails to answer, how long invoices use the last price before the
 // object asks it again, so no donor waits on a service that's down.
 export const PRICE_RETRY_MS = 60_000;
+
+// A price more than this many times the last one, or less than the last one divided by it,
+// within a day of it, is taken for a fault at the service rather than the market, and refused.
+// Banana counts are kept for good, so a wrong price would stay on the pile and the board.
+export const PRICE_JUMP_MAX = 2;
+
+// How much more than the invoice the relay may ask a donor to pay on-chain: room for a network
+// fee, if the store adds one, and never a mistake in units.
+export const ONCHAIN_FEE_ALLOWANCE = 100_000;
 
 // How old the price beside the tally may get while pages are open, and how often the alarm
 // checks it. See decision 0017.
@@ -79,6 +88,9 @@ const MIGRATIONS = [
   // slept, and the rate the pages last got with the tally, so an unchanged one isn't sent again.
   `ALTER TABLE price ADD COLUMN failed INTEGER;
   CREATE TABLE tally_rate (id INTEGER PRIMARY KEY CHECK (id = 1), rate TEXT NOT NULL);`,
+  // The minute's rate limit counts, so they hold when the object sleeps. Keyed by a visitor's
+  // group, never their address, and gone when the minute is.
+  `CREATE TABLE rate (key TEXT PRIMARY KEY, minute INTEGER NOT NULL, count INTEGER NOT NULL);`,
 ];
 
 export class DonationsObject {
@@ -97,8 +109,8 @@ export class DonationsObject {
     this.tallyFigures = null;
     this.tallyAsked = 0;
     this.tallyShown = 0;
+    this.rateSending = null;
     this.refreshing = null;
-    this.priceFailedAt = null;
   }
 
   migrate() {
@@ -135,7 +147,9 @@ export class DonationsObject {
     return json({ error: "not found" }, 404);
   }
 
-  // github is the signed-in donor, { id, login }, or null for an anonymous donation.
+  // github is the signed-in donor, { id, login }, or null for an anonymous donation. The front
+  // door has already checked everything; the text is cleaned again here because every page shows
+  // it, and another Worker in the account could reach this object without the front door.
   async invoice({ sats, message, github, client }) {
     const limits = readLimits(this.env);
     const { network, invoiceTimeoutMs } = readSettings(this.env);
@@ -148,7 +162,7 @@ export class DonationsObject {
     const request = this.platform.id();
     this.sql.exec(
       "INSERT INTO pending (request, sats, handle, message, github_id, created) VALUES (?, ?, ?, ?, ?, ?)",
-      request, sats, github?.login ?? "", message, github?.id ?? null, this.platform.now(),
+      request, sats, sanitize(github?.login, HANDLE_MAX), sanitize(message, MESSAGE_MAX), github?.id ?? null, this.platform.now(),
     );
     // The price is looked up while the relay makes the invoice, so it costs the donor no time.
     const [reply, price] = await Promise.all([
@@ -195,7 +209,7 @@ export class DonationsObject {
     if (!this.allow("note", client, limits)) return busy();
     const updated = this.sql.exec(
       "UPDATE pending SET message = ? WHERE request = ? RETURNING request",
-      message, request,
+      sanitize(message, MESSAGE_MAX), request,
     ).toArray();
     return updated.length ? new Response(null, { status: 204 }) : json({ error: "unknown" }, 404);
   }
@@ -215,18 +229,22 @@ export class DonationsObject {
     if (!line) return closed();
 
     const reply = await this.ask(line, { type: "onchain", request, invoice: row.invoice }, invoiceTimeoutMs);
-    if (!reply?.address || !ADDRESS[network].test(reply.address) || reply.sats < row.sats) return closed();
+    if (!reply?.address || !ADDRESS[network].test(reply.address)) return closed();
+    if (reply.sats < row.sats || reply.sats > row.sats + ONCHAIN_FEE_ALLOWANCE) return closed();
     return json({ address: reply.address, sats: reply.sats });
   }
 
   async page(request, url) {
     const limits = readLimits(this.env);
     if (!limits) return closed();
-    if (!this.allow("page", request.headers.get("X-Client") ?? "", limits)) return busy();
+    const visitor = request.headers.get("X-Client") ?? "";
+    if (!this.allow("page", visitor, limits)) return busy();
     if (this.ctx.getWebSockets("page").length >= PAGE_SOCKETS_MAX) return busy();
+    const group = visitorGroup(visitor);
+    if (this.ctx.getWebSockets(group).length >= limits.socketsPerIp) return busy();
     const [client, server] = this.platform.pair();
     server.serializeAttachment({ role: "page" });
-    this.ctx.acceptWebSocket(server, ["page"]);
+    this.ctx.acceptWebSocket(server, ["page", group]);
     server.send(JSON.stringify(this.statusMessage(this.line() !== null)));
     server.send(JSON.stringify(this.pileMessage(this.platform.now())));
     const board = await this.board();
@@ -417,22 +435,34 @@ export class DonationsObject {
     return last ? { cents: last.cents, at: last.at, stale: !fresh } : null;
   }
 
-  // True when a new price came in. Invoices asking at the same time share one lookup.
+  // True when a new price came in. Invoices asking at the same time share one lookup. When the
+  // last lookup failed, the next waits a minute, and the failure is kept in storage so that
+  // holds after the object sleeps.
   refreshPrice() {
     if (this.refreshing) return this.refreshing;
-    if (this.priceFailedAt !== null && this.platform.now() - this.priceFailedAt < PRICE_RETRY_MS) return Promise.resolve(false);
+    const [failed] = this.sql.exec("SELECT value FROM meta WHERE key = 'price_failed'").toArray();
+    if (failed && this.platform.now() - failed.value < PRICE_RETRY_MS) return Promise.resolve(false);
     this.refreshing = fetchPrice(this.platform)
       .then((price) => {
-        if (price === null) {
-          this.priceFailedAt = this.platform.now();
-          this.sql.exec("UPDATE price SET failed = ? WHERE id = 1", this.priceFailedAt);
-          const [last] = this.sql.exec("SELECT at FROM price").toArray();
+        const [last] = this.sql.exec("SELECT cents, at FROM price").toArray();
+        const jumped = price && last && this.platform.now() - last.at < DAY &&
+          (price.cents > last.cents * PRICE_JUMP_MAX || price.cents * PRICE_JUMP_MAX < last.cents);
+        if (price === null || jumped) {
+          const now = this.platform.now();
+          this.sql.exec(
+            "INSERT INTO meta (key, value) VALUES ('price_failed', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            now,
+          );
+          this.sql.exec("UPDATE price SET failed = ? WHERE id = 1", now);
           const fallback = last ? `the last price, from ${new Date(last.at).toISOString()}, marked stale` : "no price";
-          console.error(`price: 2140data's service answered neither by REST nor by socket; invoices get ${fallback}`);
+          const why = jumped
+            ? `gave $${price.cents / 100}, too far from the last price, $${last.cents / 100}`
+            : "answered neither by REST nor by socket";
+          console.error(`price: 2140data's service ${why}; invoices get ${fallback}`);
           return false;
         }
         if (price.from === "socket") console.warn("price: 2140data's REST API didn't answer; its socket did");
-        this.priceFailedAt = null;
+        this.sql.exec("DELETE FROM meta WHERE key = 'price_failed'");
         this.sql.exec(
           "INSERT INTO price (id, cents, at, failed) VALUES (1, ?, ?, NULL) " +
           "ON CONFLICT (id) DO UPDATE SET cents = excluded.cents, at = excluded.at, failed = NULL",
@@ -514,12 +544,18 @@ export class DonationsObject {
     this.broadcast(tally);
   }
 
-  // Marked as sent before anything waits, so lookups that finish together send it once.
+  // The rate in storage is the one the pages last got, and only a tally that went out changes
+  // it, so one that couldn't be read is tried again. The rate on its way is noted in memory
+  // before anything waits, so lookups that finish together send it once.
   async pushRateIfChanged() {
-    const rate = this.currentRate();
-    if (rateKey(rate) === this.sentRate()) return;
-    this.markRateSent(rate);
-    await this.pushTally();
+    const key = rateKey(this.currentRate());
+    if (key === this.sentRate() || key === this.rateSending) return;
+    this.rateSending = key;
+    try {
+      await this.pushTally();
+    } finally {
+      if (this.rateSending === key) this.rateSending = null;
+    }
   }
 
   // A price older than five minutes is asked for again, sharing a lookup already on its way
@@ -621,20 +657,25 @@ export class DonationsObject {
 
   // Fixed one-minute windows. Invoices and on-chain switches, the requests that make work for
   // the node, count per visitor and overall. Notes and page sockets count per visitor, each on
-  // their own, so a crowd of page loads can't close donations. Addresses live in memory for at
-  // most a minute and are never stored.
+  // their own, so a crowd of page loads can't close donations. The counts are kept in storage,
+  // so they hold when the object sleeps, under the visitor's group rather than their address,
+  // and go when the minute ends. A visitor shares a count only with the rare other in their
+  // group.
   allow(kind, visitor, { ratePerIp, rateGlobal }) {
     const minute = Math.floor(this.platform.now() / 60_000);
     if (this.minute !== minute) {
       this.minute = minute;
-      this.counts = new Map();
-      this.total = 0;
+      this.sql.exec("DELETE FROM rate WHERE minute <> ?", minute);
     }
-    const key = `${kind} ${visitorKey(visitor)}`;
-    const count = this.counts.get(key) ?? 0;
-    if (count >= ratePerIp || (kind === "work" && this.total >= rateGlobal)) return false;
-    this.counts.set(key, count + 1);
-    if (kind === "work") this.total += 1;
+    const counted = (key) => this.sql.exec("SELECT count FROM rate WHERE key = ?", key).toArray()[0]?.count ?? 0;
+    const add = (key) => this.sql.exec(
+      "INSERT INTO rate (key, minute, count) VALUES (?, ?, 1) ON CONFLICT (key) DO UPDATE SET count = count + 1",
+      key, minute,
+    );
+    const key = `${kind} ${visitorGroup(visitor, 64)}`;
+    if (counted(key) >= ratePerIp || (kind === "work" && counted("total") >= rateGlobal)) return false;
+    add(key);
+    if (kind === "work") add("total");
     return true;
   }
 
@@ -647,15 +688,28 @@ export class DonationsObject {
   }
 }
 
-// An IPv6 visitor counts by its /64, the block a single host can rotate through.
-export function visitorKey(address) {
+// An IPv6 visitor counts by its /64, the block a single host can rotate through, or by a wider
+// prefix where asked. Something that isn't an address counts as itself.
+export function visitorKey(address, prefix = 64) {
   if (!address.includes(":")) return address;
   if (address.includes(".")) return address.slice(address.lastIndexOf(":") + 1);
-  const [head, tail] = address.toLowerCase().split("::");
+  const [head, tail, extra] = address.toLowerCase().split("::");
   const left = head ? head.split(":") : [];
   const right = tail ? tail.split(":") : [];
+  if (extra !== undefined || left.length + right.length > (tail === undefined ? 8 : 7)) return address;
   const groups = tail === undefined ? left : [...left, ...Array(8 - left.length - right.length).fill("0"), ...right];
-  return `${groups.slice(0, 4).map((group) => group.replace(/^0+(?=.)/, "")).join(":")}::/64`;
+  return `${groups.slice(0, prefix / 16).map((group) => group.replace(/^0+(?=.)/, "")).join(":")}::/${prefix}`;
+}
+
+// What the object keeps of a visitor: never the address, but 16 bits of a hash of it, or of its
+// IPv6 prefix. That makes it one of 65,536 groups, each shared by tens of thousands of addresses.
+// Page sockets, which stay open for as long as a page does, carry it as a tag, by the /48, the
+// block one customer can get; the rate limits count by it, by the /64. FNV-1a, which needs no
+// waiting, so nothing a page or donor does takes longer.
+export function visitorGroup(visitor, prefix = 48) {
+  let hash = 0x811c9dc5;
+  for (const char of visitorKey(visitor, prefix)) hash = Math.imul(hash ^ char.charCodeAt(0), 0x01000193);
+  return `visitor-${((hash >>> 16) ^ (hash & 0xffff)).toString(16).padStart(4, "0")}`;
 }
 
 const json = (body, status = 200) =>

@@ -76,6 +76,20 @@ test("answers that aren't prices are passed over", async () => {
   assert.deepEqual(await fetchPrice(s), { cents: 10_000_050, from: "socket" }, "the first real price after the junk");
 });
 
+test("a reply too big to be a price is dropped without being read whole", async () => {
+  let pulled = 0;
+  const endless = new ReadableStream({
+    pull(controller) {
+      pulled += 1;
+      controller.enqueue(new TextEncoder().encode(" ".repeat(4_096)));
+    },
+  });
+  assert.equal(await fetchPrice({ fetch: async () => new Response(endless), socket: () => { throw new Error("no socket"); } }), null);
+  assert.ok(pulled < 10, `read ${pulled} chunks of an endless reply`);
+  const declared = new Response("{}", { headers: { "Content-Length": "9000000" } });
+  assert.equal(await fetchPrice({ fetch: async () => declared, socket: () => { throw new Error("no socket"); } }), null);
+});
+
 test("a banana is a dollar's worth of bitcoin, counted in thousandths and rounded half up", () => {
   assert.equal(milliBananas(10_000, 10_000_000), 10_000, "10,000 sats at $100,000 is 10 bananas");
   assert.equal(milliBananas(1_200, 10_000_000), 1_200);

@@ -20,6 +20,7 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
   the machine's address stays hidden, as the mainnet node's is.
 - **A firewall,** [`firewall.sh`](../deploy/staging/firewall.sh): Tor's network can't reach the
   machine or any private network, and no staging network can reach the machine's own addresses.
+- **No IPv6:** the firewall fences IPv4, so no container in the stack has an IPv6 address.
 - **Nothing shared with the mainnet node:** its own data, keys, wallets, macaroons and secrets.
   BTCPay reaches its own LND with a macaroon that can only make and read invoices.
 - **Caps:** memory, CPU and process limits on every container, rotated logs, a pruned chain,
@@ -27,7 +28,8 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
   controller, so bitcoind's caches and the .NET heaps have limits of their own.
 - **Pinned:** every image by digest.
 - **Nothing starts by itself,** not after a crash and not after a reboot. The firewall's rules
-  don't outlive a reboot, so they go back up first, and only then the stack.
+  don't outlive a reboot, so [`start.sh`](../deploy/staging/start.sh) puts them back up first,
+  checks them against the stack's networks, and only then starts the stack.
 
 ## What the machine needs
 
@@ -67,6 +69,8 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
      nowhere else, from `openssl rand -hex 24`.
    - **`WORKER_URL`:** `wss://bananapayserver-staging.<account subdomain>.workers.dev/relay`.
    - **`RELAY_MAX_SATS`:** the team's cap for staging.
+   - **`RELAY_RATE_PER_MINUTE`:** the team's limit on invoices and on-chain addresses a
+     minute, at least staging's `RATE_GLOBAL`.
 
 3. **Put up the firewall,** as root, before anything starts. It works from the subnets in
    `.env`, so the stack's networks don't need to exist yet:
@@ -75,8 +79,8 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
    sudo ./firewall.sh
    ```
 
-   The rules last until the next reboot, unless the machine's own firewall tools save them. Run
-   `firewall.sh` again after a reboot, before the stack starts.
+   The rules last until the next reboot, unless the machine's own firewall tools save them.
+   `start.sh`, next, puts them back every time the stack starts.
 
 4. **Build and start everything but the relay,** which waits for step 6:
 
@@ -85,21 +89,44 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
    ```
 
    ```bash
-   docker compose -p obl-staging up -d tor bitcoind postgres nbxplorer lnd btcpay
+   ./start.sh tor bitcoind postgres nbxplorer lnd btcpay
    ```
 
-   Then check the firewall. From Tor's network, the machine and its LAN must be out of reach.
-   With the machine's LAN address and a port it listens on, such as SSH's:
+   [`start.sh`](../deploy/staging/start.sh) is how the stack always starts. It puts the
+   firewall's rules up, checks that the stack's networks use the subnets the rules guard, and
+   only then starts anything.
+
+   Then check the fence. From Tor's network, the machine and its LAN must be out of reach.
+   This probe tries one address and port from one of the stack's networks, here the machine's
+   LAN address and SSH's port:
 
    ```bash
-   docker run --rm --network obl-staging_outside obl-staging-relay node -e "const s = require('net').connect(+process.argv[2], process.argv[1]); s.setTimeout(4000); s.on('connect', () => { console.log('REACHABLE: the firewall is not working'); process.exit(1); }); s.on('error', () => console.log('blocked')); s.on('timeout', () => { console.log('blocked'); process.exit(0); });" <LAN address> 22
+   docker run --rm --network obl-staging_outside obl-staging-relay node -e "const s = require('net').connect(+process.argv[2], process.argv[1]); s.setTimeout(4000); const say = (what, code) => { console.log(what); process.exit(code); }; s.on('connect', () => say('REACHABLE: it connected', 1)); s.on('timeout', () => say('blocked: no answer', 0)); s.on('error', (e) => e.code === 'ECONNREFUSED' ? say('REACHABLE: it refused, so something answered', 1) : say('blocked: ' + e.code, 0));" <LAN address> 22
    ```
 
-   It should print `blocked`. Repeat it on the stack's two other networks, `obl-staging_front`
-   and `obl-staging_backend`, aimed at the same address and at each network's gateway:
+   Each one should print `blocked`, with no answer or no route. A refusal counts as reachable:
+   it means the machine answered. The output names no address, so it can be shared as is.
+   Try, from `obl-staging_outside`:
+
+   - the machine's LAN address, on SSH's port, and on each port the mainnet node publishes
+     there, such as its bitcoind RPC, LND gRPC and LND REST ports, by default 8332, 10009 and
+     8080;
+   - another device on the LAN, such as the router, on a port it answers, such as 80;
+   - an address on one of the machine's other Docker networks, if it has any, on a port a
+     container there listens on; `docker network ls` and `docker network inspect` list them.
+
+   Then from `obl-staging_front` and `obl-staging_backend`, the machine's LAN address and each
+   network's own gateway, on SSH's port:
 
    ```bash
    docker network inspect obl-staging_front --format '{{(index .IPAM.Config 0).Gateway}}'
+   ```
+
+   The firewall fences IPv4 only, so the stack's containers have no IPv6 at all. Tor sits on
+   all three networks; this should print nothing:
+
+   ```bash
+   docker compose -p obl-staging exec tor cat /proc/net/if_inet6
    ```
 
 5. **Wait for the chain.** bitcoind syncs mutinynet through Tor, which takes hours.
@@ -120,14 +147,28 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
    It waits for LND and BTCPay to catch up, then gives BTCPay its admin, the store, its
    Lightning connection with an invoice-only macaroon, a watch-only on-chain wallet, the
    relay's key and the webhook. It adds the relay's settings to `.env` and prints the relay
-   token's SHA-256. Send the hash, and only the hash, to whoever deploys
+   token's SHA-256. If it says it couldn't delete its unrestricted key, delete that key in
+   BTCPay's API keys before going on. Send the hash, and only the hash, to whoever deploys
    `bananapayserver-staging`, who sets it as `RELAY_TOKEN_SHA256` while no build is running;
    see [`cloudflare.md`](cloudflare.md). The token stays in `.env` on this machine.
+
+   If setup stops partway, after it made BTCPay's admin, it can't run again: the admin exists,
+   and its password went with the run. Start BTCPay over, keeping the chain and LND, with
+   `docker compose -p obl-staging rm -sf btcpay nbxplorer postgres`, then
+   `docker volume rm obl-staging_btcpay obl-staging_nbxplorer obl-staging_postgres`, then
+   step 4's `./start.sh` and `./setup.sh` again.
+
+   LND's log should hold no macaroon. This should print `0`; anything else means a macaroon
+   has been written to the log, and LND's volume has to be reset before going on:
+
+   ```bash
+   docker compose -p obl-staging logs lnd | grep -c 0201036c6e64
+   ```
 
 7. **Start the relay,** once the hash is set:
 
    ```bash
-   docker compose -p obl-staging up -d relay
+   ./start.sh relay
    ```
 
    `docker compose -p obl-staging logs relay` should show `line: open`. Staging then says
@@ -177,11 +218,17 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
   faucet, LND is offline. Restart it with `docker compose -p obl-staging restart lnd`: the
   channels stay open, and new invoices fail for about a minute. LND may come back on the
   faucet's regular address; reconnect to the onion one, as in step 9, if it does.
+- **Late payments:** an on-chain payment made after its invoice expired still counts, once
+  it settles. BTCPay tells the relay through the webhook's `InvoiceReceivedPayment` and
+  `InvoicePaymentSettled` events, beside `InvoiceSettled`. A stack set up before late
+  payments counted has only `InvoiceSettled`; add the other two in the store's webhook, in
+  BTCPay's pages, or the relay finds a late payment only when it restarts.
 - **Between tests:** `docker compose -p obl-staging stop`, which frees the memory and keeps the
   chain, so the next test doesn't wait for a sync.
-- **Start again,** after a stop, a crash or a reboot: `sudo ./firewall.sh`, then
-  `docker compose -p obl-staging up -d`. `firewall.sh` skips rules that are already there.
-- **Update:** pull the branch, then `docker compose -p obl-staging up -d --build`.
+- **Start again,** after a stop, a crash or a reboot: `./start.sh`, which puts the firewall's
+  rules back first and skips any that are already there.
+- **Update:** pull the branch, then `docker compose -p obl-staging build relay` and
+  `./start.sh`.
 - **Remove,** when testing is done: `docker compose -p obl-staging down -v`, which deletes
   staging's chain, wallets and BTCPay. Signet only. The firewall's rules then guard nothing,
   and go at the next reboot.
@@ -195,14 +242,16 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
   ```
 
   ```bash
-  docker run -d --name obl-staging-ui --network obl-staging-ui -p 127.0.0.1:14142:14142 obl-staging-relay node -e "const net = require('net'); net.createServer((c) => { const b = net.connect(49392, 'btcpay'); c.pipe(b).pipe(c); c.on('error', () => b.destroy()); b.on('error', () => c.destroy()); }).listen(14142);"
+  docker run -d --name obl-staging-ui --network obl-staging-ui --cap-drop ALL --security-opt no-new-privileges -p 127.0.0.1:14142:14142 obl-staging-relay node -e "const net = require('net'); net.createServer((c) => { const b = net.connect(49392, 'btcpay'); c.pipe(b).pipe(c); c.on('error', () => b.destroy()); b.on('error', () => c.destroy()); }).listen(14142);"
   ```
 
   ```bash
   docker network connect obl-staging_front obl-staging-ui
   ```
 
-  Then `ssh -L 14142:127.0.0.1:14142 <machine>` from a laptop, and `http://localhost:14142`,
+  Docker Engines before 28 let other devices on the LAN reach a port published on
+  `127.0.0.1`, so on an older Engine, keep the forwarder up only while it's in use. Then
+  `ssh -L 14142:127.0.0.1:14142 <machine>` from a laptop, and `http://localhost:14142`,
   signing in as `admin@staging.invalid` with `BTCPAY_ADMIN_PASSWORD` from `.env`. Afterwards,
   `docker rm -f obl-staging-ui` and `docker network rm obl-staging-ui`.
 
@@ -213,8 +262,9 @@ regtest, with a payer node, and points the relay at a Worker running on the work
 proves the wiring before anything touches the machine, in minutes rather than hours:
 
 1. `.env` from the example, with any placeholder for `SIGNET_PEER` and `RELAY_MAX_SATS` set.
-2. `export COMPOSE_FILE=compose.yaml:compose.rehearsal.yaml`, then step 4's commands, adding
-   `payer` to the services.
+2. `export COMPOSE_FILE=compose.yaml:compose.rehearsal.yaml`, then step 4's build, and
+   `docker compose -p obl-staging up -d` with step 4's services and `payer`. A workstation
+   has no node to fence off, so it skips `start.sh` and the firewall.
 3. Mine 101 blocks to an address from `payer`, using `generatetoaddress` with
    `bitcoin-cli -datadir=/data` in the `bitcoind` container.
 4. `./setup.sh`, then put the printed hash in the workstation's `.dev.vars` as

@@ -6,6 +6,9 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import http from "node:http";
 
 export const WEBHOOK_PATH = "/btcpay";
+// What sends the relay to look at an invoice: settling, and any payment, since a payment that
+// arrives after the invoice expired settles nothing and still counts.
+export const EVENTS = ["InvoiceSettled", "InvoiceReceivedPayment", "InvoicePaymentSettled"];
 const MAX_BODY = 64 * 1024;
 
 // BTCPay-Sig is "sha256=" and the hex HMAC-SHA256 of the raw body, keyed with the secret.
@@ -16,7 +19,7 @@ export function signatureValid(secret, body, header) {
   return timingSafeEqual(expected, Buffer.from(match[1], "hex"));
 }
 
-export function createWebhookServer({ secret, storeId, onSettled }) {
+export function createWebhookServer({ secret, storeId, onPayment }) {
   const server = http.createServer((request, response) => {
     const answer = (status) => response.writeHead(status).end();
     if (request.url !== WEBHOOK_PATH) return answer(404);
@@ -42,8 +45,8 @@ export function createWebhookServer({ secret, storeId, onSettled }) {
       } catch {
         return;
       }
-      if (event?.type === "InvoiceSettled" && event.storeId === storeId && typeof event.invoiceId === "string") {
-        onSettled(event.invoiceId);
+      if (EVENTS.includes(event?.type) && event.storeId === storeId && typeof event.invoiceId === "string") {
+        onPayment(event.invoiceId);
       }
     });
   });

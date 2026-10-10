@@ -25,7 +25,8 @@ regtest.
 |---|---|---|
 | `MAX_SATS` | limit, required | The largest donation the Worker accepts, in sats |
 | `MIN_SATS` | optional | The smallest; 1 when unset, the smallest invoice there is |
-| `RATE_PER_IP` | limit, required | Per visitor and per minute: invoice requests and on-chain switches together, and separately each of notes and page sockets. An IPv6 visitor counts by its /64 |
+| `RATE_PER_IP` | limit, required | Per visitor and per minute: invoice requests and on-chain switches together, and separately each of notes and page sockets. An IPv6 visitor counts by its /64. Counts are kept for the minute under a 16-bit hash of the address, never the address, so a visitor shares theirs with the rare other in the same group |
+| `SOCKETS_PER_IP` | limit, required | Page sockets one visitor may hold open at once. An IPv6 visitor counts by its /48. Visitors are counted in 65,536 groups by a hash of the address, so a visitor shares the limit with the few others in their group, and no address is ever kept |
 | `RATE_GLOBAL` | limit, required | Invoice requests and on-chain switches per minute, for all visitors together. Notes and page sockets don't count, so a crowd of page loads can't close donations |
 | `RELAY_TOKEN_SHA256` | secret | The SHA-256, in hex, of the relay's token |
 | `NETWORK` | variable | `mainnet`, `testnet`, `signet` or `regtest`; invoices and addresses for any other are refused. Set in each config file |
@@ -40,14 +41,14 @@ which signs donors in and checks origins; see
 
 ### Deploying
 
-Into the account OBL's Workers use. Staging deploys through a manually dispatched GitHub Action,
-from the selected branch ([decision 0018](decisions/0018-staging-github-action.md));
-production deploys by hand, and only from `main`. [`cloudflare.md`](cloudflare.md) has the steps
-for both environments, and for OBL's side of the binding. A setting that isn't in the config
-file, such as `PILE_START`, is set with `wrangler secret put`: a deploy removes plain variables
-set in the dashboard. The Worker's own log lines, such as the price service's failures, can be read in
-Cloudflare's dashboard. Cloudflare's invocation logs are off, because they would keep each
-request's headers, and so visitors' addresses and the relay's, for days.
+Into the account OBL's Workers use. Staging deploys through a manually dispatched GitHub
+Action, from the selected branch ([decision 0018](decisions/0018-staging-github-action.md));
+production deploys by hand, and only from `main`. [`cloudflare.md`](cloudflare.md) has the
+steps for both environments, and for OBL's side of the binding. A setting that isn't in the
+config file, such as `PILE_START`, is set with `wrangler secret put`: a deploy removes plain
+variables set in the dashboard. The Worker's own log lines, such as the price service's
+failures, can be read in Cloudflare's dashboard. Cloudflare's invocation logs are off, because
+they would keep each request's headers, and so visitors' addresses and the relay's, for days.
 
 ## The relay
 
@@ -59,14 +60,15 @@ them.
 | `WORKER_URL` | required | The line's address, `wss://<api host>/relay` |
 | `RELAY_TOKEN` | secret | 32 to 128 letters, digits, `-` or `_` |
 | `TOR_SOCKS` | required | Tor's SOCKS proxy, as `host:port` |
-| `DIRECT` | development only | `yes` connects without Tor, and `TOR_SOCKS` is then ignored |
+| `DIRECT` | development only | `yes` connects without Tor, and `TOR_SOCKS` is then ignored. The relay says so in its log when it starts, since the Worker then sees the machine's address |
 | `BTCPAY_URL` | required | BTCPay's address on the machine's internal network |
 | `BTCPAY_STORE_ID` | required | The one store the key can use |
 | `BTCPAY_API_KEY` | secret | A key that can only create and view invoices on that store |
 | `BTCPAY_WEBHOOK_SECRET` | secret | The webhook's secret, as set in BTCPay |
 | `MAX_SATS` | limit, required | The relay's own cap, in sats, whatever the Worker allows |
+| `RATE_PER_MINUTE` | limit, required | How many invoices and on-chain addresses the relay makes in a minute, whatever the Worker asks. At least the Worker's `RATE_GLOBAL`, so it only ever stops a Worker gone wrong |
 | `MIN_SATS` | optional | 1 when unset |
-| `WEBHOOK_LISTEN` | optional | Where the webhook listener binds inside the container; `0.0.0.0:8080` when unset. Never publish this port |
+| `WEBHOOK_LISTEN` | optional | Where the webhook listener binds inside the container; `0.0.0.0:8080` when unset. Never publish this port, and never run the relay with host networking, where this would listen on the machine itself |
 | `INVOICE_MINUTES` | optional | How long an invoice stays payable; 15 when unset |
 | `LIGHTNING_METHOD`, `ONCHAIN_METHOD` | optional | BTCPay's payment method ids; `BTC-LN` and `BTC-CHAIN` when unset. BTCPay 1.x calls them `BTC-LightningNetwork` and `BTC` |
 
@@ -76,6 +78,8 @@ A token and the hash the Worker keeps can be made with:
 token=$(openssl rand -hex 32)
 printf %s "$token" | shasum -a 256
 ```
+
+It prints the hash, then `-`; the hash is the first field.
 
 The relay keeps the token; the Worker keeps only the hash.
 

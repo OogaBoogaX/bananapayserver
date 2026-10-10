@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PAGE_SOCKETS_MAX, REPLAY_MAX, visitorKey } from "../worker/object.mjs";
+import { DonationsObject, ONCHAIN_FEE_ALLOWANCE, PAGE_SOCKETS_MAX, REPLAY_MAX, visitorGroup, visitorKey } from "../worker/object.mjs";
 import { until } from "./helpers/cloudflare.mjs";
 import { ADDRESS, BOLT11, INVOICE, bolt11For } from "./helpers/values.mjs";
 import { call, donor, EXPIRES, TOKEN, upgrade, world } from "./helpers/world.mjs";
@@ -143,6 +143,11 @@ test("the Worker checks amounts and bodies before anything reaches the object", 
   }
   const wrongType = await w.post("/donations/invoice", { sats: 1000 }, { type: "text/plain" });
   assert.equal(wrongType.status, 415);
+  // A request id that only prints like one, such as a list holding it, never reaches the object.
+  for (const path of ["/donations/note", "/donations/onchain"]) {
+    const listed = await w.post(path, { request: ["e".repeat(32)] });
+    assert.equal(listed.status, 400, path);
+  }
 });
 
 test("the public address takes only the relay's line; pages come through OBL's Worker", async () => {
@@ -267,6 +272,23 @@ test("rate limits apply per visitor and overall, per minute", async () => {
   assert.equal((await ask("a")).status, 503, "a new minute");
 });
 
+test("rate limits hold when the object sleeps and wakes within the minute, and keep no address", async () => {
+  const w = await world({ RATE_PER_IP: "2", RATE_GLOBAL: "3" });
+  const ask = (visitor) => w.post("/donations/invoice", { sats: 1000 }, { visitor });
+  assert.equal((await ask("198.51.100.7")).status, 503, "counted, though closed for want of a relay");
+  assert.equal((await ask("198.51.100.7")).status, 503);
+  assert.equal((await ask("198.51.100.7")).status, 429);
+  const woken = new DonationsObject(w.ctx, w.env, w.platform);
+  w.env.DONATIONS.get = () => ({ fetch: (input, init) => woken.fetch(new Request(input, init)) });
+  assert.equal((await ask("198.51.100.7")).status, 429, "the visitor's count held");
+  assert.equal((await ask("198.51.100.8")).status, 503);
+  assert.equal((await ask("198.51.100.9")).status, 429, "and so did everyone's");
+  assert.equal(w.ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM rate WHERE key LIKE '%198.51%'").one().n, 0, "no address is kept");
+  w.platform.advance(60_000);
+  assert.equal((await ask("198.51.100.7")).status, 503, "a new minute starts over");
+  assert.equal(w.ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM rate").one().n, 2, "last minute's counts are gone");
+});
+
 test("the object checks every notice the relay sends", async () => {
   const w = await world();
   const relay = await w.connectRelay();
@@ -342,6 +364,35 @@ test("an on-chain switch is refused for a wrong address, an unknown request, or 
   assert.equal((await w.post("/donations/onchain", { request: asked.request })).status, 410);
 });
 
+test("an on-chain amount far above the invoice is refused, while room for a network fee isn't", async () => {
+  const w = await world();
+  const relay = await w.connectRelay();
+  const { asked } = await w.invoice(relay, { sats: 1000 });
+  const switchTo = async (sats) => {
+    const before = relay.sent.length;
+    const pending = w.post("/donations/onchain", { request: asked.request });
+    await until(() => relay.sent.length > before);
+    await w.relaySays(relay, { type: "onchain", request: asked.request, address: ADDRESS, sats });
+    return pending;
+  };
+  assert.equal((await switchTo(1000 + ONCHAIN_FEE_ALLOWANCE + 1)).status, 503, "a mistake in units, say");
+  assert.equal((await switchTo(1000 + 5_000)).status, 200, "a network fee the store adds");
+});
+
+test("the object cleans the text again, whoever reaches it", async () => {
+  const w = await world();
+  const relay = await w.connectRelay();
+  // Straight to the object, as another Worker in the account could, past the front door.
+  const pending = w.env.DONATIONS.get().fetch("https://object/invoice", {
+    method: "POST",
+    body: JSON.stringify({ sats: 1000, message: "<img src=x onerror=alert(1)> hi", github: { id: 7, login: "<b>x</b>" }, client: "198.51.100.7" }),
+  });
+  await until(() => relay.sent.length > 0);
+  const row = w.ctx.storage.sql.exec("SELECT handle, message FROM pending").one();
+  assert.doesNotMatch(`${row.handle} ${row.message}`, /[<>=()/]/);
+  await pending;
+});
+
 test("pending requests are forgotten after the retention period", async () => {
   const w = await world({ PENDING_DAYS: "7" });
   const relay = await w.connectRelay();
@@ -401,6 +452,20 @@ test("page loads have a budget of their own and can't close donations", async ()
   assert.equal(asked.status, 503, "closed for want of a relay, not busy");
 });
 
+test("a visitor can hold only so many pages open at once, an IPv6 one by its /48", async () => {
+  const w = await world({ SOCKETS_PER_IP: "2", RATE_PER_IP: "20" });
+  assert.notEqual(visitorGroup("198.51.100.7"), visitorGroup("198.51.100.8"));
+  const first = await w.connectPage(undefined, "198.51.100.7");
+  await w.connectPage(undefined, "198.51.100.7");
+  assert.equal((await w.socket(undefined, "198.51.100.7")).status, 429);
+  await w.connectPage(undefined, "198.51.100.8");
+  first.close(1001, "going away");
+  await w.connectPage(undefined, "198.51.100.7");
+  await w.connectPage(undefined, "2001:db8:1:1::1");
+  await w.connectPage(undefined, "2001:db8:1:2::1");
+  assert.equal((await w.socket(undefined, "2001:db8:1:3::1")).status, 429, "another /64 in the same /48");
+});
+
 test("pages stop short of the platform's socket limit, leaving room for the relay", async () => {
   const w = await world();
   const real = w.ctx.getWebSockets;
@@ -457,4 +522,8 @@ test("IPv6 visitors count by their /64", () => {
   assert.equal(visitorKey("::ffff:192.0.2.1"), "192.0.2.1");
   assert.equal(visitorKey("192.0.2.1"), "192.0.2.1");
   assert.equal(visitorKey(""), "");
+  assert.equal(visitorKey("2001:db8:1:2::1", 48), "2001:db8:1::/48", "pages' sockets count by the /48");
+  for (const bad of ["1:2:3:4:5:6:7:8:9::1", "1::2::3", "1:2:3:4:5:6:7:8:9"]) {
+    assert.equal(visitorKey(bad), bad, "something that isn't an address counts as itself");
+  }
 });

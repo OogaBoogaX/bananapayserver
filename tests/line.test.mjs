@@ -65,7 +65,8 @@ test("the line passes on protocol messages and drops the rest", async (t) => {
 });
 
 test("a line that answers its pings stays up", async (t) => {
-  const { line, sockets } = setup({ answers: true });
+  // A wide window for each pong, so a busy test machine's pause doesn't read as a dead line.
+  const { line, sockets } = setup({ answers: true, deadMs: 1_000 });
   t.after(() => line.stop());
   line.start();
   await until(() => sockets[0]?.pings >= 10);
@@ -92,6 +93,30 @@ test("a failed dial is retried, and stop means stop", async () => {
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.equal(sockets.length, 1);
   assert.equal(line.send({ type: "paid", invoice: "Inv0ice1234", sats: 1 }), false);
+});
+
+test("a line dropped as soon as it opens is dialed with growing delays, not every second", async (t) => {
+  const { line, sockets } = setup({ firstDelayMs: 2, maxDelayMs: 1_000, steadyMs: 1_000 });
+  t.after(() => line.stop());
+  line.on("up", () => queueMicrotask(() => sockets.at(-1).emit("close", { code: 1011, reason: "" })));
+  line.start();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  // Delays of 1, 2, 4, 8, 16, 32 and 64 ms: about seven dials in 100 ms, where a fixed first
+  // delay would make dozens.
+  assert.ok(sockets.length >= 3 && sockets.length <= 10, `${sockets.length} dials in 100 ms`);
+});
+
+test("a line that stays up long enough starts its delays over", async (t) => {
+  const { line, sockets } = setup({ fail: 2, firstDelayMs: 40, maxDelayMs: 1_000, steadyMs: 10 });
+  t.after(() => line.stop());
+  line.start();
+  await until(() => line.connected);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const dropped = Date.now();
+  sockets[0].emit("close", { code: 1006, reason: "" });
+  await until(() => sockets.length === 2);
+  // Back to the first delay, 20 ms with this jitter, not the 80 ms two failures had reached.
+  assert.ok(Date.now() - dropped < 60, `redialed after ${Date.now() - dropped} ms`);
 });
 
 test("a line replaced by another relay waits the longest delay before taking it back", async (t) => {

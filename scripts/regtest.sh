@@ -125,7 +125,7 @@ cmd_setup() {
   token="$(openssl rand -hex 32)"
   webhook_secret="$(openssl rand -hex 32)"
   curl -sf -o /dev/null -X POST -H "$JSON" -H "$auth" \
-    -d "$(jq -n --arg s "$webhook_secret" '{url: "http://localhost:8080/btcpay", secret: $s, enabled: true, automaticRedelivery: true, authorizedEvents: {everything: false, specificEvents: ["InvoiceSettled"]}}')" \
+    -d "$(jq -n --arg s "$webhook_secret" '{url: "http://localhost:8080/btcpay", secret: $s, enabled: true, automaticRedelivery: true, authorizedEvents: {everything: false, specificEvents: ["InvoiceSettled", "InvoiceReceivedPayment", "InvoicePaymentSettled"]}}')" \
     "$API/stores/$store/webhooks"
 
   # Local test values; a deployment sets its own limits and never commits them.
@@ -140,6 +140,7 @@ BTCPAY_STORE_ID=$store
 BTCPAY_API_KEY=$relay_key
 BTCPAY_WEBHOOK_SECRET=$webhook_secret
 MAX_SATS=100000
+RATE_PER_MINUTE=120
 WEBHOOK_LISTEN=127.0.0.1:8080
 EOF
   cat >"$ROOT/.dev.vars" <<EOF
@@ -147,6 +148,7 @@ EOF
 MAX_SATS=100000
 RATE_PER_IP=20
 RATE_GLOBAL=120
+SOCKETS_PER_IP=20
 RELAY_TOKEN_SHA256=$(printf %s "$token" | shasum -a 256 | cut -d' ' -f1)
 NETWORK=regtest
 EOF

@@ -10,6 +10,7 @@ import { bolt11For, INVOICE } from "./helpers/values.mjs";
 import { donor, EXPIRES, world } from "./helpers/world.mjs";
 
 const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
 const typed = (page, type) => page.messages().filter((m) => m.type === type);
 
 // A paid donation of some sats, signed in as login unless login is null.
@@ -85,6 +86,45 @@ test("when neither answers, invoices get the last price marked stale, and nobody
   w.platform.prices = { socket: 70_000, rest: 70_000 };
   const fourth = await (await w.invoice(relay, { sats: 1000 }, answer("Inv0ice0004"))).response.json();
   assert.deepEqual(fourth.rate, { usdPerBtc: 70_000, satsPerBanana: 1429, at: w.platform.now(), stale: false });
+});
+
+test("the minute without asking holds after the object sleeps, even with no price yet", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const w = await world({}, { prices: { socket: null, rest: null } });
+  const object = new DonationsObject(w.ctx, w.env, w.platform);
+  assert.equal(await object.refreshPrice(), false);
+  const asked = w.platform.fetched.length;
+  const woken = new DonationsObject(w.ctx, w.env, w.platform);
+  assert.equal(await woken.refreshPrice(), false);
+  assert.equal(w.platform.fetched.length, asked, "no lookup within the minute, though nothing was in memory");
+  w.platform.advance(PRICE_RETRY_MS + 1);
+  await woken.refreshPrice();
+  assert.ok(w.platform.fetched.length > asked, "after it, the service is asked again");
+});
+
+test("a price far from the last one is taken for a fault, until a day has gone by", async (t) => {
+  const errors = t.mock.method(console, "error", () => {});
+  const w = await world();
+  const relay = await w.connectRelay();
+  const answer = (id) => () => ({ id, bolt11: bolt11For(1000), expires: EXPIRES });
+  await w.invoice(relay, { sats: 1000 });
+  const priced = w.platform.now();
+
+  w.platform.advance(HOUR);
+  w.platform.prices = { socket: 250_000, rest: 250_000 };
+  const jumped = await (await w.invoice(relay, { sats: 1000 }, answer("Inv0ice0002"))).response.json();
+  assert.deepEqual(jumped.rate, { usdPerBtc: 100_000, satsPerBanana: 1000, at: priced, stale: true });
+  assert.match(errors.mock.calls[0].arguments[0], /gave \$250000, too far from the last price, \$100000/);
+
+  w.platform.advance(PRICE_RETRY_MS + 1);
+  w.platform.prices = { socket: 60_000, rest: 60_000 };
+  const moved = await (await w.invoice(relay, { sats: 1000 }, answer("Inv0ice0003"))).response.json();
+  assert.equal(moved.rate.usdPerBtc, 60_000, "a fall of 40% is the market");
+
+  w.platform.advance(DAY);
+  w.platform.prices = { socket: 250_000, rest: 250_000 };
+  const later = await (await w.invoice(relay, { sats: 1000 }, answer("Inv0ice0004"))).response.json();
+  assert.equal(later.rate.usdPerBtc, 250_000, "a day on, any price is taken");
 });
 
 test("with no price anywhere, the donation still goes through, worth no bananas until worked out again", async (t) => {
@@ -184,7 +224,7 @@ test("an object made before the stats gets the new columns and tables in place",
   new DonationsObject(ctx, env, fakePlatform());
   const row = ctx.storage.sql.exec("SELECT request, github_id, price_cents, milli FROM pending").one();
   assert.deepEqual({ ...row }, { request: "r", github_id: null, price_cents: null, milli: null });
-  assert.equal(ctx.storage.sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 3);
+  assert.equal(ctx.storage.sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 4);
   new DonationsObject(ctx, env, fakePlatform());
   assert.equal(ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM pending").one().n, 1, "a second start changes nothing");
 });

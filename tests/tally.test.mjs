@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { DonationsObject, PRICE_FRESH_MS, PRICE_RETRY_MS } from "../worker/object.mjs";
 import { PRICE_URL } from "../worker/price.mjs";
+import { until } from "./helpers/cloudflare.mjs";
 import { bolt11For } from "./helpers/values.mjs";
 import { donor, EXPIRES, world } from "./helpers/world.mjs";
 
@@ -218,6 +219,67 @@ test("when D1 can't be read, the tally is skipped and everything else still arri
   await w.ctx.settle();
   assert.deepEqual(page.messages().map((m) => m.type), ["status", "pile", "board"]);
   assert.match(errors.mock.calls[0].arguments[0], /reading the tally failed/);
+});
+
+test("a new rate the tally couldn't be read for goes out once D1 is back", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const w = await world();
+  const page = await w.connectPage();
+  await w.ctx.settle();
+  assert.equal(tallies(page).at(-1).rate.usdPerBtc, 100_000);
+
+  // Woken with nothing in memory, a new price arrives while D1 can't be read.
+  const woken = new DonationsObject(w.ctx, w.env, w.platform);
+  const prepare = w.env.DB.prepare;
+  w.env.DB.prepare = (sql) => {
+    if (sql.includes("tally")) throw new Error("D1 is down");
+    return prepare(sql);
+  };
+  w.platform.advance(PRICE_FRESH_MS);
+  w.platform.prices = { rest: 90_000, socket: 90_000 };
+  await woken.alarm();
+  await w.ctx.settle();
+  assert.equal(tallies(page).at(-1).rate.usdPerBtc, 100_000, "nothing could go out");
+
+  // D1 is back, and the price hasn't moved since; the pages still need it.
+  w.env.DB.prepare = prepare;
+  w.platform.advance(PRICE_FRESH_MS);
+  await woken.alarm();
+  await w.ctx.settle();
+  assert.equal(tallies(page).at(-1).rate.usdPerBtc, 90_000);
+});
+
+test("rate updates that overlap and both fail leave the next check to send the rate", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const w = await world();
+  const page = await w.connectPage();
+  await w.ctx.settle();
+  assert.equal(tallies(page).at(-1).rate.usdPerBtc, 100_000);
+
+  // Woken with nothing in memory, two new prices arrive while the tally's reads hang, then fail.
+  const woken = new DonationsObject(w.ctx, w.env, w.platform);
+  const prepare = w.env.DB.prepare;
+  const reads = [];
+  w.env.DB.prepare = (sql) => (sql.includes("FROM tally WHERE")
+    ? { first: () => new Promise((_, reject) => reads.push(() => reject(new Error("D1 is down")))) }
+    : prepare(sql));
+  const price = (dollars) => w.ctx.storage.sql.exec("UPDATE price SET cents = ?, at = ?", dollars * 100, w.platform.now());
+  price(90_000);
+  const first = woken.pushRateIfChanged();
+  await until(() => reads.length === 1);
+  price(80_000);
+  const second = woken.pushRateIfChanged();
+  await until(() => reads.length === 2);
+  reads[0]();
+  reads[1]();
+  await Promise.all([first, second]);
+  assert.equal(tallies(page).at(-1).rate.usdPerBtc, 100_000, "nothing went out");
+
+  // D1 is back, with the first new price current again: the pages still need it.
+  w.env.DB.prepare = prepare;
+  price(90_000);
+  await woken.pushRateIfChanged();
+  assert.equal(tallies(page).at(-1).rate.usdPerBtc, 90_000);
 });
 
 test("the migration starts the tally from the donations already recorded, and the trigger counts each once", () => {
