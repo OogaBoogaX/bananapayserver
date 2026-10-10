@@ -182,8 +182,9 @@ Only what has passed staging, and only from `main`; see
    [decision 0019](decisions/0019-production-relay-address.md).
 2. **Workers Paid** on the account.
 3. **bananapayserver's side,** the staging steps with `production` in place of `staging`,
-   except step 8: production isn't connected to the repository. It has its own secrets:
-   production limits and a separate relay token. Nothing from staging is reused.
+   except step 8: production has no Action and no deploy token, and a maintainer deploys it
+   by hand from `main`. It has its own secrets: production limits and a separate relay
+   token. Nothing from staging is reused.
 4. **OBL's side,** the binding to `bananapayserver-production` in OBL's production config, and
    OBL's production deploy, which is run by hand. That deploy is the launch.
 
@@ -195,10 +196,9 @@ Only what has passed staging, and only from `main`; see
 - Add routes, custom domains or preview URLs beyond what this page says, or turn invocation
   logs on.
 - Create an API token for deploying bananapayserver, other than the staging Action's token.
-- Connect production to the repository, turn preview builds on, or leave a build's deploy
-  command at its default.
-- Reconnect Workers Builds while the Action is the staging deployer, deploy by hand or set a
-  secret while another deployment is running, or change either Worker's code in the dashboard.
+- Connect either Worker to the repository through Workers Builds, or turn preview builds on.
+- Deploy by hand or set a secret while another deployment is running, or change either
+  Worker's code in the dashboard.
 
 ## Reporting back
 

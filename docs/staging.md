@@ -97,16 +97,26 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
    only then starts anything.
 
    Then check the fence. From Tor's network, the machine and its LAN must be out of reach.
-   With the machine's LAN address and a port it listens on, such as SSH's:
+   This probe tries one address and port from one of the stack's networks, here the machine's
+   LAN address and SSH's port:
 
    ```bash
-   docker run --rm --network obl-staging_outside obl-staging-relay node -e "const s = require('net').connect(+process.argv[2], process.argv[1]); s.setTimeout(4000); s.on('connect', () => { console.log('REACHABLE: the firewall is not working'); process.exit(1); }); s.on('error', () => console.log('blocked')); s.on('timeout', () => { console.log('blocked'); process.exit(0); });" <LAN address> 22
+   docker run --rm --network obl-staging_outside obl-staging-relay node -e "const s = require('net').connect(+process.argv[2], process.argv[1]); s.setTimeout(4000); const say = (what, code) => { console.log(what); process.exit(code); }; s.on('connect', () => say('REACHABLE: it connected', 1)); s.on('timeout', () => say('blocked: no answer', 0)); s.on('error', (e) => e.code === 'ECONNREFUSED' ? say('REACHABLE: it refused, so something answered', 1) : say('blocked: ' + e.code, 0));" <LAN address> 22
    ```
 
-   It should print `blocked`. Run it again from `obl-staging_outside` at another device on the
-   LAN, such as the router, with a port it answers on, such as 80. Then repeat the first one
-   on the stack's two other networks, `obl-staging_front` and `obl-staging_backend`, aimed at
-   the same address and at each network's gateway:
+   Each one should print `blocked`, with no answer or no route. A refusal counts as reachable:
+   it means the machine answered. The output names no address, so it can be shared as is.
+   Try, from `obl-staging_outside`:
+
+   - the machine's LAN address, on SSH's port, and on each port the mainnet node publishes
+     there, such as its bitcoind RPC, LND gRPC and LND REST ports, by default 8332, 10009 and
+     8080;
+   - another device on the LAN, such as the router, on a port it answers, such as 80;
+   - an address on one of the machine's other Docker networks, if it has any, on a port a
+     container there listens on; `docker network ls` and `docker network inspect` list them.
+
+   Then from `obl-staging_front` and `obl-staging_backend`, the machine's LAN address and each
+   network's own gateway, on SSH's port:
 
    ```bash
    docker network inspect obl-staging_front --format '{{(index .IPAM.Config 0).Gateway}}'
@@ -141,6 +151,12 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
    BTCPay's API keys before going on. Send the hash, and only the hash, to whoever deploys
    `bananapayserver-staging`, who sets it as `RELAY_TOKEN_SHA256` while no build is running;
    see [`cloudflare.md`](cloudflare.md). The token stays in `.env` on this machine.
+
+   If setup stops partway, after it made BTCPay's admin, it can't run again: the admin exists,
+   and its password went with the run. Start BTCPay over, keeping the chain and LND, with
+   `docker compose -p obl-staging rm -sf btcpay nbxplorer postgres`, then
+   `docker volume rm obl-staging_btcpay obl-staging_nbxplorer obl-staging_postgres`, then
+   step 4's `./start.sh` and `./setup.sh` again.
 
    LND's log should hold no macaroon. This should print `0`; anything else means a macaroon
    has been written to the log, and LND's volume has to be reset before going on:
@@ -202,6 +218,11 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
   faucet, LND is offline. Restart it with `docker compose -p obl-staging restart lnd`: the
   channels stay open, and new invoices fail for about a minute. LND may come back on the
   faucet's regular address; reconnect to the onion one, as in step 9, if it does.
+- **Late payments:** an on-chain payment made after its invoice expired still counts, once
+  it settles. BTCPay tells the relay through the webhook's `InvoiceReceivedPayment` and
+  `InvoicePaymentSettled` events, beside `InvoiceSettled`. A stack set up before late
+  payments counted has only `InvoiceSettled`; add the other two in the store's webhook, in
+  BTCPay's pages, or the relay finds a late payment only when it restarts.
 - **Between tests:** `docker compose -p obl-staging stop`, which frees the memory and keeps the
   chain, so the next test doesn't wait for a sync.
 - **Start again,** after a stop, a crash or a reboot: `./start.sh`, which puts the firewall's

@@ -25,7 +25,7 @@ regtest.
 |---|---|---|
 | `MAX_SATS` | limit, required | The largest donation the Worker accepts, in sats |
 | `MIN_SATS` | optional | The smallest; 1 when unset, the smallest invoice there is |
-| `RATE_PER_IP` | limit, required | Per visitor and per minute: invoice requests and on-chain switches together, and separately each of notes and page sockets. An IPv6 visitor counts by its /64 |
+| `RATE_PER_IP` | limit, required | Per visitor and per minute: invoice requests and on-chain switches together, and separately each of notes and page sockets. An IPv6 visitor counts by its /64. Counts are kept for the minute under a 16-bit hash of the address, never the address, so a visitor shares theirs with the rare other in the same group |
 | `SOCKETS_PER_IP` | limit, required | Page sockets one visitor may hold open at once. An IPv6 visitor counts by its /48. Visitors are counted in 65,536 groups by a hash of the address, so a visitor shares the limit with the few others in their group, and no address is ever kept |
 | `RATE_GLOBAL` | limit, required | Invoice requests and on-chain switches per minute, for all visitors together. Notes and page sockets don't count, so a crowd of page loads can't close donations |
 | `RELAY_TOKEN_SHA256` | secret | The SHA-256, in hex, of the relay's token |
@@ -41,14 +41,14 @@ which signs donors in and checks origins; see
 
 ### Deploying
 
-Into the account OBL's Workers use. Staging deploys through a manually dispatched GitHub Action,
-from the selected branch ([decision 0018](decisions/0018-staging-github-action.md));
-production deploys by hand, and only from `main`. [`cloudflare.md`](cloudflare.md) has the steps
-for both environments, and for OBL's side of the binding. A setting that isn't in the config
-file, such as `PILE_START`, is set with `wrangler secret put`: a deploy removes plain variables
-set in the dashboard. The Worker's own log lines, such as the price service's failures, can be read in
-Cloudflare's dashboard. Cloudflare's invocation logs are off, because they would keep each
-request's headers, and so visitors' addresses and the relay's, for days.
+Into the account OBL's Workers use. Staging deploys through a manually dispatched GitHub
+Action, from the selected branch ([decision 0018](decisions/0018-staging-github-action.md));
+production deploys by hand, and only from `main`. [`cloudflare.md`](cloudflare.md) has the
+steps for both environments, and for OBL's side of the binding. A setting that isn't in the
+config file, such as `PILE_START`, is set with `wrangler secret put`: a deploy removes plain
+variables set in the dashboard. The Worker's own log lines, such as the price service's
+failures, can be read in Cloudflare's dashboard. Cloudflare's invocation logs are off, because
+they would keep each request's headers, and so visitors' addresses and the relay's, for days.
 
 ## The relay
 
@@ -78,6 +78,8 @@ A token and the hash the Worker keeps can be made with:
 token=$(openssl rand -hex 32)
 printf %s "$token" | shasum -a 256
 ```
+
+It prints the hash, then `-`; the hash is the first field.
 
 The relay keeps the token; the Worker keeps only the hash.
 
