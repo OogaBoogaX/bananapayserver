@@ -210,6 +210,27 @@ test("an invoice paid in full after it expired counts, once BTCPay settles the p
   assert.deepEqual(other.line.sent, [], "paid in part isn't paid");
 });
 
+test("a webhook's check that fails on BTCPay's side is tried again by the sweep", async () => {
+  for (const failing of ["invoice", "paymentMethods"]) {
+    let down = true;
+    const { relay, line, btcpay } = setup();
+    const real = btcpay[failing];
+    btcpay[failing] = async (id) => {
+      if (down) throw Object.assign(new Error(`BTCPay answered 503 to ${failing}`), { status: 503 });
+      return real(id);
+    };
+    // Expired, so off the sweep's list, then paid late: the webhook is its only way back.
+    btcpay.invoices.set(INVOICE, { ...btcpay.invoices.get(INVOICE), status: "Expired", additionalStatus: "PaidLate" });
+    btcpay.payments = { "BTC-LN": [], "BTC-CHAIN": [{ status: "Settled" }] };
+    await relay.check(INVOICE);
+    await relay.check(INVOICE);
+    assert.deepEqual(line.sent, [], failing);
+    down = false;
+    await relay.sweep();
+    assert.deepEqual(line.sent, [{ type: "paid", invoice: INVOICE, sats: 1000, method: "onchain" }], failing);
+  }
+});
+
 test("after a restart the relay finds an invoice paid late too", async () => {
   const { relay, btcpay } = setup();
   btcpay.invoices.set(INVOICE, { ...btcpay.invoices.get(INVOICE), status: "Expired", additionalStatus: "PaidLate" });

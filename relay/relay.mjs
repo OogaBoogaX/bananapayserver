@@ -141,8 +141,11 @@ export class Relay {
       this.unacked.set(invoiceId, { sats, method });
       this.line.send({ type: "paid", invoice: invoiceId, sats, method });
     } catch (error) {
-      // An invoice BTCPay no longer knows will never settle.
+      // An invoice BTCPay no longer knows will never settle. Any other failure leaves it for the
+      // sweep to try again. That matters for an invoice paid after it expired: it had left the
+      // list, and the webhook that failed here was its only way back.
       if (error.status === 404) this.open.delete(invoiceId);
+      else if (!this.open.has(invoiceId)) this.open.set(invoiceId, null);
       this.log(`check: ${error.message}`);
     }
   }

@@ -109,6 +109,7 @@ export class DonationsObject {
     this.tallyFigures = null;
     this.tallyAsked = 0;
     this.tallyShown = 0;
+    this.rateSending = null;
     this.refreshing = null;
   }
 
@@ -528,34 +529,33 @@ export class DonationsObject {
   }
 
   markRateSent(rate) {
-    this.setSentRate(rateKey(rate));
-  }
-
-  setSentRate(key) {
-    if (key === null) return void this.sql.exec("DELETE FROM tally_rate");
-    this.sql.exec("INSERT INTO tally_rate (id, rate) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET rate = excluded.rate", key);
+    this.sql.exec(
+      "INSERT INTO tally_rate (id, rate) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET rate = excluded.rate",
+      rateKey(rate),
+    );
   }
 
   // Every page gets the tally: after a donation, with its figures read again; after a new
-  // price, only when the rate changed, so pages never get the same tally twice. True when it
-  // went out.
+  // price, only when the rate changed, so pages never get the same tally twice.
   async pushTally({ refresh = false } = {}) {
     const tally = await this.tally({ refresh });
-    if (!tally) return false;
+    if (!tally) return;
     this.markRateSent(tally.rate);
     this.broadcast(tally);
-    return true;
   }
 
-  // Marked as sent before anything waits, so lookups that finish together send it once.
+  // The rate in storage is the one the pages last got, and only a tally that went out changes
+  // it, so one that couldn't be read is tried again. The rate on its way is noted in memory
+  // before anything waits, so lookups that finish together send it once.
   async pushRateIfChanged() {
-    const before = this.sentRate();
-    const rate = this.currentRate();
-    if (rateKey(rate) === before) return;
-    this.markRateSent(rate);
-    // If the tally couldn't be read, nothing went out: the pages still have the rate before,
-    // and the next check has to send it.
-    if (!(await this.pushTally()) && this.sentRate() === rateKey(rate)) this.setSentRate(before);
+    const key = rateKey(this.currentRate());
+    if (key === this.sentRate() || key === this.rateSending) return;
+    this.rateSending = key;
+    try {
+      await this.pushTally();
+    } finally {
+      if (this.rateSending === key) this.rateSending = null;
+    }
   }
 
   // A price older than five minutes is asked for again, sharing a lookup already on its way
