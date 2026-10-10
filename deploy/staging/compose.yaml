@@ -3,7 +3,7 @@
 # node that holds real funds, so it is fenced off from everything on that machine. See
 # docs/staging.md and decision 0016.
 #
-#   sudo ./firewall.sh && docker compose -p obl-staging up -d
+#   ./start.sh
 #
 # Nothing here publishes a port. Only the Tor container reaches the internet: bitcoind and LND
 # reach signet through it, and the relay reaches bananapayserver-staging through it. Every
@@ -17,6 +17,11 @@ x-service: &service
   restart: "no"
   security_opt: ["no-new-privileges:true"]
   cap_drop: [ALL]
+  # No IPv6 inside any container. firewall.sh fences IPv4 only, and older Docker Engines give
+  # every container a link-local IPv6 address, which can reach this machine's own services.
+  sysctls:
+    net.ipv6.conf.all.disable_ipv6: 1
+    net.ipv6.conf.default.disable_ipv6: 1
   logging:
     driver: json-file
     options: { max-size: 10m, max-file: "3" }
@@ -228,13 +233,16 @@ networks:
   # bitcoind, NBXplorer, Postgres, LND, BTCPay and Tor. No way out.
   backend:
     internal: true
+    enable_ipv6: false
     ipam: { config: [{ subnet: "${BACKEND_SUBNET:?}" }] }
   # BTCPay, the relay and Tor: all the relay can reach. No way out.
   front:
     internal: true
+    enable_ipv6: false
     ipam: { config: [{ subnet: "${FRONT_SUBNET:?}" }] }
   # Tor alone, to the internet. firewall.sh keeps it off this machine and its LAN.
   outside:
+    enable_ipv6: false
     ipam: { config: [{ subnet: "${OUTSIDE_SUBNET:?}" }] }
 
 volumes:

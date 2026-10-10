@@ -20,13 +20,16 @@ echo "Waiting for LND to catch up with the chain..."
 until lncli getinfo 2>/dev/null | grep -q '"synced_to_chain": *true'; do sleep 15; done
 
 # BTCPay may create and read invoices, and read the node's basic info. Nothing else.
-macaroon="$(lncli bakemacaroon invoices:read invoices:write info:read | tr -d '\r\n')"
+# It goes to setup.mjs through the environment, since a command line is readable by every user
+# on the machine.
+MACAROON="$(lncli bakemacaroon invoices:read invoices:write info:read | tr -d '\r\n')"
+export MACAROON
 
 umask 077
 out="$(mktemp)"
 trap 'rm -f "$out"' EXIT
 compose exec -T lnd cat /data/tls.cert |
-  compose run --rm --no-deps -T -e MACAROON="$macaroon" -v "$PWD/setup.mjs:/setup.mjs:ro" relay node /setup.mjs >"$out"
+  compose run --rm --no-deps -T -e MACAROON -v "$PWD/setup.mjs:/setup.mjs:ro" relay node /setup.mjs >"$out"
 
 set_env() {
   if grep -q "^$1=" .env; then
@@ -46,4 +49,4 @@ echo
 echo "Set up. Give this to whoever deploys bananapayserver-staging, as RELAY_TOKEN_SHA256:"
 grep '^RELAY_TOKEN_SHA256=' "$out" | cut -d= -f2-
 echo
-echo "Once it's set, start the relay: docker compose -p obl-staging up -d relay"
+echo "Once it's set, start the relay: ./start.sh relay"
