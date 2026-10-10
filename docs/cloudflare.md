@@ -170,8 +170,8 @@ Only what has passed staging, and only from `main`; see
    [decision 0019](decisions/0019-production-relay-address.md).
 2. **Workers Paid** on the account.
 3. **bananapayserver's side,** the staging steps with `production` in place of `staging`,
-   except step 8: production isn't connected to the repository. It has its own secrets: production limits and a separate relay token. Nothing from staging is
-   reused.
+   except step 8: production isn't connected to the repository. It has its own secrets:
+   production limits and a separate relay token. Nothing from staging is reused.
 4. **OBL's side,** the binding to `bananapayserver-production` in OBL's production config, and
    OBL's production deploy, which is run by hand. That deploy is the launch.
 
