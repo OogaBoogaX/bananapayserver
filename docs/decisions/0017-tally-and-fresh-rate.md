@@ -1,7 +1,8 @@
 # 0017. The board's tally, and a fresh rate while pages are open
 
-**Status:** proposed, 2026-10-08. Adds to [0013](0013-price-from-2140data.md): besides each
-invoice, the object asks for bitcoin's price while pages are open.
+**Status:** accepted, 2026-10-09 (proposed 2026-10-08). Adds to
+[0013](0013-price-from-2140data.md): besides each invoice, the object asks for bitcoin's price
+while pages are open.
 
 ## Decision
 

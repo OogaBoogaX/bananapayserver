@@ -1,6 +1,6 @@
 # 0009. Plain JavaScript, no dependencies
 
-**Status:** proposed, 2026-10-01
+**Status:** accepted, 2026-10-09 (proposed 2026-10-01)
 
 ## Decision
 
