@@ -66,9 +66,8 @@ test("the Worker's caps and rate limits have no defaults, and a bad one closes d
 });
 
 test("the Worker's other settings", () => {
-  assert.deepEqual(readSettings({ NETWORK: "signet", ALLOWED_ORIGINS: "https://a.example, https://b.example" }), {
+  assert.deepEqual(readSettings({ NETWORK: "signet" }), {
     network: "signet",
-    origins: ["https://a.example", "https://b.example"],
     invoiceTimeoutMs: 10_000,
     pendingDays: 7,
     pileStart: 1_000,

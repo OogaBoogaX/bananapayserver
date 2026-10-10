@@ -12,7 +12,9 @@ function loadObl() {
   const source = readFileSync(new URL("fixtures/obl-donations.js", import.meta.url), "utf8");
   const scheduled = [];
   const window = { setTimeout: (fn) => scheduled.push(fn), clearTimeout: () => {} };
-  vm.runInNewContext(source, { window, crypto: globalThis.crypto, URL });
+  // OBL's file reads the page's address as it loads, to see whether it may use another API.
+  const location = { search: "", hostname: "oogabooga.land" };
+  vm.runInNewContext(source, { window, location, crypto: globalThis.crypto, URL, URLSearchParams });
   return { donations: window.BL.donations, scheduled };
 }
 

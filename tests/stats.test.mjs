@@ -7,15 +7,14 @@ import { BOARD_SIZE, DonationsObject, PRICE_RETRY_MS } from "../worker/object.mj
 import { PRICE_SOCKET, PRICE_URL } from "../worker/price.mjs";
 import { fakeCtx, fakeD1, fakePlatform } from "./helpers/cloudflare.mjs";
 import { bolt11For, INVOICE } from "./helpers/values.mjs";
-import { EXPIRES, sessionCookie, world } from "./helpers/world.mjs";
+import { donor, EXPIRES, world } from "./helpers/world.mjs";
 
 const HOUR = 3_600_000;
 const typed = (page, type) => page.messages().filter((m) => m.type === type);
 
 // A paid donation of some sats, signed in as login unless login is null.
 async function donate(w, relay, sats, { login = null, id = 1, invoice = `Inv${String(w.platform.id()).slice(-8)}` } = {}) {
-  const cookie = login ? await sessionCookie(w, login, id) : undefined;
-  await w.invoice(relay, { sats }, () => ({ id: invoice, bolt11: bolt11For(sats), expires: EXPIRES }), { cookie });
+  await w.invoice(relay, { sats }, () => ({ id: invoice, bolt11: bolt11For(sats), expires: EXPIRES }), { donor: login ? donor(login, id) : null });
   await w.relaySays(relay, { type: "paid", invoice, sats, method: "lightning" });
   return invoice;
 }

@@ -1,118 +1,114 @@
-// The Worker: the front door. It checks every browser request and the relay's credential, runs
-// GitHub sign-in, and passes what survives to the Durable Object. It never calls the relay; the
-// relay dials in.
+// The Worker: the front door. Its public address takes only the relay's line, and checks the
+// relay's credential. Pages reach it through OBL's Worker, over a service binding to the PageApi
+// entrypoint, which the internet can't reach: OBL's Worker signs the donor in and passes who
+// they are and where the call came from beside the page's own request. This checks each call and
+// passes what survives to the Durable Object. It never calls the relay; the relay dials in.
 
 import { MESSAGE_MAX, sanitize } from "../shared/donation.mjs";
-import { finishSignIn, signedIn, signInConfigured, signOutCookie, startSignIn } from "./auth.mjs";
 import { readLimits, readSettings } from "./config.mjs";
+import { relayAuthorized } from "./relay-token.mjs";
 
 const MAX_BODY = 1024;
 const INVOICE_ID = /^[A-Za-z0-9]{8,64}$/;
 const REQUEST = /^[0-9a-f]{32}$/;
+const VISITOR_MAX = 64;
 
-// platform: { fetch, now, id }, so the tests can run this without the runtime.
-export async function handle(request, env, platform) {
+// A GitHub username: letters, digits and hyphens, at most 39 characters. GitHub's rule today
+// also forbids a hyphen at the end or two in a row, but older accounts still have them.
+export const LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+
+// The public address: the relay's line and nothing else.
+export async function handle(request, env) {
   const url = new URL(request.url);
-  const route = `${request.method} ${url.pathname}`;
-  const settings = readSettings(env);
-
-  // The relay isn't a browser, and sign-in is a page the browser navigates to, so none of these
-  // is a cross-origin call.
-  if (route === "GET /relay") return relay(request, env);
-  if (route === "GET /auth/github") return startSignIn(request, env, platform, settings.origins);
-  if (route === "GET /auth/github/callback") return finishSignIn(request, env, platform);
-
-  const cors = corsHeaders(request, settings.origins);
-  if (!cors) return reply({ error: "origin" }, 403);
-  if (request.method === "OPTIONS") return preflight(cors);
-
-  switch (route) {
-    case "POST /donations/invoice":
-      return invoice(request, env, platform, settings, cors);
-    case "POST /donations/note":
-      return note(request, env, cors);
-    case "POST /donations/onchain":
-      return onchain(request, env, cors);
-    case "GET /donations/socket":
-      return socket(request, env, url);
-    case "GET /auth/me":
-      return me(request, env, platform, cors);
-    case "POST /auth/signout":
-      return new Response(null, { status: 204, headers: { ...cors, "Set-Cookie": signOutCookie() } });
-  }
-  return reply({ error: "not found" }, 404, cors);
+  if (request.method === "GET" && url.pathname === "/relay") return relay(request, env);
+  return reply({ error: "not found" }, 404);
 }
 
-// Who gave it comes from GitHub sign-in, never from the request body. A signed-in donor can
+// The calls OBL's Worker passes on, as the PageApi entrypoint in index.mjs exposes them. Each
+// takes a request carrying only the page's JSON body and its type, never the browser's own
+// request. `donor` is the signed-in donor's GitHub `{ id, login }`, or null, and `visitor` is
+// the address the call came from, for rate limits. See docs/protocol.md.
+export const pageApi = (env) => ({
+  invoice: (request, donor, visitor) => invoice(request, env, donor, visitorOf(visitor)),
+  note: (request, visitor) => note(request, env, visitorOf(visitor)),
+  onchain: (request, visitor) => onchain(request, env, visitorOf(visitor)),
+  // The socket's upgrade, with the visitor's address in X-Client.
+  fetch: (request) => socket(request, env),
+});
+
+// Who gave it comes from OBL's sign-in, never from the request body. A signed-in donor can
 // still give anonymously.
-async function invoice(request, env, platform, settings, cors) {
+async function invoice(request, env, donor, visitor) {
+  if (!isDonor(donor) || !visitor) return reply({ error: "invalid" }, 400);
   const body = await readBody(request, ["sats", "message", "anon"], ["sats"]);
-  if (body.error) return reply({ error: body.error }, body.status, cors);
+  if (body.error) return reply({ error: body.error }, body.status);
   const limits = readLimits(env);
-  if (!limits || !settings.network) return reply({ error: "closed" }, 503, cors);
+  if (!limits || !readSettings(env).network) return reply({ error: "closed" }, 503);
   const { sats, anon = false } = body.value;
-  if (!Number.isSafeInteger(sats) || typeof anon !== "boolean") return reply({ error: "invalid" }, 400, cors);
-  if (sats < limits.minSats || sats > limits.maxSats) return reply({ error: "amount" }, 400, cors);
+  if (!Number.isSafeInteger(sats) || typeof anon !== "boolean") return reply({ error: "invalid" }, 400);
+  if (sats < limits.minSats || sats > limits.maxSats) return reply({ error: "amount" }, 400);
   const message = cleanMessage(body.value);
-  if (message === null) return reply({ error: "invalid" }, 400, cors);
-  const github = anon ? null : await signedIn(request, env, platform);
-  return toObject(env, "/invoice", { sats, message, github, client: clientOf(request) }, cors);
+  if (message === null) return reply({ error: "invalid" }, 400);
+  const github = anon || donor === null ? null : { id: donor.id, login: donor.login };
+  return toObject(env, "/invoice", { sats, message, github, client: visitor });
 }
 
-async function note(request, env, cors) {
+async function note(request, env, visitor) {
+  if (!visitor) return reply({ error: "invalid" }, 400);
   const body = await readBody(request, ["request", "message"], ["request"]);
-  if (body.error) return reply({ error: body.error }, body.status, cors);
+  if (body.error) return reply({ error: body.error }, body.status);
   const message = cleanMessage(body.value);
-  if (!REQUEST.test(String(body.value.request)) || message === null) return reply({ error: "invalid" }, 400, cors);
-  return toObject(env, "/note", { request: body.value.request, message, client: clientOf(request) }, cors);
+  if (!REQUEST.test(String(body.value.request)) || message === null) return reply({ error: "invalid" }, 400);
+  return toObject(env, "/note", { request: body.value.request, message, client: visitor });
 }
 
-// The page asks who it's donating as.
-async function me(request, env, platform, cors) {
-  if (!signInConfigured(env)) return reply({ error: "sign-in unavailable" }, 503, cors);
-  const user = await signedIn(request, env, platform);
-  return user ? reply({ login: user.login }, 200, cors) : reply({ error: "signed out" }, 401, cors);
-}
-
-async function onchain(request, env, cors) {
+async function onchain(request, env, visitor) {
+  if (!visitor) return reply({ error: "invalid" }, 400);
   const body = await readBody(request, ["request"], ["request"]);
-  if (body.error) return reply({ error: body.error }, body.status, cors);
-  if (!REQUEST.test(String(body.value.request))) return reply({ error: "invalid" }, 400, cors);
-  return toObject(env, "/onchain", { request: body.value.request, client: clientOf(request) }, cors);
+  if (body.error) return reply({ error: body.error }, body.status);
+  if (!REQUEST.test(String(body.value.request))) return reply({ error: "invalid" }, 400);
+  return toObject(env, "/onchain", { request: body.value.request, client: visitor });
 }
 
-function socket(request, env, url) {
+function socket(request, env) {
+  const url = new URL(request.url);
+  if (url.pathname !== "/donations/socket") return reply({ error: "not found" }, 404);
   if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return reply({ error: "upgrade" }, 426);
   const after = url.searchParams.get("after");
-  if (after !== null && !INVOICE_ID.test(after)) return reply({ error: "invalid" }, 400);
+  const visitor = visitorOf(request.headers.get("X-Client"));
+  if ((after !== null && !INVOICE_ID.test(after)) || !visitor) return reply({ error: "invalid" }, 400);
   const target = new URL("https://object/page");
   if (after) target.searchParams.set("after", after);
-  return stub(env).fetch(target, { headers: forwarded(request) });
+  return stub(env).fetch(target, { headers: forwarded(request, visitor) });
 }
 
 async function relay(request, env) {
   if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return reply({ error: "upgrade" }, 426);
   if (!(await relayAuthorized(request, env))) return reply({ error: "unauthorized" }, 401);
-  return stub(env).fetch("https://object/relay", { headers: forwarded(request) });
+  // The object checks the token again, so it goes along.
+  const headers = forwarded(request, "");
+  headers.set("Authorization", request.headers.get("Authorization"));
+  return stub(env).fetch("https://object/relay", { headers });
 }
 
-// The relay presents a random token; the Worker holds only its SHA-256, as a secret.
-export async function relayAuthorized(request, env) {
-  const expected = String(env.RELAY_TOKEN_SHA256 ?? "").toLowerCase();
-  if (!/^[0-9a-f]{64}$/.test(expected)) return false;
-  const match = /^Bearer ([A-Za-z0-9_-]{32,128})$/.exec(request.headers.get("Authorization") ?? "");
-  if (!match) return false;
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(match[1]));
-  const actual = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-  let difference = 0;
-  for (let i = 0; i < expected.length; i++) difference |= expected.charCodeAt(i) ^ actual.charCodeAt(i);
-  return difference === 0;
-}
+// Nobody, or a GitHub account exactly as OBL's sign-in knows it: the numeric id, which survives
+// a rename, and the username.
+const isDonor = (donor) =>
+  donor === null ||
+  (donor !== undefined && typeof donor === "object" && !Array.isArray(donor) &&
+    Object.keys(donor).length === 2 &&
+    Number.isSafeInteger(donor.id) && donor.id > 0 &&
+    typeof donor.login === "string" && LOGIN.test(donor.login));
+
+// The visitor's address goes to the object for rate limiting only. It's never stored. A call
+// without one is refused, rather than counted with every other such call.
+const visitorOf = (visitor) => (typeof visitor === "string" && visitor.length > 0 ? visitor.slice(0, VISITOR_MAX) : null);
 
 // The message, cleaned with OBL's rules, or null when it isn't text.
 const cleanMessage = ({ message = "" }) => (typeof message === "string" ? sanitize(message, MESSAGE_MAX) : null);
 
 async function readBody(request, allowed, required) {
+  if (!(request instanceof Request)) return { error: "invalid", status: 400 };
   if (!/^application\/json\b/i.test(request.headers.get("Content-Type") ?? "")) {
     return { error: "invalid", status: 415 };
   }
@@ -157,51 +153,27 @@ async function readCapped(request, max) {
   return bytes;
 }
 
-// The visitor's address goes to the object for rate limiting only. It's never stored.
-const clientOf = (request) => request.headers.get("CF-Connecting-IP") ?? "";
-
-function forwarded(request) {
+function forwarded(request, visitor) {
   const headers = new Headers();
   for (const name of ["Upgrade", "Connection", "Sec-WebSocket-Key", "Sec-WebSocket-Version"]) {
     const value = request.headers.get(name);
     if (value !== null) headers.set(name, value);
   }
-  headers.set("X-Client", clientOf(request));
+  headers.set("X-Client", visitor);
   return headers;
 }
 
-async function toObject(env, path, body, cors) {
+async function toObject(env, path, body) {
   const response = await stub(env).fetch(`https://object${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  return new Response(response.body, { status: response.status, headers: { ...JSON_HEADERS, ...cors } });
+  return new Response(response.body, { status: response.status, headers: JSON_HEADERS });
 }
 
 const stub = (env) => env.DONATIONS.get(env.DONATIONS.idFromName("donations"));
 
-// Credentials are allowed so the page can send its sign-in cookie, which is why the origin has
-// to be named exactly and never a wildcard.
-function corsHeaders(request, origins) {
-  const origin = request.headers.get("Origin");
-  if (origin === null) return {};
-  return origins.includes(origin)
-    ? { "Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true", Vary: "Origin" }
-    : null;
-}
-
-const preflight = (cors) => new Response(null, {
-  status: 204,
-  headers: {
-    ...cors,
-    "Access-Control-Allow-Methods": "POST, GET",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Access-Control-Max-Age": "600",
-  },
-});
-
 const JSON_HEADERS = { "Content-Type": "application/json", "Cache-Control": "no-store" };
 
-const reply = (body, status, cors = {}) =>
-  new Response(JSON.stringify(body), { status, headers: { ...JSON_HEADERS, ...cors } });
+const reply = (body, status) => new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });

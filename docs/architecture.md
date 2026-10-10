@@ -18,14 +18,14 @@ Permanent, and not a matter of configuration:
 ## Where each piece runs
 
 ```text
-┌─ node's machine ──────────────────┐     ┌─ Cloudflare ───────────────┐     ┌─ browser ──┐
-│                                   │     │                            │     │            │
-│  LND ◄── BTCPay ◄──► relay ───────┼────►│  Worker ◄──────────────────┼─────┤  OBL page  │
-│                                   │     │   ▲   │                    │     │            │
-│  Foundry exporter ────────────────┼─────┼───┘   ▼                    │     │            │
-│                                   │     │  Durable Object ──► D1     │     │            │
-│                                   │     │                            │     │            │
-└───────────────────────────────────┘     └────────────────────────────┘     └────────────┘
+┌─ node's machine ─────────────┐     ┌─ Cloudflare ─────────────────────────┐     ┌─ browser ──┐
+│                              │     │                                      │     │            │
+│  LND ◄── BTCPay ◄──► relay ──┼────►│  Worker ◄──binding── OBL's Worker ◄──┼─────┤  OBL page  │
+│                              │     │   ▲   │                              │     │            │
+│  Foundry exporter ───────────┼─────┼───┘   ▼                              │     │            │
+│                              │     │  Durable Object ──► D1               │     │            │
+│                              │     │                                      │     │            │
+└──────────────────────────────┘     └──────────────────────────────────────┘     └────────────┘
 ```
 
 Every arrow that crosses a box points the way its connection is opened, and none points into
@@ -34,16 +34,20 @@ the node's machine.
 - **On the node's machine:** LND and BTCPay Server, and the relay, a small program that runs
   all the time in its own container and has no access to LND's files. Foundry's exporter runs
   there too, for an operator who publishes a feed.
-- **On Cloudflare:** a Worker, the front door, which checks browser requests and checks the
-  relay's credential when its line opens. One Durable Object, which holds the relay's line and
-  every page's socket, and stores pending requests. D1, which keeps the donation records and
-  the feed history.
-- **In the browser:** OBL's page.
+- **On Cloudflare:** a Worker, the front door. Its public address takes the relay's line, and
+  checks the relay's credential when the line opens. Pages never call it directly: OBL's own
+  Worker serves the page, signs donors in with GitHub, and passes their donation calls on over
+  a service binding, which the internet can't reach. One Durable Object, which holds the
+  relay's line and every page's socket, and stores pending requests. D1, which keeps the
+  donation records and the feed history. See
+  [decision 0014](decisions/0014-pages-through-obl.md).
+- **In the browser:** OBL's page, which calls only its own origin.
 
 | Part | Holds | Responsibility |
 |---|---|---|
 | **Relay** | the BTCPay key, the webhook secret, its credential for the line | Keeps the line open, asks BTCPay for invoices, takes BTCPay's webhook, reports payments |
-| **Worker** | what it needs to check credentials; the GitHub app's secret and the session key | The front door: checks browser requests and the relay's credential, runs GitHub sign-in, and takes the exporters' batches |
+| **Worker** | the SHA-256 of the relay's credential | The front door: checks the relay's credential and every call OBL's Worker passes on, and takes the exporters' batches |
+| **OBL's Worker** (OBL's, not this repository's) | its GitHub app's secret and its sessions | Serves the page, signs donors in, and passes donation calls on with who is giving and from where |
 | **Durable Object** | pending requests, until paid or expired; bitcoin's last price; the pile | Holds the relay's line and every page's socket, matches payments to requests, pushes donations, the pile and the leaderboard |
 | **D1** | donation records with their banana counts, each signed-in donor's total, feed history | Keeps what the object replays when a page reconnects; a feed, not a ledger |
 
@@ -65,8 +69,8 @@ Nothing in that table can spend from a node, and nothing in it can reach one.
   [`docs/lightning-factory.md`](https://github.com/OogaBoogaX/lightningfoundry/blob/main/docs/lightning-factory.md#never-shown).
 - **Never log or return a node's address.** The page only ever gets the BOLT11 invoice and, if
   the donor switches, an on-chain address. It never gets a BTCPay link.
-- **Checks happen at the boundaries:** browser input at the Worker, the relay's messages at the
-  Durable Object, and BTCPay's webhook at the relay.
+- **Checks happen at the boundaries:** the calls OBL's Worker passes on, at the Worker; the
+  relay's messages at the Durable Object; and BTCPay's webhook at the relay.
 
 ## Donors don't wait
 
@@ -75,6 +79,8 @@ donor at the cave shouldn't be left waiting, for the QR or for the thanks after 
 Several choices in the design are there for it:
 
 - The relay's line is open before anyone asks, so no request waits for a connection.
+- The page's calls reach the Worker over a service binding, which adds no wait: Cloudflare runs
+  the two Workers on the same thread.
 - The page can ask for an invoice as soon as the donor picks an amount; the message follows
   before the QR shows.
 - Bitcoin's price is looked up while the relay makes the invoice, so pricing the bananas adds
@@ -97,11 +103,13 @@ pull against each other, which is why its trial measures invoice times; see
    The Worker checks the relay's credential and hands the socket to the Durable Object, which
    accepts it with the Hibernation API. The relay sends the keepalives, and redials whenever
    the line drops.
-1. **Page → Worker.** An HTTPS request with the amount and the message, carrying the donor's
-   sign-in cookie if they signed in. To save time, the page can ask as soon as the donor picks
-   an amount; the message then follows in a second request before the QR shows.
-2. **Worker.** Checks the amount, sanitizes the message with OBL's rules, reads who gave it
-   from the sign-in, and calls the Durable Object.
+1. **Page → OBL's Worker → Worker.** An HTTPS request to the page's own origin, with the
+   amount and the message. OBL's Worker reads who is giving from its own GitHub sign-in and
+   passes the call on over the service binding, with the donor's GitHub id and username and
+   the visitor's address. To save time, the page can ask as soon as the donor picks an amount;
+   the message then follows in a second request before the QR shows.
+2. **Worker.** Checks the call, the donor's shape and the amount, sanitizes the message with
+   OBL's rules, and calls the Durable Object.
 3. **Durable Object.** Applies the rate limits, per visitor and overall, because it is the one
    place every request reaches. Page sockets have a budget of their own, so a crowd of page
    loads can't close donations. A visitor's address stays in memory for a minute at most and
@@ -112,9 +120,9 @@ pull against each other, which is why its trial measures invoice times; see
 4. **Relay.** Checks the amount against its own cap, asks BTCPay on the machine for the
    invoice, and sends `{ request id, invoice }` up the line. BTCPay makes the Lightning invoice
    first, and an on-chain address only if the donor switches to on-chain.
-5. **Durable Object → Worker → page.** The invoice comes back as the reply, with the rate and
-   the banana counts, and the page shows the QR. If the relay isn't connected or doesn't answer
-   in time, the reply says donations are closed.
+5. **Durable Object → Worker → OBL's Worker → page.** The invoice comes back as the reply, with
+   the rate and the banana counts, and the page shows the QR. If the relay isn't connected or
+   doesn't answer in time, the reply says donations are closed.
 
 Who gave it and the message never reach the node. The relay and BTCPay see a request id and
 an amount.
@@ -146,17 +154,20 @@ The event a page receives is exactly OBL's donation contract,
 `{ id, sats, handle, message, at }`, from
 [`src/js/donations.js`](https://github.com/OogaBoogaX/oogaboogaland/blob/rock/src/js/donations.js).
 OBL's scenes are built on that shape, so it is copied here, and a contract test keeps the copy
-in step; see [decision 0001](decisions/0001-separate-repository.md). OBL's content policy
-already allows `connect-src https: wss:`, so the page can reach the Worker and its socket as it
-stands.
+in step; see [decision 0001](decisions/0001-separate-repository.md). The page's socket goes to
+its own origin, and OBL's Worker passes it on over the binding, so OBL's content policy
+(`connect-src https: wss:`) needs no change.
 
 ## Who gave it, and what it counts for
 
-**Who gave it** comes from GitHub sign-in through the Worker, never from what the page sends.
-The Worker reads the donor's username and numeric id from GitHub, drops GitHub's token, and
-keeps a signed cookie on the API's domain for a week, one that only the API's own host can set.
-A signed-in donor gives as their GitHub username unless they choose to give anonymously, and
-everyone else gives anonymously. See [decision 0010](decisions/0010-handles-from-github.md).
+**Who gave it** comes from OBL's GitHub sign-in, never from what the page sends. OBL's Worker
+passes the donor's numeric GitHub id, which survives a rename, and their username beside each
+invoice call, and the Worker checks both. A signed-in donor gives as their GitHub username
+unless they choose to give anonymously, and everyone else gives anonymously. Donations are the
+record, so they stay when a donor deletes their OBL account; whether the leaderboard shows an
+account that is gone is the page's choice. See
+[decision 0010](decisions/0010-handles-from-github.md) and
+[decision 0014](decisions/0014-pages-through-obl.md).
 
 **What it counts for** is set when the invoice is made: one banana is a dollar's worth of
 bitcoin. For each invoice, the object asks 2140data's price service for bitcoin's price: its
@@ -235,11 +246,12 @@ In general terms. The specifics of any one machine stay out of this repository.
 |---|---|
 | The relay, or its line | Donations close, and the page says so. Payment notices wait in the relay until the line is back. |
 | BTCPay | No new invoices, so donations close. |
+| OBL's Worker | The page can't ask for invoices or show donations. Nothing recorded here is lost. |
 | The Worker or the Durable Object | Donations close and pages stop updating. Invoices already shown still pay, and the relay keeps their notices until the object acknowledges them. |
 | D1 | Donations can't be recorded, so the object doesn't acknowledge them, and the relay keeps them. |
 | A node's exporter | That node's feed goes quiet, and the Factory shows "no signal". |
 | The price service | Donations go on at the last price it gave, marked stale so the page shows an alert, and record when it was fetched. With no price ever, they count no bananas until worked out again. |
-| GitHub | Nobody new can sign in. Donors can still give anonymously. |
+| GitHub | Nobody new can sign in on OBL. Donors can still give anonymously. |
 | bananapayserver entirely | LND and BTCPay carry on. The node keeps routing. |
 
 There is no failure in that table where this server takes a node down with it. The money is
@@ -296,6 +308,7 @@ request per visit, against 360 per visitor-hour for polling every 10 seconds.
 | [`relay/`](../relay/) | The relay and its container |
 | [`migrations/`](../migrations/) | D1's schema |
 | [`tests/`](../tests/) | Everything `node --test` runs, and the stand-ins for BTCPay and Cloudflare |
+| [`tools/stand-in/`](../tools/stand-in/) | A stand-in for OBL's page and Worker, for testing on one machine |
 
 The interfaces between them are in [`protocol.md`](protocol.md), and every setting is in
 [`configuration.md`](configuration.md).
@@ -317,12 +330,14 @@ The interfaces between them are in [`protocol.md`](protocol.md), and every setti
 
 Not settled yet. Each gets a decision record when it is.
 
-- **Where the API is served.** OBL is served by GitHub Pages, and its DNS isn't on Cloudflare
-  yet. The plan: move the zone to a Cloudflare account the team owns, with the registration
-  left where it is; keep the main domain on Pages; and serve the API on a subdomain such as
-  `api.oogabooga.land`.
-- **The Cloudflare account and the deploy rights.** They belong to the team, jointly, not to
-  one person. Which account, and who holds what, is still open.
+- **Where the production relay dials.** Staging's relay dials its Worker's `workers.dev`
+  address. Production's could dial a name on `oogabooga.land`, if that zone's Bot Fight Mode
+  is off: it applies to the whole zone, can't exempt a path, and would challenge the relay's
+  Tor connections. Otherwise production uses `workers.dev` too.
+- **The Cloudflare account and the deploy rights.** A service binding needs both Workers in
+  one account, so this Worker goes in the account OBL's Workers use. It should belong to the
+  team, jointly, with more than one admin. Whoever can deploy there can change this Worker,
+  and OBL's CI deploys with an account-wide token.
 - **How pages get node feeds.** Foundry's docs say pages poll once a minute. With the object's
   sockets, pushing them is cheap too.
 

@@ -1,6 +1,7 @@
 # 0010. Handles come from GitHub sign-in
 
-**Status:** accepted, 2026-10-01
+**Status:** accepted, 2026-10-01. Where sign-in runs is superseded by
+[0014](0014-pages-through-obl.md).
 
 ## Decision
 

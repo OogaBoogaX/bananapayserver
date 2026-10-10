@@ -7,9 +7,19 @@ committed. The few settings with defaults are not limits; their defaults are bel
 
 ## The Worker
 
-Set limits and the relay's token hash as secrets, so they stay out of `wrangler.jsonc`, for
-example `wrangler secret put MAX_SATS`. For local development, copy
-[`.dev.vars.example`](../.dev.vars.example) to `.dev.vars`.
+There are two deployments, each its own Worker with its own Durable Object, D1 database and
+secrets: `bananapayserver-staging`, from
+[`wrangler.staging.jsonc`](../wrangler.staging.jsonc), and `bananapayserver-production`, from
+[`wrangler.production.jsonc`](../wrangler.production.jsonc).
+Each binds the Durable Object as `DONATIONS` and D1 as `DB`, whose schema is in
+[`migrations/`](../migrations/). Each file sets its own `NETWORK`, signet for staging and
+mainnet for production, so staging refuses mainnet invoices even if its relay is pointed at
+the wrong BTCPay.
+
+Set limits and the relay's token hash as secrets, so they stay out of the config files, for
+example `wrangler secret put MAX_SATS --config wrangler.staging.jsonc`. For local development,
+copy [`.dev.vars.example`](../.dev.vars.example) to `.dev.vars`, which also sets `NETWORK` to
+regtest.
 
 | Setting | Kind | Meaning |
 |---|---|---|
@@ -18,27 +28,23 @@ example `wrangler secret put MAX_SATS`. For local development, copy
 | `RATE_PER_IP` | limit, required | Per visitor and per minute: invoice requests and on-chain switches together, and separately each of notes and page sockets. An IPv6 visitor counts by its /64 |
 | `RATE_GLOBAL` | limit, required | Invoice requests and on-chain switches per minute, for all visitors together. Notes and page sockets don't count, so a crowd of page loads can't close donations |
 | `RELAY_TOKEN_SHA256` | secret | The SHA-256, in hex, of the relay's token |
-| `NETWORK` | variable | `mainnet`, `testnet`, `signet` or `regtest`; invoices and addresses for any other are refused |
-| `ALLOWED_ORIGINS` | variable | The origins a browser may call from, separated by commas |
+| `NETWORK` | variable | `mainnet`, `testnet`, `signet` or `regtest`; invoices and addresses for any other are refused. Set in each config file |
 | `INVOICE_TIMEOUT_MS` | optional | How long a page waits for the relay before hearing donations are closed; 10,000 when unset |
 | `PENDING_DAYS` | optional | How long a request is kept while unpaid; 7 when unset |
-| `GITHUB_CLIENT_ID` | variable | The GitHub OAuth app that signs donors in. Its callback is `https://<api host>/auth/github/callback` |
-| `GITHUB_CLIENT_SECRET` | secret | That app's client secret |
-| `SESSION_KEY` | secret | At least 32 random characters, which sign the sign-in cookie. Changing it signs everyone out |
 | `PILE_START` | optional | Where the global pile starts, in bananas; 1,000 when unset, a placeholder for the team. It applies only when the pile is first made |
 | `PILE_EAT_PER_HOUR` | optional | How many bananas the Oogas eat an hour; 60 when unset, a placeholder for the team |
 
-Without the three sign-in settings, sign-in is off and every donation is anonymous. With
-them, the API has to be served from the same site as the page, such as a subdomain of
-`oogabooga.land`; otherwise browsers won't send the sign-in cookie. A sign-in lasts a week.
-An org owner registers the GitHub OAuth app under OogaBoogaX.
+There are no sign-in or origin settings. Pages reach the Worker only through OBL's Worker,
+which signs donors in and checks origins; see
+[decision 0014](decisions/0014-pages-through-obl.md).
 
-**Apply D1's migrations before deploying the Worker that needs them.** The Worker records
-each donation with the columns the latest migration adds; without them it can't, and payments
-pile up unacknowledged at the relay until the migration is applied.
+### Deploying
 
-[`wrangler.jsonc`](../wrangler.jsonc) binds the Durable Object as `DONATIONS` and D1 as `DB`,
-whose schema is in [`migrations/`](../migrations/).
+By hand, never from CI, into the account OBL's Workers use; production only from `main`.
+[`cloudflare.md`](cloudflare.md) has the steps for both environments, and for OBL's side of the
+binding. The Worker's own log lines, such as the price service's failures, can be read in
+Cloudflare's dashboard. Cloudflare's invocation logs are off, because they would keep each
+request's headers, and so visitors' addresses and the relay's, for days.
 
 ## The relay
 

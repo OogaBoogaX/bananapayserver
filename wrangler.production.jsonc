@@ -1,0 +1,34 @@
+// Production: bananapayserver-production, which OBL's production Worker calls over a service
+// binding. Limits and secrets are deliberately not here: set them in the deployment, never in
+// this file. See docs/configuration.md.
+//
+// Deploy by hand from main, with CLOUDFLARE_ACCOUNT_ID set; the account isn't named here.
+{
+	"name": "bananapayserver-production",
+	"main": "worker/index.mjs",
+	"compatibility_date": "2026-09-30",
+	// No public address yet: where the production relay dials is still open. Pages never call
+	// this Worker directly.
+	"workers_dev": false,
+	"preview_urls": false,
+	// The Worker's own log lines are kept, such as the price service's failures. Cloudflare's
+	// invocation logs are off: they would keep each request's headers, and so visitors'
+	// addresses and the relay's, for days.
+	"observability": { "enabled": true, "logs": { "invocation_logs": false } },
+	"durable_objects": {
+		"bindings": [{ "name": "DONATIONS", "class_name": "Donations" }]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Donations"] }],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "bananapayserver-production",
+			// Set when the database is created; an id isn't a secret.
+			"database_id": "REPLACE_WITH_D1_DATABASE_ID",
+			"migrations_dir": "migrations"
+		}
+	],
+	"vars": {
+		"NETWORK": "mainnet"
+	}
+}
