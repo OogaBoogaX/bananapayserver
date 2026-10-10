@@ -337,17 +337,16 @@ The interfaces between them are in [`protocol.md`](protocol.md), and every setti
 
 Not settled yet. Each gets a decision record when it is.
 
-- **Where the production relay dials.** Staging's relay dials its Worker's `workers.dev`
-  address. Production's could dial a name on `oogabooga.land`, if that zone's Bot Fight Mode
-  is off: it applies to the whole zone, can't exempt a path, and would challenge the relay's
-  Tor connections. Otherwise production uses `workers.dev` too.
-- **The Cloudflare account and the deploy rights.** A service binding needs both Workers in
-  one account, so this Worker goes in the account OBL's Workers use. It should belong to the
+- **The deploy rights.** Both Workers are in the account OBL's Workers use, and production's
+  relay dials its Worker's `workers.dev` address; see
+  [decision 0019](decisions/0019-production-relay-address.md). The account should belong to the
   team, jointly, with more than one admin. Whoever can deploy there can change this Worker,
   and OBL's CI deploys with an account-wide token. Staging's manual GitHub Action holds a
   deployment token too; [decision 0018](decisions/0018-staging-github-action.md) records its scope.
 - **How pages get node feeds.** Foundry's docs say pages poll once a minute. With the object's
   sockets, pushing them is cheap too.
 
-The toolchain was on this list until the code started; it is proposed in
-[decision 0009](decisions/0009-toolchain.md).
+The toolchain, where the production relay dials and the release process were on this list;
+see decisions [0009](decisions/0009-toolchain.md),
+[0019](decisions/0019-production-relay-address.md) and
+[0020](decisions/0020-staging-then-production.md).

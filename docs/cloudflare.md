@@ -162,14 +162,12 @@ repository.
 
 ## Production
 
-After staging passes, and from `main`:
+Only what has passed staging, and only from `main`; see
+[decision 0020](decisions/0020-staging-then-production.md).
 
-1. **Decide where the production relay connects.** Either the Worker's `workers.dev` address,
-   which means setting `workers_dev` to `true` in `wrangler.production.jsonc`, or a name on
-   `oogabooga.land`. A name there needs that zone's Bot Fight Mode off, because it applies to
-   the whole zone, can't exempt a path, and would challenge the relay's Tor connections. It
-   also needs a rule turning off Browser Integrity Check for that name, and no rule blocking
-   Tor, which Cloudflare labels as country `T1`.
+1. **The relay's address.** Production's relay dials the Worker's own `workers.dev` address,
+   which `wrangler.production.jsonc` turns on; see
+   [decision 0019](decisions/0019-production-relay-address.md).
 2. **Workers Paid** on the account.
 3. **bananapayserver's side,** the staging steps with `production` in place of `staging`,
    except step 8: production isn't connected to the repository. It has its own secrets: production limits and a separate relay token. Nothing from staging is
