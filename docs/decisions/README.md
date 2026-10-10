@@ -30,11 +30,11 @@ means writing a new record.
 | [0007](0007-ai-assisted-commits.md) | Every commit is AI-assisted and names the model | accepted |
 | [0008](0008-limited-contributions.md) | Limited contributions | accepted |
 | [0009](0009-toolchain.md) | Plain JavaScript, no dependencies | proposed |
-| [0010](0010-handles-from-github.md) | Handles come from GitHub sign-in | accepted; where sign-in runs superseded by 0014 once accepted |
+| [0010](0010-handles-from-github.md) | Handles come from GitHub sign-in | accepted; where sign-in runs superseded by 0014 |
 | [0011](0011-bananas-in-dollars.md) | A banana is a dollar's worth of bitcoin | accepted; its price source superseded by 0013 |
 | [0012](0012-global-pile.md) | One global pile | accepted |
 | [0013](0013-price-from-2140data.md) | Bitcoin's price comes from 2140data's service | accepted |
-| [0014](0014-pages-through-obl.md) | Pages reach donations through OBL's Worker | proposed |
+| [0014](0014-pages-through-obl.md) | Pages reach donations through OBL's Worker | accepted |
 | [0015](0015-staging-deploys-on-push.md) | Staging deploys on push, through Cloudflare's Git connection | proposed |
 | [0016](0016-staging-beside-the-node.md) | Staging runs beside a mainnet node, fenced off | accepted, for donation testing while the node is a proof of concept |
 
