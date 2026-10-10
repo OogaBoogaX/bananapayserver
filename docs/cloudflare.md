@@ -24,7 +24,9 @@ Settled once, with the account's owners, before anything is deployed:
   login required for every member. Nobody shares a login or a token.
 - **Staging deploys through a manual GitHub Action; production by hand.** A maintainer chooses
   the branch to deploy; see [decision 0018](decisions/0018-staging-github-action.md). Production is
-  deployed by a person signed in as themselves, and has no deploy token.
+  deployed by a person signed in as themselves, and has no deploy token of its own. Staging's
+  token can still deploy it, since Cloudflare can't limit a token to one Worker, so the
+  `staging` environment's reviewers are what keep it to staging.
 - **OBL's CI deploys with an account-wide token,** so it can deploy over bananapayserver's
   Workers too. OBL's workflow actions should be pinned to exact commits, and its production
   token kept in a GitHub environment that needs a reviewer.
@@ -107,12 +109,21 @@ Run `node --test --test-timeout=60000` before applying migrations or deploying b
 
    | Setting | Value |
    |---|---|
-   | Secret `CLOUDFLARE_API_TOKEN` | A token with Workers Scripts → Edit and D1 → Edit, scoped to the target account |
-   | Variable `CLOUDFLARE_ACCOUNT_ID` | That account's id |
-   | Variable `STAGING_WORKER_URL` | The existing staging Worker's HTTPS `workers.dev` address, used for smoke checks |
+   | Secret `CLOUDFLARE_API_TOKEN` | A token with Workers Scripts → Edit and D1 → Edit, scoped to the target account, with an expiry |
+   | Secret `CLOUDFLARE_ACCOUNT_ID` | That account's id |
+   | Secret `STAGING_WORKER_URL` | The existing staging Worker's HTTPS `workers.dev` address, used for smoke checks |
 
-   The token can edit other Workers in that account; keep its permissions to those above,
-   and restrict who can run deployments through the environment's protections. Worker limits
+   The account id and the address are secrets, not variables, because the Action's logs are
+   public: GitHub hides secrets there, and the workflow hides the address's account
+   subdomain wherever Wrangler prints it.
+
+   The token can edit every Worker in that account, production's and OBL's included, and the
+   workflow runs from whatever branch is chosen. So the environment needs these protections,
+   which only GitHub's settings can give: required reviewers, with self-review prevented, a
+   branch rule, and no bypass for administrators. Before approving a run, a reviewer checks
+   what the branch changes against `main` in `.github/`, `scripts/` and
+   `wrangler.staging.jsonc`. The workflow also refuses a config that isn't
+   `bananapayserver-staging` on signet, which catches a mistake but not malice. Worker limits
    and `RELAY_TOKEN_SHA256` stay in Cloudflare. The Action preserves them and never needs their
    values in GitHub.
 

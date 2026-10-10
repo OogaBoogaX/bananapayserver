@@ -39,16 +39,21 @@ contributor docs list for running it from source. BTCPay 2.4.4 needs the .NET 10
 4. **The Worker,** under its staging name, so that bindings find it:
 
    ```bash
-   npx wrangler@4.146.0 d1 migrations apply bananapayserver-staging --local -c wrangler.staging.jsonc
-   npx wrangler@4.146.0 dev -c wrangler.staging.jsonc --port 8787
+   npm ci --prefix .github/deploy --ignore-scripts --no-audit --no-fund
+   alias wrangler="node $PWD/.github/deploy/node_modules/wrangler/bin/wrangler.js"
+   wrangler d1 migrations apply bananapayserver-staging --local -c wrangler.staging.jsonc
+   wrangler dev -c wrangler.staging.jsonc --port 8787
    ```
 
-   Wrangler is Cloudflare's tool and comes from npm; use one exact version and say which in
-   the PR. `.dev.vars` sets the network to regtest.
+   Wrangler is Cloudflare's tool and comes from npm. This is the version the staging Action
+   uses, installed from its lockfile, with every package's hash checked and no install script
+   run. `npx` would resolve Wrangler's dependencies afresh and run their install scripts, on a
+   machine that may also be signed in to Cloudflare. The alias lasts for its terminal, so set
+   it in each one that runs Wrangler. `.dev.vars` sets the network to regtest.
 5. **The relay.** Run `node --env-file=relay/.env relay/main.mjs`. It should log `line: open`.
 6. **A page,** in one of two ways:
    - **The stand-in** for OBL's page and Worker, in [`tools/stand-in/`](../tools/stand-in/).
-     Run `npx wrangler@4.146.0 dev -c tools/stand-in/wrangler.jsonc --port 8788`, check its
+     Run `wrangler dev -c tools/stand-in/wrangler.jsonc --port 8788`, check its
      binding shows as `connected`, and open `http://localhost:8788`. It should say donations
      are open, on regtest, and show the pile. Name a GitHub id and username there to test a
      signed-in donation; OBL's Worker takes them from its sign-in.
@@ -60,7 +65,7 @@ contributor docs list for running it from source. BTCPay 2.4.4 needs the .NET 10
    bananas, and D1 has one row:
 
    ```bash
-   npx wrangler@4.146.0 d1 execute bananapayserver-staging --local -c wrangler.staging.jsonc --command "SELECT * FROM donations"
+   wrangler d1 execute bananapayserver-staging --local -c wrangler.staging.jsonc --command "SELECT * FROM donations"
    ```
 
 **After a restart,** start Docker and run `scripts/regtest.sh up` again, then BTCPay, the

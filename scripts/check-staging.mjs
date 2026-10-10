@@ -1,8 +1,19 @@
 // Read-only boundary checks: no invoices or payments, and no relay credential.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { request } from "node:https";
 
-assert.ok(process.env.STAGING_WORKER_URL, "Set the staging STAGING_WORKER_URL variable");
+// The token can deploy any Worker in the account, so the config deployed has to be staging's.
+// This catches a mistake, not malice: a branch can change this file too, so the environment's
+// reviewers check what a run deploys. Whole-line comments only, as the file has.
+const config = JSON.parse(readFileSync("wrangler.staging.jsonc", "utf8")
+  .split("\n").filter((line) => !line.trim().startsWith("//")).join("\n"));
+assert.equal(config.name, "bananapayserver-staging", "wrangler.staging.jsonc must deploy bananapayserver-staging");
+assert.equal(config.vars?.NETWORK, "signet", "wrangler.staging.jsonc must set NETWORK to signet");
+assert.deepEqual(config.d1_databases?.map((db) => db.database_name), ["bananapayserver-staging"],
+  "wrangler.staging.jsonc must use bananapayserver-staging's database");
+
+assert.ok(process.env.STAGING_WORKER_URL, "Set the staging STAGING_WORKER_URL secret");
 const url = new URL(process.env.STAGING_WORKER_URL);
 assert.equal(url.protocol, "https:");
 assert.match(url.hostname, /^bananapayserver-staging\.[a-z0-9-]+\.workers\.dev$/);
