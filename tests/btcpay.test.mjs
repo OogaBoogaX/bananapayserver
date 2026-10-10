@@ -60,6 +60,17 @@ test("errors name the call but never BTCPay's address, and ids are checked befor
   assert.equal(requests.length, 1);
 });
 
+test("no call follows a redirect off the machine's own network", async () => {
+  const seen = [];
+  const { btcpay } = client((_, init) => {
+    seen.push(init.redirect);
+    return new Response(JSON.stringify({ id: "Inv0ice1234" }));
+  });
+  await btcpay.createInvoice({ sats: 1000, minutes: 15, methods: ["BTC-LN"] });
+  await btcpay.invoice("Inv0ice1234");
+  assert.deepEqual(seen, ["error", "error"]);
+});
+
 test("sats and BTC convert exactly, and anything finer than a sat is refused", () => {
   assert.equal(satsToBtc(1), "0.00000001");
   assert.equal(satsToBtc(123_456_789), "1.23456789");

@@ -21,7 +21,9 @@ export async function dial(url, { socks = null, timeoutMs = 30_000 } = {}) {
     : await connectDirect(host, port, timeoutMs);
   if (url.protocol !== "wss:") return stream;
   return new Promise((resolve, reject) => {
-    const secure = tls.connect({ socket: stream, host, servername: host, ALPNProtocols: ["http/1.1"] });
+    // The certificate is always checked, whatever NODE_TLS_REJECT_UNAUTHORIZED says: the line
+    // crosses Tor, and its token must reach only the Worker.
+    const secure = tls.connect({ socket: stream, host, servername: host, ALPNProtocols: ["http/1.1"], rejectUnauthorized: true });
     const timer = setTimeout(() => {
       secure.destroy();
       reject(new Error("TLS handshake timed out"));
@@ -140,6 +142,7 @@ export class WebSocketClient extends EventEmitter {
     this.#buffered = initial;
     this.#max = maxMessage;
     stream.on("data", (chunk) => {
+      if (this.#done) return;
       this.#buffered = Buffer.concat([this.#buffered, chunk]);
       this.#read();
     });
@@ -239,7 +242,9 @@ export class WebSocketClient extends EventEmitter {
       this.#closing = true;
       this.#write(0x8, payload.subarray(0, 2), true);
     }
+    // The server should close the connection now; if it doesn't, the relay does.
     this.#stream.end();
+    setTimeout(() => this.#stream.destroy(), 1_000).unref();
     this.#finish(code, reason);
   }
 

@@ -73,6 +73,8 @@ export class BTCPay {
         ...(body ? { "Content-Type": "application/json" } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
+      // BTCPay is on this machine's own network. A redirect could lead anywhere else.
+      redirect: "error",
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     // Errors name the call, never BTCPay's address.

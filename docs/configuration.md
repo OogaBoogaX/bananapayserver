@@ -59,14 +59,15 @@ them.
 | `WORKER_URL` | required | The line's address, `wss://<api host>/relay` |
 | `RELAY_TOKEN` | secret | 32 to 128 letters, digits, `-` or `_` |
 | `TOR_SOCKS` | required | Tor's SOCKS proxy, as `host:port` |
-| `DIRECT` | development only | `yes` connects without Tor, and `TOR_SOCKS` is then ignored |
+| `DIRECT` | development only | `yes` connects without Tor, and `TOR_SOCKS` is then ignored. The relay says so in its log when it starts, since the Worker then sees the machine's address |
 | `BTCPAY_URL` | required | BTCPay's address on the machine's internal network |
 | `BTCPAY_STORE_ID` | required | The one store the key can use |
 | `BTCPAY_API_KEY` | secret | A key that can only create and view invoices on that store |
 | `BTCPAY_WEBHOOK_SECRET` | secret | The webhook's secret, as set in BTCPay |
 | `MAX_SATS` | limit, required | The relay's own cap, in sats, whatever the Worker allows |
+| `RATE_PER_MINUTE` | limit, required | How many invoices and on-chain addresses the relay makes in a minute, whatever the Worker asks. At least the Worker's `RATE_GLOBAL`, so it only ever stops a Worker gone wrong |
 | `MIN_SATS` | optional | 1 when unset |
-| `WEBHOOK_LISTEN` | optional | Where the webhook listener binds inside the container; `0.0.0.0:8080` when unset. Never publish this port |
+| `WEBHOOK_LISTEN` | optional | Where the webhook listener binds inside the container; `0.0.0.0:8080` when unset. Never publish this port, and never run the relay with host networking, where this would listen on the machine itself |
 | `INVOICE_MINUTES` | optional | How long an invoice stays payable; 15 when unset |
 | `LIGHTNING_METHOD`, `ONCHAIN_METHOD` | optional | BTCPay's payment method ids; `BTC-LN` and `BTC-CHAIN` when unset. BTCPay 1.x calls them `BTC-LightningNetwork` and `BTC` |
 

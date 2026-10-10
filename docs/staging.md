@@ -69,6 +69,8 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
      nowhere else, from `openssl rand -hex 24`.
    - **`WORKER_URL`:** `wss://bananapayserver-staging.<account subdomain>.workers.dev/relay`.
    - **`RELAY_MAX_SATS`:** the team's cap for staging.
+   - **`RELAY_RATE_PER_MINUTE`:** the team's limit on invoices and on-chain addresses a
+     minute, at least staging's `RATE_GLOBAL`.
 
 3. **Put up the firewall,** as root, before anything starts. It works from the subnets in
    `.env`, so the stack's networks don't need to exist yet:

@@ -15,6 +15,7 @@ const RELAY = {
   BTCPAY_API_KEY: "synthetic-api-key",
   BTCPAY_WEBHOOK_SECRET: "synthetic-webhook-secret",
   MAX_SATS: "50000",
+  RATE_PER_MINUTE: "60",
 };
 
 test("the relay reads a complete configuration, with Tor and the defaults", () => {
@@ -24,12 +25,13 @@ test("the relay reads a complete configuration, with Tor and the defaults", () =
   assert.deepEqual(config.listen, { host: "0.0.0.0", port: 8080 });
   assert.equal(config.minSats, 1);
   assert.equal(config.maxSats, 50_000);
+  assert.equal(config.ratePerMinute, 60);
   assert.equal(config.invoiceMinutes, 15);
   assert.deepEqual(config.methods, { lightning: "BTC-LN", onchain: "BTC-CHAIN" });
 });
 
-test("the relay won't start without its secrets, its cap, or Tor, and never prints them", () => {
-  for (const name of ["RELAY_TOKEN", "TOR_SOCKS", "BTCPAY_API_KEY", "BTCPAY_WEBHOOK_SECRET", "MAX_SATS", "WORKER_URL"]) {
+test("the relay won't start without its secrets, its limits, or Tor, and never prints them", () => {
+  for (const name of ["RELAY_TOKEN", "TOR_SOCKS", "BTCPAY_API_KEY", "BTCPAY_WEBHOOK_SECRET", "MAX_SATS", "RATE_PER_MINUTE", "WORKER_URL"]) {
     assert.throws(() => readConfig({ ...RELAY, [name]: "" }), new RegExp(name), name);
   }
   assert.throws(() => readConfig({ ...RELAY, RELAY_TOKEN: "short" }), (error) => {
@@ -37,6 +39,16 @@ test("the relay won't start without its secrets, its cap, or Tor, and never prin
     assert.doesNotMatch(error.message, /short|synthetic/);
     return true;
   });
+});
+
+test("an API key with a space or a line break stops the relay, without the key in the error", () => {
+  for (const key of ["synthetic-api-key\nX-Injected: yes", "synthetic api key", "synthetic-api-key\u0000"]) {
+    assert.throws(() => readConfig({ ...RELAY, BTCPAY_API_KEY: key }), (error) => {
+      assert.match(error.message, /BTCPAY_API_KEY/);
+      assert.doesNotMatch(error.message, /synthetic/);
+      return true;
+    }, JSON.stringify(key));
+  }
 });
 
 test("the relay connects without Tor only when told to", () => {
@@ -52,7 +64,7 @@ test("the line must be wss, except to this machine", () => {
 });
 
 test("numbers must be whole and in order", () => {
-  for (const [name, value] of [["MAX_SATS", "1e5"], ["MAX_SATS", "0"], ["MAX_SATS", "-5"], ["MIN_SATS", "60000"], ["INVOICE_MINUTES", "1.5"], ["WEBHOOK_LISTEN", "0.0.0.0:99999"], ["TOR_SOCKS", "tor"]]) {
+  for (const [name, value] of [["MAX_SATS", "1e5"], ["MAX_SATS", "0"], ["RATE_PER_MINUTE", "0"], ["RATE_PER_MINUTE", "1.5"], ["MAX_SATS", "-5"], ["MIN_SATS", "60000"], ["INVOICE_MINUTES", "1.5"], ["WEBHOOK_LISTEN", "0.0.0.0:99999"], ["TOR_SOCKS", "tor"]]) {
     assert.throws(() => readConfig({ ...RELAY, [name]: value }), new RegExp(name), `${name}=${value}`);
   }
 });

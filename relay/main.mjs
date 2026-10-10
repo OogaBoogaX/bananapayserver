@@ -17,6 +17,7 @@ try {
   log(error.message);
   process.exit(1);
 }
+if (!config.socks) log("line: DIRECT=yes, so the line doesn't go through Tor, and the Worker sees this machine's address");
 
 const btcpay = new BTCPay(config.btcpay);
 const line = new Line({
