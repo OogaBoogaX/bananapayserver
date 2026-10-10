@@ -29,22 +29,27 @@ This applies to everyone, maintainers included, and changes only by a later deci
 
 ## Setup
 
-Nothing to install. There is no code yet, no build and no dependencies.
+Nothing to install. There is no build and no dependencies.
 
 ```bash
 git clone https://github.com/OogaBoogaX/bananapayserver.git
+cd bananapayserver
+node --test
 ```
 
-**There is no manifest on purpose.** The toolchain is undecided — the starting point is plain
-JavaScript on Workers, ideally with no dependencies — and adding a `package.json` would settle
-it silently. See the open questions in
-[`docs/architecture.md`](docs/architecture.md#open-questions).
+Node 22 or newer. That is the whole toolchain for the tests; deploying the Worker needs
+Wrangler.
+
+**There is no `package.json` on purpose.** Nothing here depends on a package; see
+[decision 0009](docs/decisions/0009-toolchain.md). Adding one is a decision, not a
+convenience.
 
 ## What to run
 
-Nothing yet. Once there is code, tests run on every pull request, and you run the ones
-covering what you touched before asking for review. Say in the PR what you ran and what
-happened. Report failures with their output. Never claim a suite passed that you did not run.
+`node --test` runs every test, and CI runs them on Node 22 and 24 for every pull request.
+Run them before asking for review, and say in the PR what you ran and what happened. Report
+failures with their output. Never claim a suite passed that you did not run. For a change the
+stand-ins can't judge, run the end-to-end stages in [`docs/testing.md`](docs/testing.md) too.
 
 Deterministic tests only. Anything involving time, randomness or network conditions must be
 injectable, so a check measures your change rather than the machine it ran on. Never test

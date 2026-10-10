@@ -9,11 +9,14 @@ is the relay's BTCPay key, which can only create and view invoices on one store.
 
 ## Status
 
-**Pre-alpha. There is no code yet.**
+**Pre-alpha. Nothing here is deployed.**
 
-This repository holds the design, written before the code so the boundaries are decided
-rather than discovered: the architecture, the rules it keeps, and the decisions behind it. The
-Worker, the Durable Object and the relay arrive later. Nothing here is deployed.
+The design came first, so the boundaries were decided rather than discovered: the
+architecture, the rules it keeps, and the decisions behind it. The donation path now follows
+it: the relay, the Worker and its Durable Object, and D1's schema, with tests that run them
+against stand-ins for BTCPay and Cloudflare. None of it has run against a real node yet. The
+node feed ingest waits for Foundry to specify the signed batches its exporter sends. Do not
+point anything here at a node holding funds you would mind losing.
 
 ## What it covers
 
@@ -51,7 +54,18 @@ node.
 | Document | What it answers |
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | Where each piece runs, what each may hold, and how an invoice and a payment travel |
+| [`docs/protocol.md`](docs/protocol.md) | The page's API, the relay's line, and what the relay needs from BTCPay |
+| [`docs/configuration.md`](docs/configuration.md) | Every setting, which ones are limits and secrets, and what the relay's container needs |
+| [`docs/testing.md`](docs/testing.md) | How to test end to end, from a payment on regtest to the cave |
 | [`docs/decisions/`](docs/decisions/) | Choices that are expensive to revisit, and why they were made |
+
+## Tests
+
+No dependencies and no build. Node 22 or newer:
+
+```bash
+node --test
+```
 
 ## Related repositories
 

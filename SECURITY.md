@@ -74,5 +74,5 @@ Also out of scope: attacks requiring physical access to a node's machine.
 
 ## Supported versions
 
-None yet. There is no code, and nothing from this repository is deployed. This section becomes
-meaningful with the first deployment.
+None yet. Nothing from this repository is deployed, and nothing here has run against a real
+node. This section becomes meaningful with the first deployment.
