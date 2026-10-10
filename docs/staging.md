@@ -147,11 +147,13 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
 
 9. **Make room to receive.** LND can only receive through a channel with balance on the other
    side. Ask the faucet to open one to LND, keeping the balance on its side. The faucet can't
-   reach LND, so LND connects to the faucet's node first, staying connected, with the
-   `pubkey@host:port` the faucet's page lists:
+   reach LND, so LND connects to the faucet's node first, staying connected. Use the node's
+   onion address, which mutinynet's explorer lists on the node's page; the faucet's own page
+   lists only its regular one. Through the onion address the connection stays inside Tor,
+   with no exit relay to stall or drop it:
 
    ```bash
-   docker compose -p obl-staging exec lnd lncli -n signet connect --perm <pubkey>@<host>:<port>
+   docker compose -p obl-staging exec lnd lncli -n signet connect --perm <pubkey>@<onion address>:9735
    ```
 
    Once `lncli -n signet listpeers` shows it, fill in the faucet's channel form: a capacity
@@ -168,6 +170,13 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
 ## Running it
 
 - **Logs:** `docker compose -p obl-staging logs --tail 50 <service>`.
+- **Payments fail at once with no route,** as `FailureReasonNoRoute` from the faucet: check the
+  faucet's `ping_time` in `lncli -n signet listpeers` twice, a minute apart. If it doesn't
+  change, a Tor stall has left LND's connection half closed. LND still lists the peer, but
+  its pings have stopped, it won't redial, and even `disconnect` doesn't finish. To the
+  faucet, LND is offline. Restart it with `docker compose -p obl-staging restart lnd`: the
+  channels stay open, and new invoices fail for about a minute. LND may come back on the
+  faucet's regular address; reconnect to the onion one, as in step 9, if it does.
 - **Between tests:** `docker compose -p obl-staging stop`, which frees the memory and keeps the
   chain, so the next test doesn't wait for a sync.
 - **Start again,** after a stop, a crash or a reboot: `sudo ./firewall.sh`, then
