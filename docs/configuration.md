@@ -40,9 +40,12 @@ which signs donors in and checks origins; see
 
 ### Deploying
 
-By hand, never from CI, into the account OBL's Workers use; production only from `main`.
-[`cloudflare.md`](cloudflare.md) has the steps for both environments, and for OBL's side of the
-binding. The Worker's own log lines, such as the price service's failures, can be read in
+Into the account OBL's Workers use. Staging deploys on each push to its branch, through
+Cloudflare's Git connection ([decision 0015](decisions/0015-staging-deploys-on-push.md));
+production deploys by hand, and only from `main`. [`cloudflare.md`](cloudflare.md) has the steps
+for both environments, and for OBL's side of the binding. A setting that isn't in the config
+file, such as `PILE_START`, is set with `wrangler secret put`: a deploy removes plain variables
+set in the dashboard. The Worker's own log lines, such as the price service's failures, can be read in
 Cloudflare's dashboard. Cloudflare's invocation logs are off, because they would keep each
 request's headers, and so visitors' addresses and the relay's, for days.
 

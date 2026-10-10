@@ -40,7 +40,8 @@ one repository so they change together.
   Wrangler against BTCPay on regtest or signet.
 - The WebSocket and SOCKS5 code is this repository's to maintain. It is part of the relay,
   so every change to it needs two maintainers.
-- Deploying needs Wrangler. How it is pinned and run belongs with the deployment decision,
-  which is still open.
+- Deploying needs Wrangler. How it is pinned and run belongs with the deployment decision:
+  [0015](0015-staging-deploys-on-push.md) proposes it for staging, and production's is still
+  open.
 - A dependency can still be added, with a written reason, a pinned version and a hash, and
   a record that supersedes this one.

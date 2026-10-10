@@ -22,8 +22,10 @@ Settled once, with the account's owners, before anything is deployed:
 
 - **Team-owned:** at least two Super Administrators, each with their own login, and two-factor
   login required for every member. Nobody shares a login or a token.
-- **Deploys are by hand,** by a person signed in as themselves. bananapayserver has no CI
-  deploy token, and none should be created for it.
+- **Staging deploys on push; production by hand.** Once set up, staging is deployed by
+  Cloudflare's Git connection on each push to its branch, with the one token that connection
+  holds; see [decision 0015](decisions/0015-staging-deploys-on-push.md). Production is
+  deployed by a person signed in as themselves, and has no deploy token.
 - **OBL's CI deploys with an account-wide token,** so it can deploy over bananapayserver's
   Workers too. OBL's workflow actions should be pinned to exact commits, and its production
   token kept in a GitHub environment that needs a reviewer.
@@ -45,7 +47,8 @@ Settled once, with the account's owners, before anything is deployed:
 
 ## Staging: bananapayserver's side
 
-From a checkout of the branch under review, with `CLOUDFLARE_ACCOUNT_ID` set:
+Once, from a checkout of the branch under review, with `CLOUDFLARE_ACCOUNT_ID` set. After step
+8, pushes deploy staging.
 
 1. **Sign in.** `npx wrangler@4.146.0 login`, then `npx wrangler@4.146.0 whoami`, which should
    show the deployer's own email and OBL's account.
@@ -71,6 +74,26 @@ From a checkout of the branch under review, with `CLOUDFLARE_ACCOUNT_ID` set:
    and `404` to a `POST` at `/donations/invoice`, because pages never reach it directly. In the
    dashboard, the Worker's invocation logs should be off: they would keep every request's
    headers, and so visitors' addresses and the relay's, for days. Its own log lines stay on.
+8. **Connect the repository.** On GitHub, the OogaBoogaX organisation's Cloudflare Workers and
+   Pages app is given access to this repository. In the dashboard, the Worker's Settings →
+   Builds → Connect, with:
+
+   | Setting | Value |
+   |---|---|
+   | Git branch | the top of the stack until it merges, then `main` |
+   | Preview builds | off |
+   | Build command | `node --test --test-timeout=60000` |
+   | Deploy command | `npx --yes wrangler@4.146.0 d1 migrations apply bananapayserver-staging --remote -c wrangler.staging.jsonc && npx --yes wrangler@4.146.0 deploy -c wrangler.staging.jsonc` |
+   | Root directory | `/` |
+   | API token | a new one, then given *D1 → Edit* under its owner's API tokens |
+   | Build variable | `SKIP_DEPENDENCY_INSTALL` set to `1`, since there is no `package.json` |
+
+   The deploy command always names the config file: the default `npx wrangler deploy` finds no
+   config at the root and deploys something else. A push then runs the tests, applies
+   migrations and deploys; `npx wrangler@4.146.0 secret list -c wrangler.staging.jsonc` should
+   still list every secret afterwards. When the branch merges, move the Worker's branch to the
+   next one down the stack: the repository deletes merged branches, and builds stop without
+   saying so.
 
 ## Staging: OBL's side
 
@@ -101,8 +124,8 @@ After staging passes, and from `main`:
    also needs a rule turning off Browser Integrity Check for that name, and no rule blocking
    Tor, which Cloudflare labels as country `T1`.
 2. **Workers Paid** on the account.
-3. **bananapayserver's side,** the staging steps with `production` in place of `staging`, and
-   its own secrets: production limits and a separate relay token. Nothing from staging is
+3. **bananapayserver's side,** the staging steps with `production` in place of `staging`,
+   except step 8: production isn't connected to the repository. It has its own secrets: production limits and a separate relay token. Nothing from staging is
    reused.
 4. **OBL's side,** the binding to `bananapayserver-production` in OBL's production config, and
    OBL's production deploy, which is run by hand. That deploy is the launch.
@@ -114,9 +137,14 @@ After staging passes, and from `main`:
 - Rename either Worker. OBL's bindings find them by name.
 - Add routes, custom domains or preview URLs beyond what this page says, or turn invocation
   logs on.
-- Create an API token for deploying bananapayserver.
+- Create an API token for deploying bananapayserver, other than the one staging's Git
+  connection holds.
+- Connect production to the repository, turn preview builds on, or leave a build's deploy
+  command at its default.
+- Deploy staging by hand or set a secret while a build is running, or change either Worker's
+  code in the dashboard.
 
 ## Reporting back
 
 On the pull request being deployed: the `database_id`, the Worker's `workers.dev` address, the
-two status codes from the check, and any error with its full output.
+two status codes from the check, the first build's result, and any error with its full output.

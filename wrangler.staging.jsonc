@@ -2,7 +2,8 @@
 // whose relay runs on signet. Limits and secrets are deliberately not here: set them in the
 // deployment, never in this file. See docs/configuration.md.
 //
-// Deploy by hand with CLOUDFLARE_ACCOUNT_ID set; the account isn't named here. Local development
+// Cloudflare deploys this file on each push to staging's branch (decision 0015). By hand, set
+// CLOUDFLARE_ACCOUNT_ID first; the account isn't named here. Local development
 // runs this config too, under the same name, so a local OBL Worker's binding finds it; .dev.vars
 // then overrides NETWORK for regtest.
 {
@@ -25,7 +26,7 @@
 			"binding": "DB",
 			"database_name": "bananapayserver-staging",
 			// Set when the database is created; an id isn't a secret.
-			"database_id": "REPLACE_WITH_D1_DATABASE_ID",
+			"database_id": "221116af-5484-4f4b-9f71-3c2289b15819",
 			"migrations_dir": "migrations"
 		}
 	],
