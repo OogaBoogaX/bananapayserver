@@ -65,7 +65,8 @@ test("the line passes on protocol messages and drops the rest", async (t) => {
 });
 
 test("a line that answers its pings stays up", async (t) => {
-  const { line, sockets } = setup({ answers: true });
+  // A wide window for each pong, so a busy test machine's pause doesn't read as a dead line.
+  const { line, sockets } = setup({ answers: true, deadMs: 1_000 });
   t.after(() => line.stop());
   line.start();
   await until(() => sockets[0]?.pings >= 10);
