@@ -1,8 +1,8 @@
 # 0018. Staging deploys through a manual GitHub Action
 
-**Status:** proposed, requested 2026-10-09. Would supersede
-[0015](0015-staging-deploys-on-push.md) after review and settle how
-[0009](0009-toolchain.md) pins Wrangler for staging. Production still deploys by hand.
+**Status:** accepted, 2026-10-09. Supersedes [0015](0015-staging-deploys-on-push.md) and
+settles how [0009](0009-toolchain.md) pins Wrangler for staging. Production still deploys by
+hand.
 
 ## Decision
 

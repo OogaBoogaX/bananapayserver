@@ -1,7 +1,7 @@
 # 0015. Staging deploys on push, through Cloudflare's Git connection
 
-**Status:** proposed, 2026-10-04. [0018](0018-staging-github-action.md) proposes replacing this
-deployment design, pending review.
+**Status:** superseded by [0018](0018-staging-github-action.md), 2026-10-09 (proposed
+2026-10-04). Staging no longer deploys on push, and Workers Builds is disconnected.
 
 ## Decision
 
