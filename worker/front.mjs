@@ -58,7 +58,7 @@ async function note(request, env, visitor) {
   const body = await readBody(request, ["request", "message"], ["request"]);
   if (body.error) return reply({ error: body.error }, body.status);
   const message = cleanMessage(body.value);
-  if (!REQUEST.test(String(body.value.request)) || message === null) return reply({ error: "invalid" }, 400);
+  if (!isRequest(body.value.request) || message === null) return reply({ error: "invalid" }, 400);
   return toObject(env, "/note", { request: body.value.request, message, client: visitor });
 }
 
@@ -66,7 +66,7 @@ async function onchain(request, env, visitor) {
   if (!visitor) return reply({ error: "invalid" }, 400);
   const body = await readBody(request, ["request"], ["request"]);
   if (body.error) return reply({ error: body.error }, body.status);
-  if (!REQUEST.test(String(body.value.request))) return reply({ error: "invalid" }, 400);
+  if (!isRequest(body.value.request)) return reply({ error: "invalid" }, 400);
   return toObject(env, "/onchain", { request: body.value.request, client: visitor });
 }
 
@@ -102,6 +102,9 @@ const isDonor = (donor) =>
 
 // The visitor's address goes to the object for rate limiting only. It's never stored. A call
 // without one is refused, rather than counted with every other such call.
+// A request id, as the invoice reply gave it: a string, never anything that only prints as one.
+const isRequest = (value) => typeof value === "string" && REQUEST.test(value);
+
 const visitorOf = (visitor) => (typeof visitor === "string" && visitor.length > 0 ? visitor.slice(0, VISITOR_MAX) : null);
 
 // The message, cleaned with OBL's rules, or null when it isn't text.

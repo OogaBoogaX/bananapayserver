@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ONCHAIN_FEE_ALLOWANCE, PAGE_SOCKETS_MAX, REPLAY_MAX, visitorGroup, visitorKey } from "../worker/object.mjs";
+import { DonationsObject, ONCHAIN_FEE_ALLOWANCE, PAGE_SOCKETS_MAX, REPLAY_MAX, visitorGroup, visitorKey } from "../worker/object.mjs";
 import { until } from "./helpers/cloudflare.mjs";
 import { ADDRESS, BOLT11, INVOICE, bolt11For } from "./helpers/values.mjs";
 import { call, donor, EXPIRES, TOKEN, upgrade, world } from "./helpers/world.mjs";
@@ -143,6 +143,11 @@ test("the Worker checks amounts and bodies before anything reaches the object", 
   }
   const wrongType = await w.post("/donations/invoice", { sats: 1000 }, { type: "text/plain" });
   assert.equal(wrongType.status, 415);
+  // A request id that only prints like one, such as a list holding it, never reaches the object.
+  for (const path of ["/donations/note", "/donations/onchain"]) {
+    const listed = await w.post(path, { request: ["e".repeat(32)] });
+    assert.equal(listed.status, 400, path);
+  }
 });
 
 test("the public address takes only the relay's line; pages come through OBL's Worker", async () => {
@@ -265,6 +270,23 @@ test("rate limits apply per visitor and overall, per minute", async () => {
   assert.equal((await ask("c")).status, 429, "fourth overall");
   w.platform.advance(60_000);
   assert.equal((await ask("a")).status, 503, "a new minute");
+});
+
+test("rate limits hold when the object sleeps and wakes within the minute, and keep no address", async () => {
+  const w = await world({ RATE_PER_IP: "2", RATE_GLOBAL: "3" });
+  const ask = (visitor) => w.post("/donations/invoice", { sats: 1000 }, { visitor });
+  assert.equal((await ask("198.51.100.7")).status, 503, "counted, though closed for want of a relay");
+  assert.equal((await ask("198.51.100.7")).status, 503);
+  assert.equal((await ask("198.51.100.7")).status, 429);
+  const woken = new DonationsObject(w.ctx, w.env, w.platform);
+  w.env.DONATIONS.get = () => ({ fetch: (input, init) => woken.fetch(new Request(input, init)) });
+  assert.equal((await ask("198.51.100.7")).status, 429, "the visitor's count held");
+  assert.equal((await ask("198.51.100.8")).status, 503);
+  assert.equal((await ask("198.51.100.9")).status, 429, "and so did everyone's");
+  assert.equal(w.ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM rate WHERE key LIKE '%198.51%'").one().n, 0, "no address is kept");
+  w.platform.advance(60_000);
+  assert.equal((await ask("198.51.100.7")).status, 503, "a new minute starts over");
+  assert.equal(w.ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM rate").one().n, 2, "last minute's counts are gone");
 });
 
 test("the object checks every notice the relay sends", async () => {

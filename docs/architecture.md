@@ -113,11 +113,11 @@ pull against each other, which is why its trial measures invoice times; see
 3. **Durable Object.** Applies the rate limits, per visitor and overall, because it is the one
    place every request reaches. Page sockets have a budget of their own, so a crowd of page
    loads can't close donations, and a visitor can hold only a few open at once. A visitor's
-   address stays in memory for a minute at most and is never stored; an open socket carries
-   only a 16-bit hash of it, shared by tens of thousands of addresses. It stores who gave it, the message and the amount under a new request id,
-   in its own storage, until the invoice is paid or expires. It sends `{ request id, sats }`
-   down the relay's line and keeps the page's request open, and meanwhile works out the
-   bananas at bitcoin's current price.
+   address is never stored. What the object keeps, for a minute's rate limits and for an open
+   socket, is a 16-bit hash of it, shared by tens of thousands of addresses. It stores who gave
+   it, the message and the amount under a new request id, in its own storage, until the invoice
+   is paid or expires. It sends `{ request id, sats }` down the relay's line and keeps the
+   page's request open, and meanwhile works out the bananas at bitcoin's current price.
 4. **Relay.** Checks the amount against its own cap, asks BTCPay on the machine for the
    invoice, and sends `{ request id, invoice }` up the line. BTCPay makes the Lightning invoice
    first, and an on-chain address only if the donor switches to on-chain.

@@ -88,6 +88,9 @@ const MIGRATIONS = [
   // slept, and the rate the pages last got with the tally, so an unchanged one isn't sent again.
   `ALTER TABLE price ADD COLUMN failed INTEGER;
   CREATE TABLE tally_rate (id INTEGER PRIMARY KEY CHECK (id = 1), rate TEXT NOT NULL);`,
+  // The minute's rate limit counts, so they hold when the object sleeps. Keyed by a visitor's
+  // group, never their address, and gone when the minute is.
+  `CREATE TABLE rate (key TEXT PRIMARY KEY, minute INTEGER NOT NULL, count INTEGER NOT NULL);`,
 ];
 
 export class DonationsObject {
@@ -525,27 +528,34 @@ export class DonationsObject {
   }
 
   markRateSent(rate) {
-    this.sql.exec(
-      "INSERT INTO tally_rate (id, rate) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET rate = excluded.rate",
-      rateKey(rate),
-    );
+    this.setSentRate(rateKey(rate));
+  }
+
+  setSentRate(key) {
+    if (key === null) return void this.sql.exec("DELETE FROM tally_rate");
+    this.sql.exec("INSERT INTO tally_rate (id, rate) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET rate = excluded.rate", key);
   }
 
   // Every page gets the tally: after a donation, with its figures read again; after a new
-  // price, only when the rate changed, so pages never get the same tally twice.
+  // price, only when the rate changed, so pages never get the same tally twice. True when it
+  // went out.
   async pushTally({ refresh = false } = {}) {
     const tally = await this.tally({ refresh });
-    if (!tally) return;
+    if (!tally) return false;
     this.markRateSent(tally.rate);
     this.broadcast(tally);
+    return true;
   }
 
   // Marked as sent before anything waits, so lookups that finish together send it once.
   async pushRateIfChanged() {
+    const before = this.sentRate();
     const rate = this.currentRate();
-    if (rateKey(rate) === this.sentRate()) return;
+    if (rateKey(rate) === before) return;
     this.markRateSent(rate);
-    await this.pushTally();
+    // If the tally couldn't be read, nothing went out: the pages still have the rate before,
+    // and the next check has to send it.
+    if (!(await this.pushTally()) && this.sentRate() === rateKey(rate)) this.setSentRate(before);
   }
 
   // A price older than five minutes is asked for again, sharing a lookup already on its way
@@ -647,20 +657,25 @@ export class DonationsObject {
 
   // Fixed one-minute windows. Invoices and on-chain switches, the requests that make work for
   // the node, count per visitor and overall. Notes and page sockets count per visitor, each on
-  // their own, so a crowd of page loads can't close donations. Addresses live in memory for at
-  // most a minute and are never stored.
+  // their own, so a crowd of page loads can't close donations. The counts are kept in storage,
+  // so they hold when the object sleeps, under the visitor's group rather than their address,
+  // and go when the minute ends. A visitor shares a count only with the rare other in their
+  // group.
   allow(kind, visitor, { ratePerIp, rateGlobal }) {
     const minute = Math.floor(this.platform.now() / 60_000);
     if (this.minute !== minute) {
       this.minute = minute;
-      this.counts = new Map();
-      this.total = 0;
+      this.sql.exec("DELETE FROM rate WHERE minute <> ?", minute);
     }
-    const key = `${kind} ${visitorKey(visitor)}`;
-    const count = this.counts.get(key) ?? 0;
-    if (count >= ratePerIp || (kind === "work" && this.total >= rateGlobal)) return false;
-    this.counts.set(key, count + 1);
-    if (kind === "work") this.total += 1;
+    const counted = (key) => this.sql.exec("SELECT count FROM rate WHERE key = ?", key).toArray()[0]?.count ?? 0;
+    const add = (key) => this.sql.exec(
+      "INSERT INTO rate (key, minute, count) VALUES (?, ?, 1) ON CONFLICT (key) DO UPDATE SET count = count + 1",
+      key, minute,
+    );
+    const key = `${kind} ${visitorGroup(visitor, 64)}`;
+    if (counted(key) >= ratePerIp || (kind === "work" && counted("total") >= rateGlobal)) return false;
+    add(key);
+    if (kind === "work") add("total");
     return true;
   }
 
@@ -686,14 +701,14 @@ export function visitorKey(address, prefix = 64) {
   return `${groups.slice(0, prefix / 16).map((group) => group.replace(/^0+(?=.)/, "")).join(":")}::/${prefix}`;
 }
 
-// Page sockets stay open for as long as a page does, which can be days, so each carries a tag
-// for its visitor and SOCKETS_PER_IP holds them to a few each. The tag is never the address: it
-// is 16 bits of a hash of it, or of its /48 for IPv6, the block one customer can get. That makes
-// it one of 65,536 groups, each shared by tens of thousands of addresses. FNV-1a, which needs
-// no waiting, so a page's connect takes no longer.
-export function visitorGroup(visitor) {
+// What the object keeps of a visitor: never the address, but 16 bits of a hash of it, or of its
+// IPv6 prefix. That makes it one of 65,536 groups, each shared by tens of thousands of addresses.
+// Page sockets, which stay open for as long as a page does, carry it as a tag, by the /48, the
+// block one customer can get; the rate limits count by it, by the /64. FNV-1a, which needs no
+// waiting, so nothing a page or donor does takes longer.
+export function visitorGroup(visitor, prefix = 48) {
   let hash = 0x811c9dc5;
-  for (const char of visitorKey(visitor, 48)) hash = Math.imul(hash ^ char.charCodeAt(0), 0x01000193);
+  for (const char of visitorKey(visitor, prefix)) hash = Math.imul(hash ^ char.charCodeAt(0), 0x01000193);
   return `visitor-${((hash >>> 16) ^ (hash & 0xffff)).toString(16).padStart(4, "0")}`;
 }
 

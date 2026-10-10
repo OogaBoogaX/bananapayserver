@@ -220,6 +220,34 @@ test("when D1 can't be read, the tally is skipped and everything else still arri
   assert.match(errors.mock.calls[0].arguments[0], /reading the tally failed/);
 });
 
+test("a new rate the tally couldn't be read for goes out once D1 is back", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const w = await world();
+  const page = await w.connectPage();
+  await w.ctx.settle();
+  assert.equal(tallies(page).at(-1).rate.usdPerBtc, 100_000);
+
+  // Woken with nothing in memory, a new price arrives while D1 can't be read.
+  const woken = new DonationsObject(w.ctx, w.env, w.platform);
+  const prepare = w.env.DB.prepare;
+  w.env.DB.prepare = (sql) => {
+    if (sql.includes("tally")) throw new Error("D1 is down");
+    return prepare(sql);
+  };
+  w.platform.advance(PRICE_FRESH_MS);
+  w.platform.prices = { rest: 90_000, socket: 90_000 };
+  await woken.alarm();
+  await w.ctx.settle();
+  assert.equal(tallies(page).at(-1).rate.usdPerBtc, 100_000, "nothing could go out");
+
+  // D1 is back, and the price hasn't moved since; the pages still need it.
+  w.env.DB.prepare = prepare;
+  w.platform.advance(PRICE_FRESH_MS);
+  await woken.alarm();
+  await w.ctx.settle();
+  assert.equal(tallies(page).at(-1).rate.usdPerBtc, 90_000);
+});
+
 test("the migration starts the tally from the donations already recorded, and the trigger counts each once", () => {
   const db = new DatabaseSync(":memory:");
   const migration = (file) => readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8");

@@ -224,7 +224,7 @@ test("an object made before the stats gets the new columns and tables in place",
   new DonationsObject(ctx, env, fakePlatform());
   const row = ctx.storage.sql.exec("SELECT request, github_id, price_cents, milli FROM pending").one();
   assert.deepEqual({ ...row }, { request: "r", github_id: null, price_cents: null, milli: null });
-  assert.equal(ctx.storage.sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 3);
+  assert.equal(ctx.storage.sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 4);
   new DonationsObject(ctx, env, fakePlatform());
   assert.equal(ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM pending").one().n, 1, "a second start changes nothing");
 });
