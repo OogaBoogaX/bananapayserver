@@ -17,9 +17,10 @@ export function readLimits(env) {
   const maxSats = positiveInt(env.MAX_SATS);
   const ratePerIp = positiveInt(env.RATE_PER_IP);
   const rateGlobal = positiveInt(env.RATE_GLOBAL);
+  const socketsPerIp = positiveInt(env.SOCKETS_PER_IP);
   const minSats = env.MIN_SATS === undefined ? 1 : positiveInt(env.MIN_SATS);
-  if (!maxSats || !ratePerIp || !rateGlobal || !minSats || minSats > maxSats) return null;
-  return { minSats, maxSats, ratePerIp, rateGlobal };
+  if (!maxSats || !ratePerIp || !rateGlobal || !socketsPerIp || !minSats || minSats > maxSats) return null;
+  return { minSats, maxSats, ratePerIp, rateGlobal, socketsPerIp };
 }
 
 // Settings that are not limits. A missing or unknown network also closes donations.

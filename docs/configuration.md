@@ -26,6 +26,7 @@ regtest.
 | `MAX_SATS` | limit, required | The largest donation the Worker accepts, in sats |
 | `MIN_SATS` | optional | The smallest; 1 when unset, the smallest invoice there is |
 | `RATE_PER_IP` | limit, required | Per visitor and per minute: invoice requests and on-chain switches together, and separately each of notes and page sockets. An IPv6 visitor counts by its /64 |
+| `SOCKETS_PER_IP` | limit, required | Page sockets one visitor may hold open at once. An IPv6 visitor counts by its /48. Visitors are counted in 65,536 groups by a hash of the address, so a visitor shares the limit with the few others in their group, and no address is ever kept |
 | `RATE_GLOBAL` | limit, required | Invoice requests and on-chain switches per minute, for all visitors together. Notes and page sockets don't count, so a crowd of page loads can't close donations |
 | `RELAY_TOKEN_SHA256` | secret | The SHA-256, in hex, of the relay's token |
 | `NETWORK` | variable | `mainnet`, `testnet`, `signet` or `regtest`; invoices and addresses for any other are refused. Set in each config file |

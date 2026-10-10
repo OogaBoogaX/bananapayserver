@@ -42,9 +42,10 @@ Settled once, with the account's owners, before anything is deployed:
 - Node 22 or newer and git. Install Wrangler, Cloudflare's command-line tool, with
   `npm ci --prefix .github/deploy --ignore-scripts`. The deployment lockfile pins version
   4.146.0 and its dependencies with integrity hashes, without running install scripts.
-- The environment's limits, from the team: the largest donation in sats (`MAX_SATS`), and the
+- The environment's limits, from the team: the largest donation in sats (`MAX_SATS`), the
   invoice requests allowed per visitor and for everyone together each minute (`RATE_PER_IP`,
-  `RATE_GLOBAL`). They're typed at a prompt, and never go in a file, a commit or a chat. See
+  `RATE_GLOBAL`), and the page sockets one visitor may hold open (`SOCKETS_PER_IP`). They're
+  typed at a prompt, and never go in a file, a commit or a chat. See
   [`configuration.md`](configuration.md) for every setting.
 
 ## Staging: bananapayserver's side
@@ -87,8 +88,8 @@ Run `node --test --test-timeout=60000` before applying migrations or deploying b
      deploy -c wrangler.staging.jsonc
    ```
 
-5. **Set missing limits.** Run this for `MAX_SATS`, then repeat with `RATE_PER_IP` and
-   `RATE_GLOBAL` in its place, typing each value at the prompt.
+5. **Set missing limits.** Run this for `MAX_SATS`, then repeat with `RATE_PER_IP`,
+   `RATE_GLOBAL` and `SOCKETS_PER_IP` in its place, typing each value at the prompt.
 
    ```bash
    node .github/deploy/node_modules/wrangler/bin/wrangler.js \
@@ -145,7 +146,7 @@ Run `node --test --test-timeout=60000` before applying migrations or deploying b
    Until the workflow reaches `main`, a maintainer can use steps 1–7 from the reviewed branch
    with no Cloudflare build or Action deployment running. The deploy command always names the
    config file. Afterwards, the secret list should still include `MAX_SATS`, `RATE_PER_IP`,
-   `RATE_GLOBAL` and `RELAY_TOKEN_SHA256`.
+   `RATE_GLOBAL`, `SOCKETS_PER_IP` and `RELAY_TOKEN_SHA256`.
 
    ```bash
    node .github/deploy/node_modules/wrangler/bin/wrangler.js \

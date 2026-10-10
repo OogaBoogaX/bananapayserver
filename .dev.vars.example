@@ -3,6 +3,7 @@
 MAX_SATS=
 RATE_PER_IP=
 RATE_GLOBAL=
+SOCKETS_PER_IP=
 # SHA-256, in hex, of the relay's token.
 RELAY_TOKEN_SHA256=
 # Overrides the staging config's signet for the local regtest stack.

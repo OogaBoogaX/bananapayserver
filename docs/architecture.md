@@ -112,8 +112,9 @@ pull against each other, which is why its trial measures invoice times; see
    OBL's rules, and calls the Durable Object.
 3. **Durable Object.** Applies the rate limits, per visitor and overall, because it is the one
    place every request reaches. Page sockets have a budget of their own, so a crowd of page
-   loads can't close donations. A visitor's address stays in memory for a minute at most and
-   is never stored. It stores who gave it, the message and the amount under a new request id,
+   loads can't close donations, and a visitor can hold only a few open at once. A visitor's
+   address stays in memory for a minute at most and is never stored; an open socket carries
+   only a 16-bit hash of it, shared by tens of thousands of addresses. It stores who gave it, the message and the amount under a new request id,
    in its own storage, until the invoice is paid or expires. It sends `{ request id, sats }`
    down the relay's line and keeps the page's request open, and meanwhile works out the
    bananas at bitcoin's current price.
@@ -172,9 +173,9 @@ account that is gone is the page's choice. See
 **What it counts for** is set when the invoice is made: one banana is a dollar's worth of
 bitcoin. For each invoice, the object asks 2140data's price service for bitcoin's price: its
 REST API first, then its socket, which sends the price as soon as it connects. If neither
-answers, the invoice uses the last price, marked stale so the page can show an alert. The
-price is locked into the invoice, and the donor is shown the rate and both counts, exact and
-rounded. The donation records its sats, the price and when it was fetched, and its bananas in
+answers, or the price is more than twice or under half the last one, within a day of it, the
+invoice uses the last price, marked stale so the page can show an alert. The price is locked
+into the invoice, and the donor is shown the rate and both counts, exact and rounded. The donation records its sats, the price and when it was fetched, and its bananas in
 thousandths, so any count can be worked out again. See
 [decision 0011](decisions/0011-bananas-in-dollars.md) and
 [decision 0013](decisions/0013-price-from-2140data.md).

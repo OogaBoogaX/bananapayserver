@@ -174,8 +174,8 @@ who comes back keeps their history. Whether the leaderboard shows an account tha
 the page's choice.
 
 The object keeps its page sockets below Cloudflare's limit for one object, so the relay's
-line always has room. Past that, and past the visitor's rate limit, a new socket is refused
-with 429.
+line always has room. Past that, past the visitor's rate limit, or past the sockets one
+visitor may hold open at once, a new socket is refused with 429.
 
 ## The relay's line
 

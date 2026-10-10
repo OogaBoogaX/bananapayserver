@@ -148,6 +148,7 @@ EOF
 MAX_SATS=100000
 RATE_PER_IP=20
 RATE_GLOBAL=120
+SOCKETS_PER_IP=20
 RELAY_TOKEN_SHA256=$(printf %s "$token" | shasum -a 256 | cut -d' ' -f1)
 NETWORK=regtest
 EOF
