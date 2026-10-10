@@ -70,11 +70,15 @@ test("numbers must be whole and in order", () => {
 });
 
 test("the Worker's caps and rate limits have no defaults, and a bad one closes donations", () => {
-  const limits = { MAX_SATS: "100000", RATE_PER_IP: "5", RATE_GLOBAL: "50", SOCKETS_PER_IP: "4" };
-  assert.deepEqual(readLimits(limits), { minSats: 1, maxSats: 100_000, ratePerIp: 5, rateGlobal: 50, socketsPerIp: 4 });
+  const limits = { MAX_SATS: "100000", RATE_PER_IP: "5", RATE_GLOBAL: "50", SOCKETS_PER_IP: "4", PRICE_JUMP_MAX: "3", ONCHAIN_FEE_ALLOWANCE: "20000" };
+  assert.deepEqual(readLimits(limits), {
+    minSats: 1, maxSats: 100_000, ratePerIp: 5, rateGlobal: 50, socketsPerIp: 4, priceJumpMax: 3, onchainFeeAllowance: 20_000,
+  });
   for (const name of Object.keys(limits)) assert.equal(readLimits({ ...limits, [name]: undefined }), null, name);
   for (const bad of ["0", "-1", "1.5", "lots", " ", "1e3"]) assert.equal(readLimits({ ...limits, MAX_SATS: bad }), null, bad);
   assert.equal(readLimits({ ...limits, MIN_SATS: "100001" }), null);
+  assert.equal(readLimits({ ...limits, PRICE_JUMP_MAX: "1" }), null, "a factor of 1 would refuse every new price");
+  assert.equal(readLimits({ ...limits, ONCHAIN_FEE_ALLOWANCE: "0" }).onchainFeeAllowance, 0, "no room for a fee is allowed");
 });
 
 test("the Worker's other settings", () => {

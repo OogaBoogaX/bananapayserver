@@ -173,9 +173,10 @@ account that is gone is the page's choice. See
 **What it counts for** is set when the invoice is made: one banana is a dollar's worth of
 bitcoin. For each invoice, the object asks 2140data's price service for bitcoin's price: its
 REST API first, then its socket, which sends the price as soon as it connects. If neither
-answers, or the price is more than twice or under half the last one, within a day of it, the
-invoice uses the last price, marked stale so the page can show an alert. The price is locked
-into the invoice, and the donor is shown the rate and both counts, exact and rounded. The donation records its sats, the price and when it was fetched, and its bananas in
+answers, or the price is further from the last one, within a day of it, than the deployment
+allows, the invoice uses the last price, marked stale so the page can show an alert. The price
+is locked into the invoice, and the donor is shown the rate and both counts, exact and rounded.
+The donation records its sats, the price and when it was fetched, and its bananas in
 thousandths, so any count can be worked out again. See
 [decision 0011](decisions/0011-bananas-in-dollars.md) and
 [decision 0013](decisions/0013-price-from-2140data.md).

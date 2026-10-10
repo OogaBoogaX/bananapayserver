@@ -185,6 +185,8 @@ export const ENV = {
   RATE_PER_IP: "5",
   RATE_GLOBAL: "50",
   SOCKETS_PER_IP: "5",
+  PRICE_JUMP_MAX: "2",
+  ONCHAIN_FEE_ALLOWANCE: "100000",
   NETWORK: "regtest",
   INVOICE_TIMEOUT_MS: "200",
 };

@@ -21,15 +21,6 @@ export const BOARD_SIZE = 20;
 // object asks it again, so no donor waits on a service that's down.
 export const PRICE_RETRY_MS = 60_000;
 
-// A price more than this many times the last one, or less than the last one divided by it,
-// within a day of it, is taken for a fault at the service rather than the market, and refused.
-// Banana counts are kept for good, so a wrong price would stay on the pile and the board.
-export const PRICE_JUMP_MAX = 2;
-
-// How much more than the invoice the relay may ask a donor to pay on-chain: room for a network
-// fee, if the store adds one, and never a mistake in units.
-export const ONCHAIN_FEE_ALLOWANCE = 100_000;
-
 // How old the price beside the tally may get while pages are open, and how often the alarm
 // checks it. See decision 0017.
 export const PRICE_FRESH_MS = 5 * 60_000;
@@ -230,7 +221,8 @@ export class DonationsObject {
 
     const reply = await this.ask(line, { type: "onchain", request, invoice: row.invoice }, invoiceTimeoutMs);
     if (!reply?.address || !ADDRESS[network].test(reply.address)) return closed();
-    if (reply.sats < row.sats || reply.sats > row.sats + ONCHAIN_FEE_ALLOWANCE) return closed();
+    // Room for a network fee, if the store adds one, and never a mistake in units.
+    if (reply.sats < row.sats || reply.sats > row.sats + limits.onchainFeeAllowance) return closed();
     return json({ address: reply.address, sats: reply.sats });
   }
 
@@ -437,16 +429,21 @@ export class DonationsObject {
 
   // True when a new price came in. Invoices asking at the same time share one lookup. When the
   // last lookup failed, the next waits a minute, and the failure is kept in storage so that
-  // holds after the object sleeps.
+  // holds after the object sleeps. A price more than PRICE_JUMP_MAX times the last one, or the
+  // last divided by it, within a day of it, is taken for a fault at the service rather than the
+  // market: banana counts are kept for good, so a wrong price would stay on the pile and the
+  // board. With a limit missing, donations are closed and nothing says which price to believe.
   refreshPrice() {
     if (this.refreshing) return this.refreshing;
+    const limits = readLimits(this.env);
+    if (!limits) return Promise.resolve(false);
     const [failed] = this.sql.exec("SELECT value FROM meta WHERE key = 'price_failed'").toArray();
     if (failed && this.platform.now() - failed.value < PRICE_RETRY_MS) return Promise.resolve(false);
     this.refreshing = fetchPrice(this.platform)
       .then((price) => {
         const [last] = this.sql.exec("SELECT cents, at FROM price").toArray();
         const jumped = price && last && this.platform.now() - last.at < DAY &&
-          (price.cents > last.cents * PRICE_JUMP_MAX || price.cents * PRICE_JUMP_MAX < last.cents);
+          (price.cents > last.cents * limits.priceJumpMax || price.cents * limits.priceJumpMax < last.cents);
         if (price === null || jumped) {
           const now = this.platform.now();
           this.sql.exec(

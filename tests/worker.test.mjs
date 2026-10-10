@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DonationsObject, ONCHAIN_FEE_ALLOWANCE, PAGE_SOCKETS_MAX, REPLAY_MAX, visitorGroup, visitorKey } from "../worker/object.mjs";
+import { DonationsObject, PAGE_SOCKETS_MAX, REPLAY_MAX, visitorGroup, visitorKey } from "../worker/object.mjs";
 import { until } from "./helpers/cloudflare.mjs";
 import { ADDRESS, BOLT11, INVOICE, bolt11For } from "./helpers/values.mjs";
 import { call, donor, EXPIRES, TOKEN, upgrade, world } from "./helpers/world.mjs";
@@ -375,7 +375,7 @@ test("an on-chain amount far above the invoice is refused, while room for a netw
     await w.relaySays(relay, { type: "onchain", request: asked.request, address: ADDRESS, sats });
     return pending;
   };
-  assert.equal((await switchTo(1000 + ONCHAIN_FEE_ALLOWANCE + 1)).status, 503, "a mistake in units, say");
+  assert.equal((await switchTo(1000 + Number(w.env.ONCHAIN_FEE_ALLOWANCE) + 1)).status, 503, "a mistake in units, say");
   assert.equal((await switchTo(1000 + 5_000)).status, 200, "a network fee the store adds");
 });
 

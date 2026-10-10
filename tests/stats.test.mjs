@@ -127,6 +127,17 @@ test("a price far from the last one is taken for a fault, until a day has gone b
   assert.equal(later.rate.usdPerBtc, 250_000, "a day on, any price is taken");
 });
 
+test("how far a price may move is the deployment's setting", async () => {
+  const w = await world({ PRICE_JUMP_MAX: "3" });
+  const relay = await w.connectRelay();
+  const answer = (id) => () => ({ id, bolt11: bolt11For(1000), expires: EXPIRES });
+  await w.invoice(relay, { sats: 1000 });
+  w.platform.advance(HOUR);
+  w.platform.prices = { socket: 250_000, rest: 250_000 };
+  const moved = await (await w.invoice(relay, { sats: 1000 }, answer("Inv0ice0002"))).response.json();
+  assert.equal(moved.rate.usdPerBtc, 250_000, "2.5 times is within 3");
+});
+
 test("with no price anywhere, the donation still goes through, worth no bananas until worked out again", async (t) => {
   const errors = t.mock.method(console, "error", () => {});
   const w = await world({}, { prices: { socket: null, rest: null } });
