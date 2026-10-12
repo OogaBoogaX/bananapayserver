@@ -103,18 +103,21 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
    ```
 
    [`fence-check.sh`](../deploy/staging/fence-check.sh) finds the machine's LAN address and
-   router itself, or takes them with `--lan` and `--router`, and `--ssh-port` if SSH isn't on
-   22. It tries, from Tor's network, the machine on SSH's port and its gateway, the router,
-   every port the machine's other containers publish, such as the mainnet node's LND and
-   bitcoind, and one container on each of the machine's other Docker networks; and from the
-   two internal networks, the machine and each network's gateway. Every try should come back
+   router itself, or takes them with `--lan` and `--router`, with `--router-port` if the
+   router doesn't answer on 80 and `--ssh-port` if SSH isn't on 22. It tries, from Tor's
+   network, the machine on SSH's port and its gateway, the router, every port the machine's
+   other containers publish, ranges included, such as the mainnet node's LND and bitcoind,
+   and one container on each of the machine's other Docker networks; and from the two
+   internal networks, the machine and each network's gateway. Every try should come back
    blocked, with no answer or no route. A refusal counts as reachable: it means something
    answered. Then it checks that no container in the stack has IPv6, since the firewall
    fences IPv4 only.
 
-   It ends with a summary that names no address or port, to post where the team can see it,
-   and says whether the fence holds. If anything got through, stop the stack at once with
-   `docker compose -p obl-staging stop`, and tell the team.
+   It ends with a summary that names no address or port, to post where the team can see it.
+   It exits 0 when the fence holds, and 1 when something got through: then stop the stack at
+   once with `docker compose -p obl-staging stop`, and tell the team. It exits 2 when anything
+   couldn't be checked, such as Docker failing to list its containers, so a pass always means
+   every check ran.
 
 5. **Wait for the chain.** bitcoind syncs mutinynet through Tor, which takes hours.
 
