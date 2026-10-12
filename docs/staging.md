@@ -96,38 +96,25 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
    firewall's rules up, checks that the stack's networks use the subnets the rules guard, and
    only then starts anything.
 
-   Then check the fence. From Tor's network, the machine and its LAN must be out of reach.
-   This probe tries one address and port from one of the stack's networks, here the machine's
-   LAN address and SSH's port:
+   Then check the fence:
 
    ```bash
-   docker run --rm --network obl-staging_outside obl-staging-relay node -e "const s = require('net').connect(+process.argv[2], process.argv[1]); s.setTimeout(4000); const say = (what, code) => { console.log(what); process.exit(code); }; s.on('connect', () => say('REACHABLE: it connected', 1)); s.on('timeout', () => say('blocked: no answer', 0)); s.on('error', (e) => e.code === 'ECONNREFUSED' ? say('REACHABLE: it refused, so something answered', 1) : say('blocked: ' + e.code, 0));" <LAN address> 22
+   ./fence-check.sh
    ```
 
-   Each one should print `blocked`, with no answer or no route. A refusal counts as reachable:
-   it means the machine answered. The output names no address, so it can be shared as is.
-   Try, from `obl-staging_outside`:
+   [`fence-check.sh`](../deploy/staging/fence-check.sh) finds the machine's LAN address and
+   router itself, or takes them with `--lan` and `--router`, and `--ssh-port` if SSH isn't on
+   22. It tries, from Tor's network, the machine on SSH's port and its gateway, the router,
+   every port the machine's other containers publish, such as the mainnet node's LND and
+   bitcoind, and one container on each of the machine's other Docker networks; and from the
+   two internal networks, the machine and each network's gateway. Every try should come back
+   blocked, with no answer or no route. A refusal counts as reachable: it means something
+   answered. Then it checks that no container in the stack has IPv6, since the firewall
+   fences IPv4 only.
 
-   - the machine's LAN address, on SSH's port, and on each port the mainnet node publishes
-     there, such as its bitcoind RPC, LND gRPC and LND REST ports, by default 8332, 10009 and
-     8080;
-   - another device on the LAN, such as the router, on a port it answers, such as 80;
-   - an address on one of the machine's other Docker networks, if it has any, on a port a
-     container there listens on; `docker network ls` and `docker network inspect` list them.
-
-   Then from `obl-staging_front` and `obl-staging_backend`, the machine's LAN address and each
-   network's own gateway, on SSH's port:
-
-   ```bash
-   docker network inspect obl-staging_front --format '{{(index .IPAM.Config 0).Gateway}}'
-   ```
-
-   The firewall fences IPv4 only, so the stack's containers have no IPv6 at all. Tor sits on
-   all three networks; this should print nothing:
-
-   ```bash
-   docker compose -p obl-staging exec tor cat /proc/net/if_inet6
-   ```
+   It ends with a summary that names no address or port, to post where the team can see it,
+   and says whether the fence holds. If anything got through, stop the stack at once with
+   `docker compose -p obl-staging stop`, and tell the team.
 
 5. **Wait for the chain.** bitcoind syncs mutinynet through Tor, which takes hours.
 
