@@ -38,12 +38,14 @@ running="$(compose ps --services --status running)"
 [ -n "$running" ] || fail "nothing in the stack is running; start it with ./start.sh first"
 
 # One connection attempt. Only no answer, or no route, counts as blocked: a refusal means
-# something answered.
+# something answered, and any other error means the try told nothing.
 PROBE="const s = require('net').connect(+process.argv[2], process.argv[1]); s.setTimeout(4000);
 const say = (what, code) => { console.log(what); process.exit(code); };
 s.on('connect', () => say('REACHABLE: it connected', 1));
 s.on('timeout', () => say('blocked: no answer', 0));
-s.on('error', (e) => e.code === 'ECONNREFUSED' ? say('REACHABLE: it refused, so something answered', 1) : say('blocked: ' + e.code, 0));"
+s.on('error', (e) => e.code === 'ECONNREFUSED' ? say('REACHABLE: it refused, so something answered', 1)
+  : ['ENETUNREACH', 'EHOSTUNREACH'].includes(e.code) ? say('blocked: ' + e.code, 0)
+  : say('couldn\\'t run the probe: ' + e.code, 2));"
 
 reachable=0 broken=0
 public=()
@@ -51,18 +53,34 @@ public=()
 # probe <stack network> <address> <port> <what it is, without the address>
 probe() {
   local result
+  if [ -z "$2" ]; then
+    # An empty address would reach the probe's own container, and say nothing about the fence.
+    broken=$((broken + 1))
+    printf '  from %-8s %-25s %-28s %s\n' "$1" "(no address found)" "($4)" "couldn't run the probe"
+    public+=("from $1, $4: couldn't run the probe")
+    return
+  fi
   result="$(docker run --rm --network "obl-staging_$1" --cap-drop ALL --security-opt no-new-privileges \
     obl-staging-relay node -e "$PROBE" "$2" "$3" 2>/dev/null | tail -n 1)" || true
   case "$result" in
     blocked*) ;;
     REACHABLE*) reachable=$((reachable + 1)) ;;
+    couldn*) broken=$((broken + 1)) ;;
     *) result="couldn't run the probe"; broken=$((broken + 1)) ;;
   esac
   printf '  from %-8s to %-22s %-28s %s\n' "$1" "$2:$3" "($4)" "$result"
   public+=("from $1, $4: $result")
 }
 
-gateway() { docker network inspect "obl-staging_$1" --format '{{(index .IPAM.Config 0).Gateway}}'; }
+# The machine's own address on one of the stack's networks, the network's gateway: read from its
+# bridge, since Docker doesn't always record it, or else from what Docker recorded.
+gateway() {
+  local id address
+  id="$(docker network inspect "obl-staging_$1" --format '{{.Id}}')"
+  address="$(ip -4 -o addr show dev "br-${id:0:12}" 2>/dev/null | awk '{ split($4, a, "/"); print a[1]; exit }' || true)"
+  [ -n "$address" ] || address="$(docker network inspect "obl-staging_$1" --format '{{(index .IPAM.Config 0).Gateway}}')"
+  echo "$address"
+}
 
 echo "For you: what was tried, and what came back."
 echo
