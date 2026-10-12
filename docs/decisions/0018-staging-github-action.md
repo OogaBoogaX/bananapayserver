@@ -15,7 +15,11 @@ never trigger this deployment.
 
 Wrangler 4.146.0 and its dependency integrity hashes are locked under `.github/deploy/`.
 `npm ci --prefix .github/deploy --ignore-scripts` installs that toolchain without running
-package scripts. The Worker, relay and tests still have no package dependencies.
+package scripts. Three of its packages, esbuild, workerd and fsevents, have install scripts;
+`--ignore-scripts` skips them, and the deploy doesn't need them. Wrangler and its dependencies
+run with the Cloudflare token in the deploy job, so pinning versions and verifying integrity
+hashes also limits what code can use it.
+The Worker, relay and tests still have no package dependencies.
 
 ## Alternatives
 

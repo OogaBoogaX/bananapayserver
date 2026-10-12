@@ -61,9 +61,27 @@ export async function priceFromRest(fetch, timeoutMs) {
   try {
     const response = await fetch(PRICE_URL, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(timeoutMs) });
     if (!response.ok) return null;
-    return toCents(parse(await response.text())?.price);
+    return toCents(parse(await readText(response, MESSAGE_MAX))?.price);
   } catch {
     return null;
+  }
+}
+
+// The body as text, or null once it passes max bytes, without reading further.
+async function readText(response, max) {
+  if (Number(response.headers.get("Content-Length")) > max) return null;
+  const reader = response.body.getReader();
+  const bytes = new Uint8Array(max);
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return new TextDecoder().decode(bytes.subarray(0, size));
+    if (size + value.length > max) {
+      await reader.cancel();
+      return null;
+    }
+    bytes.set(value, size);
+    size += value.length;
   }
 }
 
