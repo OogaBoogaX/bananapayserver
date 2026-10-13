@@ -15,7 +15,7 @@ const event = (overrides = {}) => JSON.stringify({
 
 async function listen(t) {
   const settled = [];
-  const server = createWebhookServer({ secret: SECRET, storeId: "Store1234", onSettled: (id) => settled.push(id) });
+  const server = createWebhookServer({ secret: SECRET, storeId: "Store1234", onPayment: (id) => settled.push(id) });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -38,9 +38,17 @@ test("a wrong or missing signature is refused", async (t) => {
   assert.deepEqual(settled, []);
 });
 
+test("a payment, settled or not, sends the relay to look too, since a late one settles nothing", async (t) => {
+  const { settled, deliver } = await listen(t);
+  for (const type of ["InvoiceReceivedPayment", "InvoicePaymentSettled"]) {
+    assert.equal((await deliver(event({ type }))).status, 200);
+  }
+  assert.equal(settled.length, 2);
+});
+
 test("other events, other stores, other paths and methods do nothing", async (t) => {
   const { settled, deliver } = await listen(t);
-  assert.equal((await deliver(event({ type: "InvoiceReceivedPayment" }))).status, 200);
+  assert.equal((await deliver(event({ type: "InvoiceExpired" }))).status, 200);
   assert.equal((await deliver(event({ storeId: "OtherStore" }))).status, 200);
   assert.equal((await deliver("not json")).status, 200);
   assert.equal((await deliver(event(), { path: "/elsewhere" })).status, 404);

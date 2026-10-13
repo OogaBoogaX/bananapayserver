@@ -29,7 +29,7 @@ This applies to everyone, maintainers included, and changes only by a later deci
 
 ## Setup
 
-Nothing to install. There is no build and no dependencies.
+Nothing to install for the tests. There is no build and no runtime or test dependencies.
 
 ```bash
 git clone https://github.com/OogaBoogaX/bananapayserver.git
@@ -40,9 +40,11 @@ node --test
 Node 22 or newer. That is the whole toolchain for the tests; deploying the Worker needs
 Wrangler.
 
-**There is no `package.json` on purpose.** Nothing here depends on a package; see
-[decision 0009](docs/decisions/0009-toolchain.md). Adding one is a decision, not a
-convenience.
+**There is no root `package.json` on purpose.** The runtime and tests use no packages; see
+[decision 0009](docs/decisions/0009-toolchain.md). Only deployment tooling has a manifest and
+integrity lockfile, under `.github/deploy/`; install it with
+`npm ci --prefix .github/deploy --ignore-scripts`. See
+[decision 0018](docs/decisions/0018-staging-github-action.md).
 
 ## What to run
 

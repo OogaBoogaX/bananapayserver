@@ -65,6 +65,21 @@ test("a close from the server ends the line with its code and reason", async (t)
   assert.equal(client.open, false);
 });
 
+test("a server that sends a close but keeps the connection open is cut off", async (t) => {
+  const { server, client, connection } = await connected();
+  t.after(() => server.close());
+  // It never closes its end of the connection, and keeps talking.
+  connection.answerClose = false;
+  connection.socket.allowHalfOpen = true;
+  const closing = closeOf(client);
+  connection.close(1000);
+  await closing;
+  const talking = setInterval(() => connection.raw(frame(0x1, "still here")), 20);
+  t.after(() => clearInterval(talking));
+  const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("the connection is still open after 3 s")), 3_000).unref());
+  await Promise.race([once(connection, "close"), timeout]);
+});
+
 test("protocol violations close the line with the right code", async (t) => {
   const cases = [
     ["a message over the size limit", frame(0x1, "x".repeat(200)), 1009],

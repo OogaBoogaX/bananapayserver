@@ -1,0 +1,101 @@
+# A rehearsal of the staging stack on a workstation, on regtest, before it goes near the node's
+# machine. The same services and fences, with three changes: the chain is regtest, a payer node
+# pays the invoices, and the relay reaches a bananapayserver Worker running on the workstation.
+# Never run this on the node's machine. See docs/staging.md.
+#
+#   COMPOSE_FILE=compose.yaml:compose.rehearsal.yaml docker compose -p obl-staging up -d --build
+
+services:
+  bitcoind:
+    image: btcpayserver/bitcoin:31.1-1@sha256:b7fe7d0c6a0db6114d29921644bd1be8fc0efbc4abef04b1caf2242cc416c31d
+    environment:
+      BITCOIN_NETWORK: regtest
+      BITCOIN_EXTRA_ARGS: |-
+        rpcuser=${BITCOIN_RPC_USER:?}
+        rpcpassword=${BITCOIN_RPC_PASSWORD:?}
+        rpcport=43782
+        rpcbind=0.0.0.0
+        rpcallowip=${BACKEND_SUBNET:?}
+        port=39388
+        whitelist=${BACKEND_SUBNET:?}
+        disablewallet=1
+        zmqpubrawblock=tcp://0.0.0.0:28332
+        zmqpubrawtx=tcp://0.0.0.0:28333
+
+  nbxplorer:
+    environment:
+      NBXPLORER_NETWORK: regtest
+
+  lnd:
+    environment:
+      LND_ENVIRONMENT: regtest
+      LND_EXTRA_ARGS: |
+        restlisten=0.0.0.0:8080
+        rpclisten=127.0.0.1:10009
+        tlsextradomain=lnd
+        bitcoin.node=bitcoind
+        bitcoind.rpchost=bitcoind:43782
+        bitcoind.rpcuser=${BITCOIN_RPC_USER:?}
+        bitcoind.rpcpass=${BITCOIN_RPC_PASSWORD:?}
+        bitcoind.zmqpubrawblock=tcp://bitcoind:28332
+        bitcoind.zmqpubrawtx=tcp://bitcoind:28333
+        bitcoin.defaultchanconfs=1
+
+  btcpay:
+    environment:
+      BTCPAY_NETWORK: regtest
+
+  # Plays the donor.
+  payer:
+    image: btcpayserver/lnd:v0.21.3-beta-2@sha256:24d71a7679d0ce2f8c0599f0c295b3ae0f8d85a03422190758b550736306c0e6
+    restart: unless-stopped
+    environment:
+      LND_CHAIN: btc
+      LND_ENVIRONMENT: regtest
+      LND_REST_LISTEN_HOST: https://payer:8080
+      LND_EXTRA_ARGS: |
+        restlisten=0.0.0.0:8080
+        rpclisten=127.0.0.1:10009
+        tlsextradomain=payer
+        bitcoin.node=bitcoind
+        bitcoind.rpchost=bitcoind:43782
+        bitcoind.rpcuser=${BITCOIN_RPC_USER:?}
+        bitcoind.rpcpass=${BITCOIN_RPC_PASSWORD:?}
+        bitcoind.zmqpubrawblock=tcp://bitcoind:28332
+        bitcoind.zmqpubrawtx=tcp://bitcoind:28333
+        bitcoin.defaultchanconfs=1
+    networks: [backend]
+    volumes: ["payer:/data"]
+    depends_on: [bitcoind]
+
+  # The relay dials ws://localhost:8787/relay without Tor, and this passes it to the
+  # workstation's Worker, sharing the relay's network.
+  relay:
+    environment:
+      WORKER_URL: ws://localhost:8787/relay
+      DIRECT: "yes"
+    networks: [front, rehearsal]
+
+  worker:
+    image: obl-staging-relay
+    network_mode: service:relay
+    read_only: true
+    restart: unless-stopped
+    command:
+      - node
+      - -e
+      - >-
+        const net = require("node:net");
+        net.createServer((page) => {
+          const worker = net.connect(8787, "host.docker.internal");
+          page.pipe(worker).pipe(page);
+          page.on("error", () => worker.destroy());
+          worker.on("error", () => page.destroy());
+        }).listen(8787, "127.0.0.1");
+    depends_on: [relay]
+
+networks:
+  rehearsal: {}
+
+volumes:
+  payer:

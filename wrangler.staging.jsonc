@@ -2,7 +2,7 @@
 // whose relay runs on signet. Limits and secrets are deliberately not here: set them in the
 // deployment, never in this file. See docs/configuration.md.
 //
-// Cloudflare deploys this file on each push to staging's branch (decision 0015). By hand, set
+// The manual GitHub Action deploys this file from its selected branch (decision 0018). By hand, set
 // CLOUDFLARE_ACCOUNT_ID first; the account isn't named here. Local development
 // runs this config too, under the same name, so a local OBL Worker's binding finds it; .dev.vars
 // then overrides NETWORK for regtest.
