@@ -12,12 +12,31 @@ export class Relay {
     this.open = new Map(); // invoice id → sats: made here, not yet settled or expired
     this.unacked = new Map(); // invoice id → { sats, method }: settled, until the object acknowledges
     this.checking = new Set();
+    this.recheck = new Set(); // invoice ids a webhook asked about while they were being checked
+    this.sweeping = false;
+    this.minute = null;
+    this.asked = 0;
   }
 
   async handle(message) {
+    if (message.type === "ack") return this.ack(message);
+    if (!this.allow()) return this.line.send({ type: message.type, request: message.request, error: "unavailable" });
     if (message.type === "invoice") return this.invoice(message);
     if (message.type === "onchain") return this.onchain(message);
-    if (message.type === "ack") return this.ack(message);
+  }
+
+  // Invoices and on-chain addresses are work for the node, so the relay limits how many it makes
+  // in a minute, whatever the Worker asks. The Worker has limits of its own; this one holds if
+  // the Worker is ever wrong, or isn't ours.
+  allow() {
+    const minute = Math.floor(this.now() / 60_000);
+    if (this.minute !== minute) {
+      this.minute = minute;
+      this.asked = 0;
+    }
+    this.asked += 1;
+    if (this.asked === this.config.ratePerMinute + 1) this.log(`relay: asked for more than ${this.config.ratePerMinute} this minute; refusing the rest`);
+    return this.asked <= this.config.ratePerMinute;
   }
 
   // The relay checks the amount against its own cap, whatever the Worker allowed.
@@ -65,21 +84,38 @@ export class Relay {
     if (result === "unknown" || result === "rejected") this.log(`ack: the object ${result} invoice ${invoice}`);
   }
 
-  // Called for each webhook delivery and by the sweep. BTCPay's API decides, not the delivery.
+  // Called for each webhook delivery and by the sweep. BTCPay's API decides, not the delivery. A
+  // delivery that arrives while the same invoice is being checked is checked again afterwards:
+  // the check under way may have read the invoice before it settled.
   async check(invoiceId) {
-    if (!INVOICE_ID.test(invoiceId) || this.checking.has(invoiceId)) return;
+    if (!INVOICE_ID.test(invoiceId)) return;
+    if (this.checking.has(invoiceId)) return void this.recheck.add(invoiceId);
     this.checking.add(invoiceId);
+    try {
+      do {
+        this.recheck.delete(invoiceId);
+        await this.checkOnce(invoiceId);
+      } while (this.recheck.has(invoiceId));
+    } finally {
+      this.checking.delete(invoiceId);
+    }
+  }
+
+  async checkOnce(invoiceId) {
     try {
       const invoice = await this.btcpay.invoice(invoiceId);
       if (invoice?.metadata?.orderId !== ORDER_ID) {
         this.open.delete(invoiceId);
         return;
       }
-      if (invoice.status === "Expired" || invoice.status === "Invalid") {
+      // Paid in full after it expired, which only an on-chain payment can be. It counts, as the
+      // donor gave and the node has it, once BTCPay has settled every payment.
+      const late = invoice.status === "Expired" && invoice.additionalStatus === "PaidLate";
+      if ((invoice.status === "Expired" && !late) || invoice.status === "Invalid") {
         this.open.delete(invoiceId);
         return;
       }
-      if (invoice.status !== "Settled") return;
+      if (invoice.status !== "Settled" && !late) return;
       // The pile credits payments, so an invoice someone marked settled by hand doesn't count.
       if (invoice.additionalStatus === "Marked") {
         this.open.delete(invoiceId);
@@ -90,7 +126,14 @@ export class Relay {
         this.open.delete(invoiceId);
         return this.log(`check: invoice ${invoiceId} has an amount the relay can't read`);
       }
-      const method = this.paidWith(await this.btcpay.paymentMethods(invoiceId));
+      const methods = await this.btcpay.paymentMethods(invoiceId);
+      if (late && !allSettled(methods)) {
+        // Still confirming: the sweep looks again each minute until it settles.
+        this.open.set(invoiceId, sats);
+        return;
+      }
+      if (late) this.log(`check: invoice ${invoiceId} was paid after it expired; counting it`);
+      const method = this.paidWith(methods);
       // Settled with no payment to show for it shouldn't happen; the invoice stays open, so the
       // sweep asks again and the log keeps saying so.
       if (!method) return this.log(`check: invoice ${invoiceId} is settled, but BTCPay lists no payment for it`);
@@ -98,11 +141,12 @@ export class Relay {
       this.unacked.set(invoiceId, { sats, method });
       this.line.send({ type: "paid", invoice: invoiceId, sats, method });
     } catch (error) {
-      // An invoice BTCPay no longer knows will never settle.
+      // An invoice BTCPay no longer knows will never settle. Any other failure leaves it for the
+      // sweep to try again. That matters for an invoice paid after it expired: it had left the
+      // list, and the webhook that failed here was its only way back.
       if (error.status === 404) this.open.delete(invoiceId);
+      else if (!this.open.has(invoiceId)) this.open.set(invoiceId, null);
       this.log(`check: ${error.message}`);
-    } finally {
-      this.checking.delete(invoiceId);
     }
   }
 
@@ -114,9 +158,16 @@ export class Relay {
 
   // Once a minute: resends what's still unacknowledged, then catches any webhook that never
   // arrived. In that order, a notice found now isn't sent twice before its ack can arrive.
+  // A sweep still going when the next is due lets it finish instead of starting another.
   async sweep() {
-    this.flush();
-    for (const invoiceId of [...this.open.keys()]) await this.check(invoiceId);
+    if (this.sweeping) return;
+    this.sweeping = true;
+    try {
+      this.flush();
+      for (const invoiceId of [...this.open.keys()]) await this.check(invoiceId);
+    } finally {
+      this.sweeping = false;
+    }
   }
 
   // After a reboot the relay may start before BTCPay does, so finding its invoices again keeps
@@ -142,7 +193,8 @@ export class Relay {
     for (const invoice of await this.btcpay.recent(since)) {
       const sats = invoice.currency === "BTC" ? btcToSats(invoice.amount) : null;
       if (invoice.metadata?.orderId !== ORDER_ID || !sats || !INVOICE_ID.test(invoice.id)) continue;
-      if (["New", "Processing", "Settled"].includes(invoice.status) && invoice.additionalStatus !== "Marked") {
+      const late = invoice.status === "Expired" && invoice.additionalStatus === "PaidLate";
+      if ((["New", "Processing", "Settled"].includes(invoice.status) || late) && invoice.additionalStatus !== "Marked") {
         this.open.set(invoice.id, sats);
       }
     }
@@ -168,4 +220,10 @@ export class Relay {
     if (!found?.destination) throw new Error(`BTCPay gave no ${method} destination`);
     return found;
   }
+}
+
+// True when every payment BTCPay hasn't ruled invalid is settled, and there is one.
+function allSettled(methods) {
+  const payments = (methods ?? []).flatMap((m) => m.payments ?? []).filter((payment) => payment.status !== "Invalid");
+  return payments.length > 0 && payments.every((payment) => payment.status === "Settled");
 }

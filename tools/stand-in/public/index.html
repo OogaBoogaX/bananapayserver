@@ -20,18 +20,19 @@
 </head>
 <body>
 <h1>Donation stand-in</h1>
-<p>Stands in for the cave until OBL's real mode exists, using the page's API in
-<code>docs/protocol.md</code>. For regtest and signet only; see <code>docs/testing.md</code>.</p>
+<p>Stands in for OBL's page and Worker on one machine: its calls go to the local bananapayserver
+over a service binding, as OBL's do (<code>docs/protocol.md</code>). For regtest only; see
+<code>docs/testing.md</code>.</p>
 
-<label>API address <input id="api" value="http://localhost:8787"></label>
 <p>Donations are <strong id="status">connecting</strong>.
 The pile has <strong id="pile">?</strong> bananas.</p>
 
 <fieldset>
   <legend>Donate</legend>
-  <p><span id="who">Checking sign-in</span>
-    <a id="signin" href="#" hidden>Sign in with GitHub</a>
-    <button id="signout" type="button" hidden>Sign out</button></p>
+  <p>OBL's Worker takes the donor from its GitHub sign-in. Here, name one to test with, or leave
+    both empty to give anonymously.</p>
+  <label>GitHub id <input id="donor-id" inputmode="numeric" autocomplete="off"></label>
+  <label>GitHub username <input id="donor-login" maxlength="39" autocomplete="off"></label>
   <label><input id="anon" type="checkbox"> Give anonymously</label>
   <label>Sats <input id="sats" type="number" min="1" value="10000"></label>
   <label>Message <input id="message" maxlength="80" autocomplete="off"></label>
@@ -56,38 +57,25 @@ const seen = new Set();
 let request = null, invoiceId = null, lastId = null, socket = null, retryMs = 1000;
 let pile = null;
 
-const apiBase = () => $("api").value.trim().replace(/\/$/, "");
 const log = (line) => { $("log").textContent = `${new Date().toLocaleTimeString()}  ${line}\n${$("log").textContent}`; };
 const show = (text) => { $("result").textContent = text; };
 const count = (bananas) => bananas ? `${bananas.exact.toFixed(2)} bananas, ${bananas.rounded} rounded` : "no bananas: no price";
 
-// Credentials go with every call, so the sign-in cookie does.
+// The page calls its own origin, as OBL's page does. The test donor rides in two headers that
+// only this stand-in reads.
 async function call(method, path, body) {
   const started = performance.now();
+  const headers = { "Content-Type": "application/json" };
+  const id = $("donor-id").value.trim(), login = $("donor-login").value.trim();
+  if (id || login) Object.assign(headers, { "X-Test-Donor-Id": id, "X-Test-Donor-Login": login });
   try {
-    const response = await fetch(apiBase() + path, {
-      method,
-      credentials: "include",
-      headers: body === undefined ? {} : { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    const response = await fetch(path, { method, headers, body: JSON.stringify(body) });
     const data = response.status === 204 ? null : await response.json();
     return { status: response.status, data, ms: Math.round(performance.now() - started) };
   } catch (error) {
     return { status: 0, data: { error: error.message }, ms: Math.round(performance.now() - started) };
   }
 }
-
-async function checkSignIn() {
-  const { status, data } = await call("GET", "/auth/me");
-  const signedIn = status === 200;
-  $("who").textContent = signedIn ? `Donating as @${data.login}.` : status === 503 ? "Sign-in isn't set up here." : "Not signed in.";
-  $("signin").hidden = signedIn || status === 503;
-  $("signout").hidden = !signedIn;
-  $("signin").href = `${apiBase()}/auth/github?return=${encodeURIComponent(location.href)}`;
-}
-
-$("signout").addEventListener("click", async () => { await call("POST", "/auth/signout", ""); checkSignIn(); });
 
 $("ask").addEventListener("click", async () => {
   const body = { sats: Number($("sats").value), message: $("message").value, anon: $("anon").checked };
@@ -143,14 +131,14 @@ function showBoard(entries) {
 }
 
 function connect() {
-  const url = new URL(`${apiBase()}/donations/socket`);
+  const url = new URL("/donations/socket", location.href);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   if (lastId) url.searchParams.set("after", lastId);
   socket = new WebSocket(url);
   socket.addEventListener("open", () => { retryMs = 1000; });
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
-    if (message.type === "status") setStatus(message.open ? "open" : "closed", message.open);
+    if (message.type === "status") setStatus(`${message.open ? "open" : "closed"}, on ${message.network}`, message.open);
     if (message.type === "pile") pile = { ...message, received: Date.now() };
     if (message.type === "board") showBoard(message.entries);
     if (message.type !== "donation" || seen.has(message.donation.id)) return;
@@ -167,8 +155,6 @@ function connect() {
   });
 }
 
-$("api").addEventListener("change", () => { socket?.close(); checkSignIn(); });
-checkSignIn();
 connect();
 </script>
 </body>

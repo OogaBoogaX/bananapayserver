@@ -12,7 +12,16 @@ export const OPEN = 1;
 
 export function fakeStorage() {
   const db = new DatabaseSync(":memory:");
+  let alarm = null;
   return {
+    // The object's one alarm. Nothing fires it here: the tests do, the way the runtime would.
+    getAlarm: async () => alarm,
+    setAlarm: async (time) => {
+      alarm = Number(time);
+    },
+    deleteAlarm: async () => {
+      alarm = null;
+    },
     sql: {
       exec(query, ...bindings) {
         // Several statements at once, like the schema, run without results.
@@ -175,8 +184,10 @@ export const ENV = {
   MAX_SATS: "100000",
   RATE_PER_IP: "5",
   RATE_GLOBAL: "50",
+  SOCKETS_PER_IP: "5",
+  PRICE_JUMP_MAX: "2",
+  ONCHAIN_FEE_ALLOWANCE: "100000",
   NETWORK: "regtest",
-  ALLOWED_ORIGINS: "https://oogabooga.land",
   INVOICE_TIMEOUT_MS: "200",
 };
 

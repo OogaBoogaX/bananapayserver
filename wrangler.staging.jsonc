@@ -1,0 +1,38 @@
+// Staging: bananapayserver-staging, which OBL's staging Worker calls over a service binding, and
+// whose relay runs on signet. Limits and secrets are deliberately not here: set them in the
+// deployment, never in this file. See docs/configuration.md.
+//
+// The manual GitHub Action deploys this file from its selected branch (decision 0018). By hand, set
+// CLOUDFLARE_ACCOUNT_ID first; the account isn't named here. Local development
+// runs this config too, under the same name, so a local OBL Worker's binding finds it; .dev.vars
+// then overrides NETWORK for regtest.
+{
+	"name": "bananapayserver-staging",
+	"main": "worker/index.mjs",
+	"compatibility_date": "2026-09-30",
+	// The relay dials its workers.dev address. Pages never call it directly.
+	"workers_dev": true,
+	"preview_urls": false,
+	// The Worker's own log lines are kept, such as the price service's failures. Cloudflare's
+	// invocation logs are off: they would keep each request's headers, and so visitors'
+	// addresses and the relay's, for days.
+	"observability": { "enabled": true, "logs": { "invocation_logs": false } },
+	"durable_objects": {
+		"bindings": [{ "name": "DONATIONS", "class_name": "Donations" }]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Donations"] }],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "bananapayserver-staging",
+			// Set when the database is created; an id isn't a secret.
+			"database_id": "221116af-5484-4f4b-9f71-3c2289b15819",
+			"migrations_dir": "migrations"
+		}
+	],
+	"vars": {
+		// Invoices and addresses for any other network are refused, so staging can't take mainnet
+		// donations even if its relay is pointed at the wrong BTCPay.
+		"NETWORK": "signet"
+	}
+}

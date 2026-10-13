@@ -16,8 +16,8 @@ donating node's machine, a Cloudflare Worker with one Durable Object, and D1. Se
 
 It **runs no node, holds no funds, and never holds a credential that can spend from or control
 a node.** The most it ever holds is the relay's BTCPay key, which can only create and view
-invoices on one store. The Worker also runs GitHub sign-in, so it holds the GitHub app's secret
-and the key that signs sessions; neither can reach a node. Every rule below protects that
+invoices on one store. Donors sign in on OBL, whose Worker tells this one who is giving over a
+service binding, so no part here holds a sign-in secret either. Every rule below protects that
 boundary, or the people on either side of it.
 
 ## Ground rules
@@ -39,8 +39,9 @@ boundary, or the people on either side of it.
   channel's line, can expose its balance. Never join them, in a query, a reply or on a page.
   See "Never shown" in Foundry's
   [`docs/lightning-factory.md`](https://github.com/OogaBoogaX/lightningfoundry/blob/main/docs/lightning-factory.md#never-shown).
-- **Check at the boundaries:** browser input at the Worker, the relay's messages at the
-  Durable Object, and BTCPay's webhook at the relay. Inside them, trust the code.
+- **Check at the boundaries:** the calls OBL's Worker passes on, at the Worker; the relay's
+  messages at the Durable Object; and BTCPay's webhook at the relay. Inside them, trust the
+  code.
 - **BTCPay is the source of truth.** The records here are a feed that can be rebuilt from it,
   not a ledger.
 - **Donors don't wait.** The invoice path is judged by the time from picking an amount to

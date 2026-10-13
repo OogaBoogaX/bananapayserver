@@ -2,7 +2,7 @@
 // OBL's scenes are built on this exact shape. tests/obl-contract.test.mjs checks this copy
 // against a pinned snapshot of OBL's file; change both together or neither.
 
-export const HANDLE_MAX = 24;
+export const HANDLE_MAX = 39;
 export const MESSAGE_MAX = 80;
 
 export const sanitize = (text, max) =>
