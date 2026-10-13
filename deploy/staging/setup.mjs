@@ -84,7 +84,7 @@ try {
       secret: webhookSecret,
       enabled: true,
       automaticRedelivery: true,
-      authorizedEvents: { everything: false, specificEvents: ["InvoiceSettled"] },
+      authorizedEvents: { everything: false, specificEvents: ["InvoiceSettled", "InvoiceReceivedPayment", "InvoicePaymentSettled"] },
     },
   });
   const token = secret();
@@ -95,6 +95,9 @@ try {
   console.log(`BTCPAY_ADMIN_PASSWORD=${password}`);
   console.log(`RELAY_TOKEN_SHA256=${createHash("sha256").update(token).digest("hex")}`);
 } finally {
-  // The unrestricted key was for this setup only.
-  await api("DELETE", "/api-keys/current", { auth }).catch(() => {});
+  // The unrestricted key was for this setup only. If it can't go, someone has to remove it by
+  // hand, so say so.
+  await api("DELETE", "/api-keys/current", { auth }).catch((error) => {
+    console.error(`setup: couldn't delete setup's unrestricted BTCPay key (${error.message}); delete it in BTCPay's API keys`);
+  });
 }

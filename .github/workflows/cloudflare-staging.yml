@@ -13,6 +13,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     strategy:
       matrix:
         node: [22, 24]
@@ -36,6 +37,7 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     environment: staging
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -46,26 +48,30 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
+      # The logs are public. The account id and the Worker's address are secrets, so GitHub hides
+      # them, and the address's account subdomain is hidden too, wherever Wrangler prints it. The
+      # token isn't needed here; only Wrangler, below, gets it.
       - name: Check deployment settings
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          STAGING_WORKER_URL: ${{ vars.STAGING_WORKER_URL }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          STAGING_WORKER_URL: ${{ secrets.STAGING_WORKER_URL }}
         run: |
-          test -n "$CLOUDFLARE_API_TOKEN" || { echo 'Set the staging CLOUDFLARE_API_TOKEN secret.'; exit 1; }
-          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo 'Set the staging CLOUDFLARE_ACCOUNT_ID variable.'; exit 1; }
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo 'Set the staging CLOUDFLARE_ACCOUNT_ID secret.'; exit 1; }
+          test -n "$STAGING_WORKER_URL" || { echo 'Set the staging STAGING_WORKER_URL secret.'; exit 1; }
+          subdomain="${STAGING_WORKER_URL#https://bananapayserver-staging.}"
+          echo "::add-mask::${subdomain%%.workers.dev*}"
           node scripts/check-staging.mjs --config-only
       - name: Install the pinned deployment tool without install scripts
         run: npm ci --prefix .github/deploy --ignore-scripts --no-audit --no-fund
       - name: Apply staging migrations and deploy the tested commit
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_SEND_METRICS: 'false'
         run: |
           node .github/deploy/node_modules/wrangler/bin/wrangler.js d1 migrations apply bananapayserver-staging --remote -c wrangler.staging.jsonc
           node .github/deploy/node_modules/wrangler/bin/wrangler.js deploy -c wrangler.staging.jsonc --message "GitHub Actions: $GITHUB_SHA"
       - name: Check the public boundary
         env:
-          STAGING_WORKER_URL: ${{ vars.STAGING_WORKER_URL }}
+          STAGING_WORKER_URL: ${{ secrets.STAGING_WORKER_URL }}
         run: node scripts/check-staging.mjs
