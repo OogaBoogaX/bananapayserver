@@ -75,7 +75,10 @@ relay's protocol or to deployment need two maintainers.
 
 ## Testing
 
-There is no code yet. Once there is, tests run on every pull request.
+`node --test` runs every test, with Node 22 or newer and nothing to install, and CI runs them
+on every pull request. The Worker and its object run against stand-ins for the Cloudflare
+APIs in `tests/helpers/`, which can't catch the real runtime behaving differently; say so when
+a change depends on runtime behavior.
 
 New behavior needs a check. Run the tests covering what you touched before finishing, and say
 in the PR what you ran and what the result was. Do not claim a suite passed that you did not
@@ -87,9 +90,10 @@ injectable, so a check measures behavior rather than the host machine.
 The donation event, `{ id, sats, handle, message, at }`, and the `sanitize`, `HANDLE_MAX` and
 `MESSAGE_MAX` rules are copied from OBL's
 [`src/js/donations.js`](https://github.com/OogaBoogaX/oogaboogaland/blob/rock/src/js/donations.js).
-OBL's scenes are built on that exact shape, so a contract test keeps the copy in step, and the
-shape never changes here alone. Node feeds follow the delivery contract Foundry defines; it
-changes there, not here.
+OBL's scenes are built on that exact shape, so `tests/obl-contract.test.mjs` checks the copy
+against a pinned snapshot of OBL's file, and `scripts/obl-contract.mjs` says when OBL's file
+has moved on. The shape never changes here alone. Node feeds follow the delivery contract
+Foundry defines; it changes there, not here.
 
 ## Attribution
 

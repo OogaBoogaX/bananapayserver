@@ -29,10 +29,10 @@ means writing a new record.
 | [0006](0006-ooga-booga-license.md) | The Ooga Booga License | accepted |
 | [0007](0007-ai-assisted-commits.md) | Every commit is AI-assisted and names the model | accepted |
 | [0008](0008-limited-contributions.md) | Limited contributions | accepted |
+| [0009](0009-toolchain.md) | Plain JavaScript, no dependencies | proposed |
 
 ## Waiting for a record
 
-- The toolchain — see [`architecture.md`](../architecture.md#open-questions).
 - Where the API is served, and the Cloudflare account that serves it — see
   [`architecture.md`](../architecture.md#open-questions).
 - How pages get node feeds — see [`architecture.md`](../architecture.md#open-questions).
