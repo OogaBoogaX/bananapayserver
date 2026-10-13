@@ -17,9 +17,15 @@ export function readLimits(env) {
   const maxSats = positiveInt(env.MAX_SATS);
   const ratePerIp = positiveInt(env.RATE_PER_IP);
   const rateGlobal = positiveInt(env.RATE_GLOBAL);
+  const socketsPerIp = positiveInt(env.SOCKETS_PER_IP);
+  // How many times the last price a new one may be, or the last divided by, before it's taken
+  // for a fault; and how many sats an on-chain amount may exceed its invoice by.
+  const priceJumpMax = positiveInt(env.PRICE_JUMP_MAX);
+  const onchainFeeAllowance = wholeNumber(env.ONCHAIN_FEE_ALLOWANCE);
   const minSats = env.MIN_SATS === undefined ? 1 : positiveInt(env.MIN_SATS);
-  if (!maxSats || !ratePerIp || !rateGlobal || !minSats || minSats > maxSats) return null;
-  return { minSats, maxSats, ratePerIp, rateGlobal };
+  if (!maxSats || !ratePerIp || !rateGlobal || !socketsPerIp || !minSats || minSats > maxSats) return null;
+  if (!priceJumpMax || priceJumpMax < 2 || onchainFeeAllowance === null) return null;
+  return { minSats, maxSats, ratePerIp, rateGlobal, socketsPerIp, priceJumpMax, onchainFeeAllowance };
 }
 
 // Settings that are not limits. A missing or unknown network also closes donations.

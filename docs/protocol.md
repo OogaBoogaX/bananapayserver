@@ -120,8 +120,8 @@ network fee. Build the payment URI from these two. There is no BTCPay link.
 ### `GET /donations/socket?after=<invoice id>`
 
 A WebSocket. The page sends nothing on it; a page that does is closed with code 1008. When it
-connects, it receives the status, the pile and the leaderboard, then anything it missed. After
-that:
+connects, it receives the status, the pile, the leaderboard and the tally, then anything it
+missed. After that:
 
 - `{ "type": "status", "open": true, "network": "signet" }` whenever the relay's line opens or
   closes, so the page can say donations are closed before anyone tries. `network` is the
@@ -136,6 +136,34 @@ that:
 - `{ "type": "board", "entries": [{ "handle": "ooga-dev", "bananas": 300 }] }` after each
   signed-in donation that counts bananas: the top 20 by total bananas, rounded. Anonymous
   donations are never on it. If D1 can't be read, the board is skipped until the next one.
+- The tally, the donations board's figures, the same in every browser:
+
+  ```json
+  { "type": "tally", "count": 12, "sats": 120000, "bananas": 108.442, "last": 10000,
+    "hours": [[1791280800000, 10000, 9.012], [1791295200000, 10000, 9.004]],
+    "rate": { "usdPerBtc": 90000, "satsPerBanana": 1111, "at": 1791295200000, "stale": false } }
+  ```
+
+  - **`count`, `sats` and `bananas`** cover every donation recorded, all time, anonymous ones
+    and on-chain ones included. `bananas` is exact, the sum of what each donation counted.
+    One recorded without a price adds its sats and no bananas.
+  - **`last`** is the most recently recorded donation's sats, with no handle, message or time,
+    or null before the first.
+  - **`hours`** is the last seven days by UTC hour, the current hour included, as
+    `[hour's start in milliseconds, sats, bananas]`, listing only hours with donations. A
+    page works out its own "today" and week from them, and drops hours older than seven days
+    as its clock moves. In a time zone half an hour or 45 minutes off UTC, "today" can start
+    up to 45 minutes off.
+  - **`rate`** has the invoice reply's shape, from the last price the object has: null if it
+    never had one, and `stale` while the price service isn't answering.
+
+  It's sent after each donation that counts, and whenever the rate changes: after an
+  invoice's price lookup, or when the object checks the price. While pages are open, the
+  object checks every five minutes, so the rate is never much older than that; see
+  [decision 0017](decisions/0017-tally-and-fresh-rate.md). A tally never goes out twice
+  unchanged. A page that connects gets it at once, never held up for a price: an older one
+  is asked for afterwards, and pages hear if it changed. If D1 can't be read, the tally is
+  skipped, as the board is.
 
 `after` is the last donation id the page saw. On reconnecting, the object replays up to 50
 newer ones. Leave it out on a first visit. A donation recorded while a replay is on its way
@@ -146,8 +174,8 @@ who comes back keeps their history. Whether the leaderboard shows an account tha
 the page's choice.
 
 The object keeps its page sockets below Cloudflare's limit for one object, so the relay's
-line always has room. Past that, and past the visitor's rate limit, a new socket is refused
-with 429.
+line always has room. Past that, past the visitor's rate limit, or past the sockets one
+visitor may hold open at once, a new socket is refused with 429.
 
 ## The relay's line
 
@@ -213,6 +241,11 @@ What the relay does with it:
 - Each invoice is in BTC, carries `metadata.orderId` `bananapayserver`, and has lazy payment
   methods. The relay activates Lightning at once and on-chain only when the donor switches.
 - A payment counts once BTCPay's API, not the webhook, says the invoice is `Settled` and it
-  wasn't marked settled by hand.
+  wasn't marked settled by hand. An invoice paid in full after it expired, `Expired` with
+  `PaidLate`, which only an on-chain payment can be, counts too, once every payment on it is
+  settled.
+- The webhook sends the relay to look at an invoice when it settles and when it receives a
+  payment, since a late payment settles nothing.
 - Once a minute, the relay checks every open invoice of its own, which catches any webhook
-  that never arrived. After a restart, it finds its invoices from the last day again.
+  that never arrived. After a restart, it finds its invoices from the last day again, every
+  page of BTCPay's list, late-paid ones included.
