@@ -48,8 +48,8 @@ the node's machine.
 | **Relay** | the BTCPay key, the webhook secret, its credential for the line | Keeps the line open, asks BTCPay for invoices, takes BTCPay's webhook, reports payments |
 | **Worker** | the SHA-256 of the relay's credential | The front door: checks the relay's credential and every call OBL's Worker passes on, and takes the exporters' batches |
 | **OBL's Worker** (OBL's, not this repository's) | its GitHub app's secret and its sessions | Serves the page, signs donors in, and passes donation calls on with who is giving and from where |
-| **Durable Object** | pending requests, until paid or expired; bitcoin's last price; the pile | Holds the relay's line and every page's socket, matches payments to requests, pushes donations, the pile and the leaderboard |
-| **D1** | donation records with their banana counts, each signed-in donor's total, feed history | Keeps what the object replays when a page reconnects; a feed, not a ledger |
+| **Durable Object** | pending requests, until paid or expired; bitcoin's last price; the pile | Holds the relay's line and every page's socket, matches payments to requests, pushes donations, the pile, the leaderboard and the tally |
+| **D1** | donation records with their banana counts, each signed-in donor's total, the tally, feed history | Keeps what the object replays when a page reconnects; a feed, not a ledger |
 
 Nothing in that table can spend from a node, and nothing in it can reach one.
 
@@ -112,11 +112,12 @@ pull against each other, which is why its trial measures invoice times; see
    OBL's rules, and calls the Durable Object.
 3. **Durable Object.** Applies the rate limits, per visitor and overall, because it is the one
    place every request reaches. Page sockets have a budget of their own, so a crowd of page
-   loads can't close donations. A visitor's address stays in memory for a minute at most and
-   is never stored. It stores who gave it, the message and the amount under a new request id,
-   in its own storage, until the invoice is paid or expires. It sends `{ request id, sats }`
-   down the relay's line and keeps the page's request open, and meanwhile works out the
-   bananas at bitcoin's current price.
+   loads can't close donations, and a visitor can hold only a few open at once. A visitor's
+   address is never stored. What the object keeps, for a minute's rate limits and for an open
+   socket, is a 16-bit hash of it, shared by tens of thousands of addresses. It stores who gave
+   it, the message and the amount under a new request id, in its own storage, until the invoice
+   is paid or expires. It sends `{ request id, sats }` down the relay's line and keeps the
+   page's request open, and meanwhile works out the bananas at bitcoin's current price.
 4. **Relay.** Checks the amount against its own cap, asks BTCPay on the machine for the
    invoice, and sends `{ request id, invoice }` up the line. BTCPay makes the Lightning invoice
    first, and an on-chain address only if the donor switches to on-chain.
@@ -172,9 +173,10 @@ account that is gone is the page's choice. See
 **What it counts for** is set when the invoice is made: one banana is a dollar's worth of
 bitcoin. For each invoice, the object asks 2140data's price service for bitcoin's price: its
 REST API first, then its socket, which sends the price as soon as it connects. If neither
-answers, the invoice uses the last price, marked stale so the page can show an alert. The
-price is locked into the invoice, and the donor is shown the rate and both counts, exact and
-rounded. The donation records its sats, the price and when it was fetched, and its bananas in
+answers, or the price is further from the last one, within a day of it, than the deployment
+allows, the invoice uses the last price, marked stale so the page can show an alert. The price
+is locked into the invoice, and the donor is shown the rate and both counts, exact and rounded.
+The donation records its sats, the price and when it was fetched, and its bananas in
 thousandths, so any count can be worked out again. See
 [decision 0011](decisions/0011-bananas-in-dollars.md) and
 [decision 0013](decisions/0013-price-from-2140data.md).
@@ -194,8 +196,15 @@ bananas, and a trigger adds to it only when a donation is actually recorded. Ano
 donations count toward the pile but never appear on the board. Both are pushed to every page
 when they change.
 
-Neither belongs along a production line in the Lightning cave. Banana counts follow donation
-amounts closely, and joined to a line they could expose its balance.
+**The tally** is the donations board's figures: every donation recorded, all time, and the
+last seven days by the hour, with the rate the kiosk quotes. D1 keeps it with a trigger, like
+the leaderboard's totals, so it counts each donation once and nothing sums the donations to
+show it. The object pushes it after each donation and whenever the rate changes, and its alarm
+checks the price every five minutes while pages are open. See
+[decision 0017](decisions/0017-tally-and-fresh-rate.md).
+
+None of them belongs along a production line in the Lightning cave. Banana counts follow
+donation amounts closely, and joined to a line they could expose its balance.
 
 ## Node event feeds
 
@@ -330,16 +339,16 @@ The interfaces between them are in [`protocol.md`](protocol.md), and every setti
 
 Not settled yet. Each gets a decision record when it is.
 
-- **Where the production relay dials.** Staging's relay dials its Worker's `workers.dev`
-  address. Production's could dial a name on `oogabooga.land`, if that zone's Bot Fight Mode
-  is off: it applies to the whole zone, can't exempt a path, and would challenge the relay's
-  Tor connections. Otherwise production uses `workers.dev` too.
-- **The Cloudflare account and the deploy rights.** A service binding needs both Workers in
-  one account, so this Worker goes in the account OBL's Workers use. It should belong to the
+- **The deploy rights.** Both Workers are in the account OBL's Workers use, and production's
+  relay dials its Worker's `workers.dev` address; see
+  [decision 0019](decisions/0019-production-relay-address.md). The account should belong to the
   team, jointly, with more than one admin. Whoever can deploy there can change this Worker,
-  and OBL's CI deploys with an account-wide token.
+  and OBL's CI deploys with an account-wide token. Staging's manual GitHub Action holds a
+  deployment token too; [decision 0018](decisions/0018-staging-github-action.md) records its scope.
 - **How pages get node feeds.** Foundry's docs say pages poll once a minute. With the object's
   sockets, pushing them is cheap too.
 
-The toolchain was on this list until the code started; it is proposed in
-[decision 0009](decisions/0009-toolchain.md).
+The toolchain, where the production relay dials and the release process were on this list;
+see decisions [0009](decisions/0009-toolchain.md),
+[0019](decisions/0019-production-relay-address.md) and
+[0020](decisions/0020-staging-then-production.md).

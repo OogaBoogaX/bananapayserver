@@ -1,7 +1,7 @@
 # 0013. Bitcoin's price comes from 2140data's service
 
 **Status:** accepted, 2026-10-02. Supersedes where [0011](0011-bananas-in-dollars.md) gets the
-price.
+price. [0017](0017-tally-and-fresh-rate.md) adds a price check while pages are open.
 
 ## Decision
 

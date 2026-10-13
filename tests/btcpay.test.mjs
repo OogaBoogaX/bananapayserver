@@ -36,7 +36,7 @@ test("an invoice is asked for in BTC, tagged as the relay's, with lazy payment m
 });
 
 test("the other calls use the store-scoped paths", async () => {
-  const { btcpay, requests } = client(() => new Response(""));
+  const { btcpay, requests } = client((url) => new Response(String(url).includes("/invoices?") ? "[]" : ""));
   await btcpay.activate("Inv0ice1234", "BTC-CHAIN");
   await btcpay.paymentMethods("Inv0ice1234");
   await btcpay.invoice("Inv0ice1234");
@@ -46,8 +46,34 @@ test("the other calls use the store-scoped paths", async () => {
     `POST ${store}/invoices/Inv0ice1234/payment-methods/BTC-CHAIN/activate`,
     `GET ${store}/invoices/Inv0ice1234/payment-methods`,
     `GET ${store}/invoices/Inv0ice1234`,
-    `GET ${store}/invoices?orderId=${ORDER_ID}&startDate=1790000000&take=500&status=New&status=Processing&status=Settled`,
+    `GET ${store}/invoices?orderId=${ORDER_ID}&startDate=1790000000&skip=0&take=500&status=New&status=Processing&status=Settled&status=Expired`,
   ]);
+});
+
+test("finding the relay's invoices again reads every page of BTCPay's list", async () => {
+  const all = Array.from({ length: 501 }, (_, i) => ({ id: `Inv${String(i).padStart(8, "0")}` }));
+  const { btcpay, requests } = client((url) => {
+    const query = new URL(url).searchParams;
+    const skip = Number(query.get("skip"));
+    return Response.json(all.slice(skip, skip + Number(query.get("take"))));
+  });
+  assert.equal((await btcpay.recent(1_790_000_000)).length, 501);
+  assert.deepEqual(requests.map((r) => new URL(r.url).searchParams.get("skip")), ["0", "500"]);
+});
+
+test("a path in BTCPay's address is kept", async () => {
+  const requests = [];
+  const btcpay = new BTCPay({
+    url: "https://node.internal/btcpay/",
+    storeId: "Store1234",
+    apiKey: "synthetic-api-key",
+    fetch: async (url) => {
+      requests.push(String(url));
+      return Response.json({});
+    },
+  });
+  await btcpay.invoice("Inv0ice1234");
+  assert.deepEqual(requests, ["https://node.internal/btcpay/api/v1/stores/Store1234/invoices/Inv0ice1234"]);
 });
 
 test("errors name the call but never BTCPay's address, and ids are checked before any call", async () => {
@@ -58,6 +84,17 @@ test("errors name the call but never BTCPay's address, and ids are checked befor
   });
   assert.throws(() => btcpay.invoice("../../server/info"), /not a BTCPay id/);
   assert.equal(requests.length, 1);
+});
+
+test("no call follows a redirect off the machine's own network", async () => {
+  const seen = [];
+  const { btcpay } = client((_, init) => {
+    seen.push(init.redirect);
+    return new Response(JSON.stringify({ id: "Inv0ice1234" }));
+  });
+  await btcpay.createInvoice({ sats: 1000, minutes: 15, methods: ["BTC-LN"] });
+  await btcpay.invoice("Inv0ice1234");
+  assert.deepEqual(seen, ["error", "error"]);
 });
 
 test("sats and BTC convert exactly, and anything finer than a sat is refused", () => {

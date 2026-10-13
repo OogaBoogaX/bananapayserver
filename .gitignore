@@ -24,3 +24,6 @@ channel.backup
 
 # Logs
 *.log
+
+# Deployment tooling; the Worker, relay and tests still have no dependencies.
+.github/deploy/node_modules/

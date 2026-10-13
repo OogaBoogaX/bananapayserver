@@ -9,7 +9,7 @@ is the relay's BTCPay key, which can only create and view invoices on one store.
 
 ## Status
 
-**Pre-alpha. Nothing here is deployed.**
+**Pre-alpha. The signet staging Worker is deployed.**
 
 The design came first, so the boundaries were decided rather than discovered: the
 architecture, the rules it keeps, and the decisions behind it. The donation path now follows
@@ -60,6 +60,7 @@ public events to the same Worker. Nothing ever connects in to a node.
 | [`docs/protocol.md`](docs/protocol.md) | The page's calls, the relay's line, and what the relay needs from BTCPay |
 | [`docs/configuration.md`](docs/configuration.md) | Every setting, which ones are limits and secrets, and what the relay's container needs |
 | [`docs/cloudflare.md`](docs/cloudflare.md) | What has to be done on Cloudflare, for staging and production, on both sides of the binding |
+| [`docs/staging.md`](docs/staging.md) | The signet staging stack beside a mainnet node: its fence, how to run it, and how to rehearse it |
 | [`docs/testing.md`](docs/testing.md) | How to test end to end, from a payment on regtest to the cave |
 | [`docs/decisions/`](docs/decisions/) | Choices that are expensive to revisit, and why they were made |
 

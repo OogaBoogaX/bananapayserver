@@ -51,6 +51,13 @@ export async function world(overrides = {}, platformOptions = {}) {
     return w.ctx.getWebSockets("page").at(-1);
   };
   w.relaySays = (relay, message) => w.object.webSocketMessage(relay, JSON.stringify(message));
+  // The runtime clears a due alarm, then runs the object's alarm(). Work the object left in the
+  // background finishes before this returns.
+  w.fireAlarm = async () => {
+    await w.ctx.storage.deleteAlarm();
+    await w.object.alarm();
+    await w.ctx.settle();
+  };
   // Asks for an invoice and answers it on the relay's behalf.
   w.invoice = async (relay, body, answer = (request) => ({ id: INVOICE, bolt11: BOLT11, expires: EXPIRES }), options = {}) => {
     const before = relay.sent.length;

@@ -5,11 +5,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ORDER_ID } from "../relay/btcpay.mjs";
 import { Relay } from "../relay/relay.mjs";
+import { until } from "./helpers/cloudflare.mjs";
 import { ADDRESS, BOLT11, INVOICE, REQUEST } from "./helpers/values.mjs";
 
 const CONFIG = {
   minSats: 1,
   maxSats: 50_000,
+  ratePerMinute: 100,
   invoiceMinutes: 15,
   methods: { lightning: "BTC-LN", onchain: "BTC-CHAIN" },
 };
@@ -48,12 +50,13 @@ function fakeBtcpay(overrides = {}) {
   return btcpay;
 }
 
-function setup(overrides) {
+function setup(overrides, config = {}) {
   const line = { sent: [], send(message) { this.sent.push(message); return true; } };
   const btcpay = fakeBtcpay(overrides);
   const logs = [];
-  const relay = new Relay({ btcpay, line, config: CONFIG, now: () => 1_790_000_000_000, log: (m) => logs.push(m) });
-  return { relay, line, btcpay, logs };
+  const clock = { now: 1_790_000_000_000 };
+  const relay = new Relay({ btcpay, line, config: { ...CONFIG, ...config }, now: () => clock.now, log: (m) => logs.push(m) });
+  return { relay, line, btcpay, logs, clock };
 }
 
 test("an invoice is made with lazy methods, Lightning activated first", async () => {
@@ -73,6 +76,24 @@ test("the relay's own cap holds whatever the Worker allowed", async () => {
   await relay.handle({ type: "invoice", request: REQUEST, sats: 50_001 });
   assert.deepEqual(line.sent, [{ type: "invoice", request: REQUEST, error: "cap" }]);
   assert.deepEqual(btcpay.calls, []);
+});
+
+test("the relay makes only so many invoices and addresses a minute, whatever the Worker asks", async () => {
+  const { relay, line, btcpay, logs, clock } = setup({}, { ratePerMinute: 2 });
+  await relay.handle({ type: "invoice", request: REQUEST, sats: 1000 });
+  await relay.handle({ type: "onchain", request: REQUEST, invoice: INVOICE });
+  btcpay.calls.length = 0;
+  await relay.handle({ type: "invoice", request: REQUEST, sats: 1000 });
+  await relay.handle({ type: "onchain", request: REQUEST, invoice: INVOICE });
+  assert.deepEqual(btcpay.calls, [], "nothing more reaches BTCPay this minute");
+  assert.deepEqual(line.sent.slice(-2), [
+    { type: "invoice", request: REQUEST, error: "unavailable" },
+    { type: "onchain", request: REQUEST, error: "unavailable" },
+  ]);
+  assert.equal(logs.filter((m) => m.startsWith("relay: asked for more than 2")).length, 1, "said once, not for every refusal");
+  clock.now += 60_000;
+  await relay.handle({ type: "invoice", request: REQUEST, sats: 1000 });
+  assert.equal(line.sent.at(-1).invoice?.id, INVOICE, "a new minute, a new allowance");
 });
 
 test("a BTCPay failure answers unavailable rather than leaving the page waiting", async () => {
@@ -128,6 +149,94 @@ test("only BTCPay's API decides what counts as paid", async () => {
   const { relay, btcpay } = setup();
   await relay.check("../../admin");
   assert.deepEqual(btcpay.calls, [], "an id that isn't one never reaches the API");
+});
+
+test("a webhook that arrives while the same invoice is being checked is checked after it", async () => {
+  let release = null;
+  let reads = 0;
+  const { relay, line, btcpay } = setup({
+    invoice: async (id) => {
+      reads += 1;
+      if (reads > 1) return btcpay.invoices.get(id);
+      // The sweep's read: BTCPay still says processing, and answers slowly.
+      await new Promise((resolve) => { release = resolve; });
+      return { ...btcpay.invoices.get(id), status: "Processing" };
+    },
+  });
+  relay.open.set(INVOICE, 1000);
+  const sweeping = relay.check(INVOICE);
+  await until(() => release);
+  await relay.check(INVOICE); // the webhook, as the invoice settles
+  release();
+  await sweeping;
+  assert.equal(reads, 2);
+  assert.deepEqual(line.sent, [{ type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" }]);
+});
+
+test("a sweep still going when the next is due lets it finish instead of starting another", async () => {
+  let release = null;
+  const reads = [];
+  const { relay } = setup({
+    invoice: async (id) => {
+      reads.push(id);
+      if (reads.length === 1) await new Promise((resolve) => { release = resolve; });
+      return null;
+    },
+  });
+  relay.open.set("Slow0000001", 500).set("Next0000001", 500);
+  const first = relay.sweep();
+  await until(() => release);
+  await relay.sweep();
+  release();
+  await first;
+  assert.deepEqual(reads, ["Slow0000001", "Next0000001"]);
+});
+
+test("an invoice paid in full after it expired counts, once BTCPay settles the payment", async () => {
+  const { relay, line, btcpay, logs } = setup();
+  btcpay.invoices.set(INVOICE, { ...btcpay.invoices.get(INVOICE), status: "Expired", additionalStatus: "PaidLate" });
+  btcpay.payments = { "BTC-LN": [], "BTC-CHAIN": [{ status: "Processing" }] };
+  await relay.check(INVOICE);
+  assert.deepEqual(line.sent, [], "not while it's still confirming");
+  assert.equal(relay.open.get(INVOICE), 1000, "the sweep keeps looking");
+  btcpay.payments["BTC-CHAIN"] = [{ status: "Settled" }];
+  await relay.sweep();
+  assert.deepEqual(line.sent, [{ type: "paid", invoice: INVOICE, sats: 1000, method: "onchain" }]);
+  assert.ok(logs.some((m) => m.includes("paid after it expired")));
+
+  const other = setup();
+  other.btcpay.invoices.set(INVOICE, { ...other.btcpay.invoices.get(INVOICE), status: "Expired", additionalStatus: "PaidPartial" });
+  await other.relay.check(INVOICE);
+  assert.deepEqual(other.line.sent, [], "paid in part isn't paid");
+});
+
+test("a webhook's check that fails on BTCPay's side is tried again by the sweep", async () => {
+  for (const failing of ["invoice", "paymentMethods"]) {
+    let down = true;
+    const { relay, line, btcpay } = setup();
+    const real = btcpay[failing];
+    btcpay[failing] = async (id) => {
+      if (down) throw Object.assign(new Error(`BTCPay answered 503 to ${failing}`), { status: 503 });
+      return real(id);
+    };
+    // Expired, so off the sweep's list, then paid late: the webhook is its only way back.
+    btcpay.invoices.set(INVOICE, { ...btcpay.invoices.get(INVOICE), status: "Expired", additionalStatus: "PaidLate" });
+    btcpay.payments = { "BTC-LN": [], "BTC-CHAIN": [{ status: "Settled" }] };
+    await relay.check(INVOICE);
+    await relay.check(INVOICE);
+    assert.deepEqual(line.sent, [], failing);
+    down = false;
+    await relay.sweep();
+    assert.deepEqual(line.sent, [{ type: "paid", invoice: INVOICE, sats: 1000, method: "onchain" }], failing);
+  }
+});
+
+test("after a restart the relay finds an invoice paid late too", async () => {
+  const { relay, btcpay } = setup();
+  btcpay.invoices.set(INVOICE, { ...btcpay.invoices.get(INVOICE), status: "Expired", additionalStatus: "PaidLate" });
+  btcpay.invoices.set("Expired0001", { id: "Expired0001", status: "Expired", amount: "0.00000500", currency: "BTC", metadata: { orderId: ORDER_ID } });
+  await relay.load();
+  assert.deepEqual([...relay.open.keys()], [INVOICE]);
 });
 
 test("the sweep drops expired invoices, keeps waiting ones, and resends notices", async () => {
