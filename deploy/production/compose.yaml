@@ -1,0 +1,54 @@
+# bananapayserver's production relay. It runs beside the BTCPay that serves the donations
+# store, on the same machine and on BTCPay's Docker network, and never touches LND. It dials
+# bananapayserver-production over Tor, through the Tor proxy BTCPay already uses, and takes
+# BTCPay's webhook on that network. It publishes no port and holds only BTCPay's invoice-only key.
+#
+#   docker compose -p obl-relay up -d --build
+#
+# This is the launch setup. Hardening to follow is in docs/production.md.
+
+name: obl-relay
+
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: relay/Dockerfile
+    image: obl-relay
+    pull_policy: build
+    # Production comes back by itself after a crash or a reboot.
+    restart: unless-stopped
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    sysctls:
+      net.ipv6.conf.all.disable_ipv6: 1
+      net.ipv6.conf.default.disable_ipv6: 1
+    # Empty until filled in; the relay refuses to start without them.
+    environment:
+      WORKER_URL: ${WORKER_URL:-}
+      RELAY_TOKEN: ${RELAY_TOKEN:-}
+      TOR_SOCKS: ${TOR_SOCKS:-}
+      BTCPAY_URL: ${BTCPAY_URL:-}
+      BTCPAY_STORE_ID: ${BTCPAY_STORE_ID:-}
+      BTCPAY_API_KEY: ${BTCPAY_API_KEY:-}
+      BTCPAY_WEBHOOK_SECRET: ${BTCPAY_WEBHOOK_SECRET:-}
+      MAX_SATS: ${MAX_SATS:-}
+      RATE_PER_MINUTE: ${RATE_PER_MINUTE:-}
+      WEBHOOK_LISTEN: 0.0.0.0:8080
+    # BTCPay's webhook reaches the relay as http://obl-relay:8080/btcpay.
+    networks:
+      btcpay:
+        aliases: [obl-relay]
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: "3" }
+
+networks:
+  # BTCPay's own network, which the relay joins rather than creates.
+  btcpay:
+    name: ${BTCPAY_NETWORK:?}
+    external: true

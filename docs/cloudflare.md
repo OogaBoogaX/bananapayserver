@@ -189,7 +189,9 @@ Only what has passed staging, and only from `main`; see
    except step 8: production has no Action and no deploy token, and a maintainer deploys it
    by hand from `main`. It has its own secrets: production limits and a separate relay
    token. Nothing from staging is reused.
-4. **OBL's side,** the binding to `bananapayserver-production` in OBL's production config, and
+4. **The relay,** beside the donations store's BTCPay, set up as
+   [`production.md`](production.md) describes. Its operator hands over only the token's hash.
+5. **OBL's side,** the binding to `bananapayserver-production` in OBL's production config, and
    OBL's production deploy, which is run by hand. That deploy is the launch.
 
 The production D1 database is recorded in `wrangler.production.jsonc`. Reuse it, apply all
