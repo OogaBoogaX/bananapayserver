@@ -1,16 +1,27 @@
 // Stand-ins for the parts of the Workers runtime the Worker and its object use: the object's
-// SQL storage and D1 (both SQLite, here through node:sqlite), hibernatable sockets, and the
-// object's namespace. Enough to run front.mjs and object.mjs under node --test.
+// SQL storage and D1 (both SQLite, here through node:sqlite), hibernatable sockets, the
+// object's namespace, and 2140data's price service. Enough to run front.mjs and object.mjs
+// under node --test.
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { DonationsObject } from "../../worker/object.mjs";
+import { PRICE_SOCKET, PRICE_URL } from "../../worker/price.mjs";
 
 export const OPEN = 1;
 
 export function fakeStorage() {
   const db = new DatabaseSync(":memory:");
+  let alarm = null;
   return {
+    // The object's one alarm. Nothing fires it here: the tests do, the way the runtime would.
+    getAlarm: async () => alarm,
+    setAlarm: async (time) => {
+      alarm = Number(time);
+    },
+    deleteAlarm: async () => {
+      alarm = null;
+    },
     sql: {
       exec(query, ...bindings) {
         // Several statements at once, like the schema, run without results.
@@ -20,6 +31,17 @@ export function fakeStorage() {
         }
         return cursor(db.prepare(query).all(...bindings));
       },
+    },
+    transactionSync(callback) {
+      db.exec("BEGIN");
+      try {
+        const result = callback();
+        db.exec("COMMIT");
+        return result;
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
     },
   };
 }
@@ -34,9 +56,13 @@ function cursor(rows) {
   };
 }
 
+// D1 with every migration applied, in order, the way Wrangler applies them.
 export function fakeD1() {
   const db = new DatabaseSync(":memory:");
-  db.exec(readFileSync(new URL("../../migrations/0001_donations.sql", import.meta.url), "utf8"));
+  const migrations = new URL("../../migrations/", import.meta.url);
+  for (const file of readdirSync(migrations).filter((f) => f.endsWith(".sql")).sort()) {
+    db.exec(readFileSync(new URL(file, migrations), "utf8"));
+  }
   const statement = (sql, args = []) => ({
     bind: (...bound) => statement(sql, bound),
     run: async () => {
@@ -82,8 +108,14 @@ export class FakeSocket {
 
 export function fakeCtx() {
   const sockets = [];
+  const background = [];
   return {
     storage: fakeStorage(),
+    waitUntil(promise) {
+      background.push(promise);
+    },
+    // Lets the tests wait for work the object started in the background.
+    settle: () => Promise.all(background.splice(0)),
     acceptWebSocket(ws, tags = []) {
       ws.readyState = OPEN;
       sockets.push({ ws, tags });
@@ -94,11 +126,36 @@ export function fakeCtx() {
   };
 }
 
-// Deterministic time and ids, and plain objects where the runtime would make a 101 response.
-export function fakePlatform({ start = Date.UTC(2026, 9, 1, 12) } = {}) {
+// 2140data's price socket. messages are what it sends once it connects, in order; null closes
+// it instead, and an empty list leaves it quiet.
+export class FakePriceSocket extends EventTarget {
+  constructor(messages) {
+    super();
+    this.closed = false;
+    queueMicrotask(() => {
+      if (messages === null) return this.dispatchEvent(new Event("close"));
+      for (const data of messages) {
+        if (!this.closed) this.dispatchEvent(Object.assign(new Event("message"), { data }));
+      }
+    });
+  }
+
+  close() {
+    this.closed = true;
+  }
+}
+
+// One of the socket's messages: the combined price, and each exchange's.
+export const priceMessage = (dollars) =>
+  JSON.stringify({ weightedPrice: String(dollars), prices: { bitstamp: dollars, kraken: dollars } });
+
+// Deterministic time and ids, plain objects where the runtime would make a 101 response, and a
+// price service whose socket and REST API both say $100,000 unless a test says otherwise. A
+// price of null makes that way fail.
+export function fakePlatform({ start = Date.UTC(2026, 9, 1, 12), prices = {} } = {}) {
   let time = start;
   let counter = 0;
-  return {
+  const platform = {
     pair: () => [new FakeSocket(), new FakeSocket()],
     upgrade: (client) => ({ status: 101, webSocket: client }),
     now: () => time,
@@ -106,22 +163,38 @@ export function fakePlatform({ start = Date.UTC(2026, 9, 1, 12) } = {}) {
     advance: (ms) => {
       time += ms;
     },
+    prices: { socket: 100_000, rest: 100_000, ...prices },
+    fetched: [],
+    fetch: async (url) => {
+      platform.fetched.push(String(url));
+      const { rest } = platform.prices;
+      if (String(url) !== PRICE_URL || rest === null) return new Response("unavailable", { status: 503 });
+      return Response.json({ price: String(rest) });
+    },
+    socket: (url) => {
+      platform.fetched.push(url);
+      const { socket } = platform.prices;
+      return new FakePriceSocket(url !== PRICE_SOCKET || socket === null ? null : [priceMessage(socket)]);
+    },
   };
+  return platform;
 }
 
 export const ENV = {
   MAX_SATS: "100000",
   RATE_PER_IP: "5",
   RATE_GLOBAL: "50",
+  SOCKETS_PER_IP: "5",
+  PRICE_JUMP_MAX: "2",
+  ONCHAIN_FEE_ALLOWANCE: "100000",
   NETWORK: "regtest",
-  ALLOWED_ORIGINS: "https://oogabooga.land",
   INVOICE_TIMEOUT_MS: "200",
 };
 
 // The object behind a namespace binding, the way env.DONATIONS looks to the Worker.
-export function fakeWorld(overrides = {}) {
+export function fakeWorld(overrides = {}, platformOptions = {}) {
   const ctx = fakeCtx();
-  const platform = fakePlatform();
+  const platform = fakePlatform(platformOptions);
   const env = { ...ENV, DB: fakeD1(), ...overrides };
   const object = new DonationsObject(ctx, env, platform);
   env.DONATIONS = {

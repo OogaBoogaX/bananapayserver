@@ -3,6 +3,9 @@
 
 const HOST_PORT = /^([A-Za-z0-9.-]{1,253}):(\d{1,5})$/;
 const TOKEN = /^[A-Za-z0-9_-]{32,128}$/;
+// BTCPay's API keys are hex. Anything with a space or a line break would end up in an error
+// message, and so in the log, the first time it went into a header.
+const API_KEY = /^[A-Za-z0-9_-]{16,128}$/;
 const LOCAL = ["localhost", "127.0.0.1", "[::1]"];
 
 export function readConfig(env) {
@@ -36,6 +39,7 @@ export function readConfig(env) {
   const minSats = count("MIN_SATS", 1);
   const maxSats = count("MAX_SATS");
   if (minSats && maxSats && minSats > maxSats) problems.push("MIN_SATS");
+  const ratePerMinute = count("RATE_PER_MINUTE");
 
   const config = {
     workerUrl,
@@ -50,6 +54,7 @@ export function readConfig(env) {
     listen: hostPort("WEBHOOK_LISTEN", "0.0.0.0:8080"),
     minSats,
     maxSats,
+    ratePerMinute,
     invoiceMinutes: count("INVOICE_MINUTES", 15),
     methods: {
       lightning: text("LIGHTNING_METHOD", "BTC-LN"),
@@ -57,6 +62,7 @@ export function readConfig(env) {
     },
   };
   if (config.btcpay.storeId && !/^[A-Za-z0-9]{1,64}$/.test(config.btcpay.storeId)) problems.push("BTCPAY_STORE_ID");
+  if (config.btcpay.apiKey && !API_KEY.test(config.btcpay.apiKey)) problems.push("BTCPAY_API_KEY");
   if (problems.length) throw new Error(`missing or invalid settings: ${[...new Set(problems)].join(", ")}`);
   return config;
 }

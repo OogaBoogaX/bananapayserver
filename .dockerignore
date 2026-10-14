@@ -1,0 +1,5 @@
+# The relay's image is built from the whole repository but takes only its own code, so nothing
+# else reaches the build, local .env files least of all.
+*
+!shared/
+!relay/*.mjs

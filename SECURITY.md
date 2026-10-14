@@ -56,8 +56,11 @@ speed matters more than our schedule.
   batches;
 - anything that reveals where a node is, through the server, its logs or its replies;
 - anything that joins donations to a node's feed, or one node's data to another's;
-- any way for this server to reach a node, or for any part of it to gain a credential beyond
-  the relay's BTCPay key;
+- making a donation count for someone it didn't come from, including by reaching the page's
+  calls other than through OBL's Worker;
+- changing what a donation counts for in bananas, on the pile or the leaderboard;
+- any way for this server to reach a node, or for any part of it to gain a credential for a
+  node beyond the relay's BTCPay key;
 - the deployment path and its credentials.
 
 **Out of scope,** because they are upstream projects with their own processes:
@@ -74,5 +77,5 @@ Also out of scope: attacks requiring physical access to a node's machine.
 
 ## Supported versions
 
-None yet. Nothing from this repository is deployed, and nothing here has run against a real
-node. This section becomes meaningful with the first deployment.
+There is no supported production release yet. The signet staging Worker is deployed; reports
+about it follow the same private reporting process above.

@@ -13,10 +13,13 @@ export class Line extends EventEmitter {
   #pinger = null;
   #retry = null;
   #lastHeard = 0;
+  #steady = null;
 
-  constructor({ open, pingMs = 25_000, deadMs = 70_000, maxDelayMs = 60_000, now = Date.now, random = Math.random, log = console.log }) {
+  // A line counts as working once it has stayed up for steadyMs. Until then the delays keep
+  // growing, so a Worker that takes the line and drops it at once isn't dialed every second.
+  constructor({ open, pingMs = 25_000, deadMs = 70_000, firstDelayMs = 1_000, maxDelayMs = 60_000, steadyMs = 30_000, now = Date.now, random = Math.random, log = console.log }) {
     super();
-    Object.assign(this, { open, pingMs, deadMs, maxDelayMs, now, random, log });
+    Object.assign(this, { open, pingMs, deadMs, firstDelayMs, maxDelayMs, steadyMs, now, random, log });
   }
 
   get connected() {
@@ -31,6 +34,7 @@ export class Line extends EventEmitter {
   stop() {
     this.#running = false;
     clearTimeout(this.#retry);
+    clearTimeout(this.#steady);
     clearInterval(this.#pinger);
     this.#socket?.close(1000, "stopping");
   }
@@ -53,7 +57,7 @@ export class Line extends EventEmitter {
     }
   }
 
-  #redial(delay = Math.min(this.maxDelayMs, 1_000 * 2 ** this.#attempts) * (0.5 + this.random() / 2)) {
+  #redial(delay = Math.min(this.maxDelayMs, this.firstDelayMs * 2 ** this.#attempts) * (0.5 + this.random() / 2)) {
     if (!this.#running) return;
     this.#attempts += 1;
     this.#retry = setTimeout(() => this.#dial(), delay);
@@ -61,7 +65,9 @@ export class Line extends EventEmitter {
 
   #attach(socket) {
     this.#socket = socket;
-    this.#attempts = 0;
+    this.#steady = setTimeout(() => {
+      this.#attempts = 0;
+    }, this.steadyMs);
     this.#lastHeard = this.now();
     const heard = () => {
       this.#lastHeard = this.now();
@@ -75,6 +81,7 @@ export class Line extends EventEmitter {
     });
     socket.on("close", ({ code }) => {
       clearInterval(this.#pinger);
+      clearTimeout(this.#steady);
       this.#socket = null;
       this.emit("down");
       // 4000: a newer line with this token replaced this one, so another relay is using it.
