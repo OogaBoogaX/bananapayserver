@@ -13,11 +13,11 @@ chmod 600 .env
 token="$(sed -n 's/^RELAY_TOKEN=//p' .env)"
 if [ -z "$token" ]; then
   token="$(openssl rand -hex 32)"
-  if grep -q '^RELAY_TOKEN=' .env; then
-    sed -i.bak "s|^RELAY_TOKEN=.*|RELAY_TOKEN=$token|" .env && rm -f .env.bak
-  else
-    echo "RELAY_TOKEN=$token" >>.env
-  fi
+  # Only bash's own printf touches the token: another program's arguments can be read by anyone
+  # on the machine.
+  sed -i.bak '/^RELAY_TOKEN=/d' .env && rm -f .env.bak
+  if [ -n "$(tail -c 1 .env)" ]; then echo >>.env; fi
+  printf 'RELAY_TOKEN=%s\n' "$token" >>.env
 fi
 
 sha256() { if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi; }
