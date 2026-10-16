@@ -130,6 +130,17 @@ The machine's operator sets it up, by hand, from `main` only
 - **Secrets:** `.env` holds the relay's token, BTCPay's key and the webhook's secret. It stays
   readable by its owner only, and is never copied off this machine.
 
+## Donations from before launch
+
+Production's D1 also holds two donations from the tests before launch. They're settled invoices
+in the donations store like every other donation, but they were made in BTCPay directly, not by
+the relay, and were added to D1 by hand at launch. Their order ids are `test-OBL-ln-node-donos`
+and `test-OBL-ln-node-BTC-donos`, not the relay's `bananapayserver`, and the on-chain one is
+recorded under its payment's transaction id rather than its invoice id.
+
+- **They can't be counted twice:** the relay never acts on an invoice it didn't make.
+- **A rebuild from BTCPay** has to include those two order ids as well as the relay's.
+
 ## What follows launch
 
 The launch setup keeps the rules in [`AGENTS.md`](../AGENTS.md): nothing opens on the node, the
