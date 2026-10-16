@@ -140,8 +140,6 @@ recorded under its payment's transaction id rather than its invoice id.
 
 - **They can't be counted twice:** the relay never acts on an invoice it didn't make.
 - **A rebuild from BTCPay** has to include those two order ids as well as the relay's.
-- **A row added to D1 by hand** counts on the tally and the leaderboard, but not on the pile,
-  which only the Durable Object changes.
 
 ## What follows launch
 
