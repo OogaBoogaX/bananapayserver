@@ -133,9 +133,15 @@ missed. After that:
 - `{ "type": "pile", "bananas": 980.5, "at": 1790000000000, "eatPerHour": 60 }` after each
   donation that counts. Every page works the pile out the same way: `bananas`, less
   `eatPerHour` for each hour since the message arrived, never below zero. Show whole bananas.
-- `{ "type": "board", "entries": [{ "handle": "ooga-dev", "bananas": 300 }] }` after each
-  signed-in donation that counts bananas: the top 20 by total bananas, rounded. Anonymous
-  donations are never on it. If D1 can't be read, the board is skipped until the next one.
+- `{ "type": "board", "entries": [{ "handle": "ooga-dev", "bananas": 300, "sats": 300000 }], "satsEntries": [{ "handle": "ooga-dev", "bananas": 300, "sats": 300000 }] }`
+  after each signed-in donation. `entries` is the top 20 by total bananas, ranked before
+  rounding to whole bananas; `satsEntries` is independently the top 20 by total sats. Each
+  entry includes both totals. Ties in either ranking follow GitHub's numeric id. Sats are
+  recorded amounts, never converted from bananas at today's price. A donation without a
+  price adds its sats and zero bananas. Both lists include earlier donations after migration
+  `0004_donor_sats.sql`, retain renamed accounts' history, and exclude anonymous donations.
+  If D1 can't be read, the last cached board is kept, or skipped if none has been read.
+  Older clients can continue reading `entries` alone.
 - The tally, the donations board's figures, the same in every browser:
 
   ```json
