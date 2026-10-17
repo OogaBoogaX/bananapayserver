@@ -1,7 +1,7 @@
 # Configuration
 
-Every setting the Worker and the relay read. The limits are the caps on amounts and the rate
-limits, and they have no defaults: one that is missing or malformed keeps donations closed on
+Every setting the Worker and the relay read. Configured limits cover the Lightning threshold
+and request rates, and they have no defaults: one that is missing or malformed keeps donations closed on
 the Worker and stops the relay. Limits and secrets are set in each deployment and never
 committed. The few settings with defaults are not limits; their defaults are below.
 
@@ -17,14 +17,14 @@ mainnet for production, so staging refuses mainnet invoices even if its relay is
 the wrong BTCPay.
 
 Set limits and the relay's token hash as secrets, so they stay out of the config files, for
-example `wrangler secret put MAX_SATS --config wrangler.staging.jsonc`. For local development,
+example `wrangler secret put LIGHTNING_MAX_SATS --config wrangler.staging.jsonc`. For local development,
 copy [`.dev.vars.example`](../.dev.vars.example) to `.dev.vars`, which also sets `NETWORK` to
 regtest.
 
 | Setting | Kind | Meaning |
 |---|---|---|
-| `MAX_SATS` | limit, required | The largest donation the Worker accepts, in sats |
-| `LIGHTNING_MAX_SATS` | optional limit | Largest Lightning donation; defaults to `MAX_SATS`. Set it below `MAX_SATS` to accept larger donations on-chain only. The policy limits are advertised to kiosks |
+| `MAX_SATS` | legacy alias | Lightning threshold when `LIGHTNING_MAX_SATS` is absent; no longer an on-chain cap |
+| `LIGHTNING_MAX_SATS` | limit, required unless legacy alias is set | Largest Lightning donation, in sats. Above this, donations remain available on-chain. Advertised to kiosks |
 | `MIN_SATS` | optional | The smallest; 1 when unset, the smallest invoice there is |
 | `RATE_PER_IP` | limit, required | Per visitor and per minute: invoice requests and on-chain switches together, and separately each of notes and page sockets. An IPv6 visitor counts by its /64. Counts are kept for the minute under a 16-bit hash of the address, never the address, so a visitor shares theirs with the rare other in the same group |
 | `SOCKETS_PER_IP` | limit, required | Page sockets one visitor may hold open at once. An IPv6 visitor counts by its /48. Visitors are counted in 65,536 groups by a hash of the address, so a visitor shares the limit with the few others in their group, and no address is ever kept |
@@ -38,18 +38,19 @@ regtest.
 | `PILE_START` | optional | Where the global pile starts, in bananas; 1,000 when unset, a placeholder for the team. It applies only when the pile is first made |
 | `PILE_EAT_PER_HOUR` | optional | How many bananas the Oogas eat an hour; 60 when unset, a placeholder for the team |
 
-`MAX_SATS` remains the overall donation cap on both sides; this update does not raise it or
-change any deployed settings. To allow larger on-chain donations, configure a higher overall
-cap and a lower `LIGHTNING_MAX_SATS`. Both must be positive safe integers, the Lightning
-threshold must not exceed the overall cap, and the cap must fit the protocol's Bitcoin supply
-bound. Keep the Worker's overall cap and Lightning threshold at or below the relay's matching
-limits so the kiosk can warn before Continue using the advertised policy. A smaller relay cap
-still takes precedence; it never trusts the Worker's permission.
+On-chain donations have no application maximum. Amounts must still be positive whole sats,
+meet `MIN_SATS`, and fit Bitcoin's supply bound (21 million BTC). The advertised `maxSats`
+is that fixed protocol bound, not a configurable donation cap. `LIGHTNING_MAX_SATS` controls
+Lightning only; legacy `MAX_SATS` is its fallback alias. Either setting must be a positive
+safe integer within the Bitcoin amount bound. Keep the Worker's Lightning threshold at or
+below the relay's so the kiosk can warn before Continue accurately.
 
-Upgrade the compatible site and Worker first with the new threshold unset (legacy limits),
-then upgrade the relay, then configure the intended limits on both sides. An old relay rejects
-the new `onchainOnly` request shape. This feature requires a relay rollout and two-maintainer
-review; it does not change the node's credentials or expose a listener.
+Deploy the compatible site first, then upgrade the Worker and relay together in a coordinated
+rollout. An old relay rejects the new `onchainOnly` request shape and retains the old overall
+cap, so larger on-chain donations require both updated components. Existing `MAX_SATS`
+settings preserve the Lightning threshold but cease limiting on-chain amounts once both are
+upgraded. Prefer `LIGHTNING_MAX_SATS` for new configuration. This feature requires a relay
+rollout and two-maintainer review; it does not change credentials or expose a listener.
 
 There are no sign-in or origin settings. Pages reach the Worker only through OBL's Worker,
 which signs donors in and checks origins; see
@@ -81,8 +82,8 @@ them.
 | `BTCPAY_STORE_ID` | required | The one store the key can use |
 | `BTCPAY_API_KEY` | secret | A key that can only create and view invoices on that store |
 | `BTCPAY_WEBHOOK_SECRET` | secret | The webhook's secret, as set in BTCPay |
-| `MAX_SATS` | limit, required | The relay's overall cap, in sats, whatever the Worker allows |
-| `LIGHTNING_MAX_SATS` | optional limit | The relay's Lightning threshold, defaulting to `MAX_SATS`. Above this, create only the on-chain method and never activate Lightning |
+| `MAX_SATS` | legacy alias | Lightning threshold when `LIGHTNING_MAX_SATS` is absent; no longer an on-chain cap |
+| `LIGHTNING_MAX_SATS` | limit, required unless legacy alias is set | The relay's independently enforced Lightning threshold. Above this, create only the on-chain method and never activate Lightning |
 | `RATE_PER_MINUTE` | limit, required | How many invoices and on-chain addresses the relay makes in a minute, whatever the Worker asks. At least the Worker's `RATE_GLOBAL`, so it only ever stops a Worker gone wrong |
 | `MIN_SATS` | optional | 1 when unset |
 | `WEBHOOK_LISTEN` | optional | Where the webhook listener binds inside the container; `0.0.0.0:8080` when unset. Never publish this port, and never run the relay with host networking, where this would listen on the machine itself |

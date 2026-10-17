@@ -73,9 +73,9 @@ test("an invoice is made with lazy methods, Lightning activated first", async ()
   assert.equal(relay.open.get(INVOICE), 1000);
 });
 
-test("the relay's own cap holds whatever the Worker allowed", async () => {
+test("the relay independently rejects invalid Bitcoin amounts", async () => {
   const { relay, line, btcpay } = setup();
-  await relay.handle({ type: "invoice", request: REQUEST, sats: 50_001 });
+  await relay.handle({ type: "invoice", request: REQUEST, sats: 2_100_000_000_000_001 });
   assert.deepEqual(line.sent, [{ type: "invoice", request: REQUEST, error: "cap" }]);
   assert.deepEqual(btcpay.calls, []);
 });
@@ -88,6 +88,13 @@ test("above the relay's Lightning threshold only the on-chain method is created"
   await relay.handle({ type: "onchain", request: REQUEST, invoice: INVOICE });
   assert.deepEqual(line.sent.at(-1), { type: "onchain", request: REQUEST, address: ADDRESS, sats: 1000 });
   assert.ok(!btcpay.calls.some(c => c[0] === "activate" && c[2] === "BTC-LN"));
+});
+
+test("legacy MAX_SATS no longer prevents a larger on-chain invoice", async () => {
+  const { relay, line, btcpay } = setup();
+  await relay.handle({ type: "invoice", request: REQUEST, sats: 1000000 });
+  assert.deepEqual(btcpay.calls, [["createInvoice", { sats: 1000000, minutes: 15, methods: ["BTC-CHAIN"] }]]);
+  assert.equal(line.sent[0].invoice.bolt11, null);
 });
 
 test("a Worker may request on-chain only below the relay's Lightning threshold", async () => {

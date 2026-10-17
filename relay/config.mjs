@@ -1,6 +1,8 @@
 // The relay's settings, read once at start. Anything missing or malformed stops the relay, and
 // the error names the settings, never their values. See docs/configuration.md.
 
+import { MAX_SATS as MAX_MONEY } from "../shared/protocol.mjs";
+
 const HOST_PORT = /^([A-Za-z0-9.-]{1,253}):(\d{1,5})$/;
 const TOKEN = /^[A-Za-z0-9_-]{32,128}$/;
 // BTCPay's API keys are hex. Anything with a space or a line break would end up in an error
@@ -37,10 +39,9 @@ export function readConfig(env) {
   // machine's address.
   const socks = env.DIRECT === "yes" ? null : hostPort("TOR_SOCKS");
   const minSats = count("MIN_SATS", 1);
-  const maxSats = count("MAX_SATS");
-  const lightningMaxSats = env.LIGHTNING_MAX_SATS === undefined ? maxSats : count("LIGHTNING_MAX_SATS");
+  const maxSats = MAX_MONEY;
+  const lightningMaxSats = env.LIGHTNING_MAX_SATS === undefined ? count("MAX_SATS") : count("LIGHTNING_MAX_SATS");
   if (lightningMaxSats > maxSats) problems.push("LIGHTNING_MAX_SATS");
-  if (maxSats > 2_100_000_000_000_000) problems.push("MAX_SATS");
   if (minSats && maxSats && minSats > maxSats) problems.push("MIN_SATS");
   const ratePerMinute = count("RATE_PER_MINUTE");
 

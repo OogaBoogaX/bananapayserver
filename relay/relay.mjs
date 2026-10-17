@@ -2,6 +2,7 @@
 // the object acknowledges it. It runs on the node's machine but never touches LND; BTCPay does.
 
 import { btcToSats, ORDER_ID } from "./btcpay.mjs";
+import { MAX_SATS as MAX_MONEY } from "../shared/protocol.mjs";
 
 const INVOICE_ID = /^[A-Za-z0-9]{8,64}$/;
 const LOOKBACK_SECONDS = 24 * 60 * 60;
@@ -40,10 +41,10 @@ export class Relay {
     return this.asked <= this.config.ratePerMinute;
   }
 
-  // The relay checks the amount against its own cap, whatever the Worker allowed.
+  // Validate Bitcoin amounts independently; the configured threshold applies only to Lightning.
   async invoice({ request, sats, onchainOnly = false }) {
     const { minSats, maxSats, invoiceMinutes, methods } = this.config;
-    if (sats < minSats || sats > maxSats) return this.line.send({ type: "invoice", request, error: "cap" });
+    if (!Number.isSafeInteger(sats) || sats < minSats || sats > MAX_MONEY) return this.line.send({ type: "invoice", request, error: "cap" });
     const chainOnly = onchainOnly || sats > (this.config.lightningMaxSats ?? maxSats);
     try {
       const created = await this.btcpay.createInvoice({

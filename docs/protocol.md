@@ -114,9 +114,10 @@ rows and totals keep their recorded invoice prices.
 
 `lightning` is `available`, `limit` (above the configured Lightning threshold), or
 `unavailable`. The last two have `invoice.bolt11: null` and still support `/donations/onchain`.
-Amounts above `LIGHTNING_MAX_SATS` up to the overall `MAX_SATS` are accepted on-chain only.
+Amounts above `LIGHTNING_MAX_SATS` are accepted on-chain only, without an application cap.
 The Worker asks the relay for `onchainOnly: true`; the relay also enforces its own threshold.
-An amount above the overall cap still returns `amount`.
+Invalid Bitcoin amounts or amounts below the configured minimum still return `amount`.
+Legacy `MAX_SATS` supplies the Lightning threshold only when `LIGHTNING_MAX_SATS` is absent.
 
 ### `POST /donations/note`
 
@@ -154,8 +155,8 @@ missed. After that:
 - `{ "type": "status", "open": true, "network": "signet" }` whenever the relay's line opens or
   closes, so the page can say donations are closed before anyone tries. `network` is the
   network this deployment takes payments on, so a page can label test donations. It also has
-  `limits: { minSats, maxSats, lightningMaxSats }`, the configured public payment policy. Kiosks
-  warn about on-chain-only amounts before Continue and enforce the overall range. Legacy
+  `limits: { minSats, maxSats, lightningMaxSats }`, the public payment policy. `maxSats` is the fixed Bitcoin supply bound, not an application
+  cap. Kiosks warn about on-chain-only amounts before Continue and validate Bitcoin amounts. Legacy
   clients may ignore these extra fields.
 - `{ "type": "donation", "donation": { "id", "sats", "handle", "message", "at" }, "bananas": { "exact", "rounded" } }`
   for each payment. `donation` is OBL's contract exactly, with the invoice id as `id`, the

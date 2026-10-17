@@ -91,13 +91,13 @@ test("when the line drops, waiting pages hear at once and every page sees donati
   const w = await world({ INVOICE_TIMEOUT_MS: "60000" });
   const relay = await w.connectRelay();
   const page = await w.connectPage();
-  assert.deepEqual(page.messages()[0], { type: "status", open: true, network: "regtest", limits: { minSats: 1, maxSats: 100000, lightningMaxSats: 100000 } });
+  assert.deepEqual(page.messages()[0], { type: "status", open: true, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000 } });
   const pending = w.post("/donations/invoice", { sats: 1000 });
   await until(() => relay.sent.length === 1);
   relay.close(1006, "");
   await w.object.webSocketClose(relay, 1006, "", false);
   assert.equal((await pending).status, 503);
-  assert.deepEqual(page.messages().at(-1), { type: "status", open: false, network: "regtest", limits: { minSats: 1, maxSats: 100000, lightningMaxSats: 100000 } });
+  assert.deepEqual(page.messages().at(-1), { type: "status", open: false, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000 } });
 });
 
 test("an invoice for the wrong amount or network never reaches the donor", async () => {
@@ -118,7 +118,7 @@ test("the relay's own cap reaches the page as an amount error", async () => {
 });
 
 test("a missing or inconsistent limit closes donations", async () => {
-  for (const overrides of [{ MAX_SATS: undefined }, { RATE_PER_IP: "" }, { MIN_SATS: "5000", MAX_SATS: "100" }, { NETWORK: undefined }]) {
+  for (const overrides of [{ MAX_SATS: undefined }, { RATE_PER_IP: "" }, { MIN_SATS: "2100000000000001" }, { NETWORK: undefined }]) {
     const w = await world(overrides);
     await w.connectRelay();
     const response = await w.post("/donations/invoice", { sats: 50 });
@@ -130,7 +130,7 @@ test("the Worker checks amounts and bodies before anything reaches the object", 
   const w = await world();
   const cases = [
     [{ sats: 0 }, 400, "amount"],
-    [{ sats: 100_001 }, 400, "amount"],
+    [{ sats: 2_100_000_000_000_001 }, 400, "amount"],
     [{ sats: "1000" }, 400, "invalid"],
     [{ sats: 10.5 }, 400, "invalid"],
     [{ sats: 1000, extra: true }, 400, "invalid"],
@@ -264,7 +264,7 @@ test("a relay that redials replaces its old line", async () => {
   assert.equal(w.object.line(), second);
   const page = await w.connectPage();
   await w.object.webSocketClose(first, 4000, "replaced", true);
-  assert.deepEqual(page.messages().filter((m) => m.type === "status"), [{ type: "status", open: true, network: "regtest", limits: { minSats: 1, maxSats: 100000, lightningMaxSats: 100000 } }], "the old line closing doesn't close donations");
+  assert.deepEqual(page.messages().filter((m) => m.type === "status"), [{ type: "status", open: true, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000 } }], "the old line closing doesn't close donations");
 });
 
 test("rate limits apply per visitor and overall, per minute", async () => {
@@ -340,7 +340,7 @@ test("a page that reconnects gets what it missed, and no more than the cap", asy
   assert.equal(replayed[0], "Donation0003");
   const fresh = await w.connectPage("UnknownId1");
   assert.deepEqual(fresh.messages().filter((m) => m.type === "donation"), []);
-  assert.deepEqual(fresh.messages()[0], { type: "status", open: false, network: "regtest", limits: { minSats: 1, maxSats: 100000, lightningMaxSats: 100000 } });
+  assert.deepEqual(fresh.messages()[0], { type: "status", open: false, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000 } });
   const invalid = await w.page.fetch(upgrade("/donations/socket?after=../x", { "X-Client": "visitor-p" }));
   assert.equal(invalid.status, 400);
 });
@@ -519,7 +519,7 @@ test("donations close even when the closing line still reads as open", async () 
   const relay = await w.connectRelay();
   const page = await w.connectPage();
   await w.object.webSocketClose(relay, 1006, "", false);
-  assert.deepEqual(page.messages().at(-1), { type: "status", open: false, network: "regtest", limits: { minSats: 1, maxSats: 100000, lightningMaxSats: 100000 } });
+  assert.deepEqual(page.messages().at(-1), { type: "status", open: false, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000 } });
 });
 
 test("a chunked body is cut off at the cap without being read whole", async () => {

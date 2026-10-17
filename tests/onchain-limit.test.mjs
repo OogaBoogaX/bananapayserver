@@ -11,10 +11,10 @@ test("a donation above Lightning's threshold gets an on-chain invoice, address a
   const w = await world({ LIGHTNING_MAX_SATS: "999" });
   const socket = await w.connectRelay();
   const page = await w.connectPage();
-  assert.deepEqual(page.messages()[0].limits, { minSats: 1, maxSats: 100000, lightningMaxSats: 999 });
+  assert.deepEqual(page.messages()[0].limits, { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 999 });
   const calls = [], replies = [];
   const node = new Relay({
-    config: { minSats: 1, maxSats: 100000, lightningMaxSats: 2000, invoiceMinutes: 15, ratePerMinute: 10,
+    config: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 2000, invoiceMinutes: 15, ratePerMinute: 10,
       methods: { lightning: "BTC-LN", onchain: "BTC-CHAIN" } },
     line: { send: message => { replies.push(w.relaySays(socket, message)); return true; } },
     btcpay: {
@@ -41,15 +41,15 @@ test("a donation above Lightning's threshold gets an on-chain invoice, address a
   assert.equal(w.env.DB.db.prepare("SELECT sats FROM donations").get().sats, 1000);
 });
 
-test("the Lightning boundary is inclusive and the overall cap still rejects excessive donations", async () => {
+test("the Lightning boundary is inclusive and invalid Bitcoin amounts are still rejected", async () => {
   const w = await world({ LIGHTNING_MAX_SATS: "1000" });
   const relay = await w.connectRelay();
   const normal = await w.invoice(relay, { sats: 1000 });
   assert.equal(normal.asked.onchainOnly, undefined);
   assert.equal((await normal.response.json()).lightning, "available");
   const before = relay.sent.length;
-  assert.equal((await w.post("/donations/invoice", { sats: 100001 })).status, 400);
-  assert.equal(relay.sent.length, before, "overall cap is enforced before calling the node");
+  assert.equal((await w.post("/donations/invoice", { sats: 2100000000000001 })).status, 400);
+  assert.equal(relay.sent.length, before, "the Bitcoin amount bound is checked before calling the node");
   assert.equal((await w.post("/donations/invoice", { sats: 1000, onchainOnly: true })).status, 400, "payment policy is not supplied by the browser");
 });
 
@@ -58,4 +58,13 @@ test("an unexpected Lightning code above the configured threshold is refused", a
   const relay = await w.connectRelay();
   const { response } = await w.invoice(relay, { sats: 1000 }, () => ({ id: INVOICE, bolt11: BOLT11, expires: EXPIRES }));
   assert.equal(response.status, 503);
+});
+
+test("amounts above legacy MAX_SATS remain payable on-chain without an application cap", async () => {
+  const w = await world();
+  const relay = await w.connectRelay();
+  const { asked, response } = await w.invoice(relay, { sats: 1000000 }, () => ({ id: INVOICE, bolt11: null, expires: EXPIRES }));
+  assert.equal(asked.onchainOnly, true);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).lightning, "limit");
 });

@@ -8,7 +8,7 @@ const REQUEST = /^[0-9a-f]{32}$/;
 const INVOICE_ID = /^[A-Za-z0-9]{8,64}$/;
 const BOLT11 = /^ln[a-z0-9]{1,90}1[02-9ac-hj-np-z]{100,6000}$/;
 const ADDRESS = /^[A-Za-z0-9]{14,90}$/;
-const MAX_SATS = 2_100_000_000_000_000;
+export const MAX_SATS = 2_100_000_000_000_000;
 
 const isRequest = (v) => typeof v === "string" && REQUEST.test(v);
 const isInvoiceId = (v) => typeof v === "string" && INVOICE_ID.test(v);

@@ -71,7 +71,8 @@ The machine's operator sets it up, by hand, from `main` only
      docker exec <BTCPay's container> printenv BTCPAY_SOCKSENDPOINT
      ```
 
-   - **`MAX_SATS` and `RATE_PER_MINUTE`:** the team's production values. `RATE_PER_MINUTE` is at
+   - **`MAX_SATS` and `RATE_PER_MINUTE`:** the team's production values. `MAX_SATS` is the legacy
+     Lightning threshold; it no longer caps on-chain donations. `RATE_PER_MINUTE` is at
      least twice the Worker's `RATE_GLOBAL`.
 
 3. **In BTCPay,** signed in as the store's owner:

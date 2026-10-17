@@ -184,11 +184,11 @@ D1 stores the receipt and price observation times separately, plus the pricing r
 invoice-priced rows stay auditable. No permanent server socket or per-tick database writes
 are needed. See [decision 0023](decisions/0023-receipt-time-pricing.md).
 
-Amounts above the configured Lightning threshold remain payable on-chain, up to the overall
-donation cap. The Worker publishes both policy limits for the kiosk's warning before Continue
-and asks the relay for an on-chain-only invoice. The relay independently enforces both limits
+Amounts above the configured Lightning threshold remain payable on-chain without an
+application cap. The Worker publishes the Lightning threshold and Bitcoin amount bound for
+the kiosk and asks the relay for an on-chain-only invoice. The relay independently validates amounts
 and creates no Lightning method for larger invoices. The address remains lazy until the donor
-chooses On-chain. See [decision 0024](decisions/0024-onchain-above-lightning-limit.md).
+chooses On-chain. See [decision 0025](decisions/0025-no-onchain-donation-cap.md).
 
 ## The pile and the leaderboard
 

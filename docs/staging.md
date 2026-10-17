@@ -68,7 +68,8 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
    - **`BITCOIN_RPC_PASSWORD` and `POSTGRES_PASSWORD`:** fresh values, made here and used
      nowhere else, from `openssl rand -hex 24`.
    - **`WORKER_URL`:** `wss://bananapayserver-staging.<account subdomain>.workers.dev/relay`.
-   - **`RELAY_MAX_SATS`:** the team's cap for staging.
+   - **`RELAY_MAX_SATS`:** the team's Lightning threshold for staging, passed as legacy
+     `MAX_SATS` to the relay. It does not cap on-chain donations.
    - **`RELAY_RATE_PER_MINUTE`:** the team's limit on invoices and on-chain addresses a
      minute, at least staging's `RATE_GLOBAL`.
 

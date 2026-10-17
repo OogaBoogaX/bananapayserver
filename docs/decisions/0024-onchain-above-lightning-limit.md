@@ -1,6 +1,6 @@
 # 0024. On-chain donations above the Lightning threshold
 
-**Status:** accepted, 2026-10-17.
+**Status:** superseded for amount policy and rollout by [0025](0025-no-onchain-donation-cap.md), 2026-10-17.
 
 ## Decision
 
