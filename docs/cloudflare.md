@@ -228,6 +228,8 @@ the Cloudflare resources alone does not enable mainnet donations.
 The [production overview](production.md#donations-from-before-launch) records which
 pre-launch donations were imported and how to find their BTCPay records. The corrections
 below have already been completed. They are not steps to replay during a deployment.
+Any future correction to production's D1 or the object's storage must be proposed in a
+reviewed change before it is made.
 Payment identifiers remain in the operational records; this public runbook identifies each
 correction by the order id from the overview.
 
@@ -241,27 +243,27 @@ The historical imports used separate manual D1 inserts, pile updates and marker 
 
 ### Initial on-chain correction
 
-For order `test-OBL-ln-node-BTC-donos`, the existing 10,000-banana placeholder was intended
-to represent the payment. The manual correction **replaced** `pile.milli=10000000` with
-`8387` (**8.387 bananas**), rather than adding to the placeholder. `pile.at` was set to the
-payment's first-confirmation time. The update required the previously observed `milli`, `at`
-and `started` values to match and left `started` unchanged.
+The team first agreed to start the pile at 10,000 bananas, then decided it should start from
+donations alone. For order `test-OBL-ln-node-BTC-donos`, the manual correction **replaced**
+that starting pile with the first import's bananas, rather than adding to it. `pile.at` was
+set to the payment's first-confirmation time. The update required the previously observed
+`milli`, `at` and `started` values to match and left `started` unchanged. The imported amounts
+and balances remain in the operational records.
 
 A separate conditional insert added the D1 record's id to `finished.invoice`, with the
 import time in `finished.at`, only after the corrected pile row was present. It used
 `ON CONFLICT (invoice) DO NOTHING`. For this record the marker key is the transaction id,
 matching the D1 key described in the overview, rather than the BTCPay invoice id.
 
-`PILE_START` was then set to `0`; consumption was already `PILE_EAT_PER_HOUR=0`. Changing
-`PILE_START` alone cannot reset a pile that already exists.
+`PILE_START` was then disabled; consumption was already disabled with `PILE_EAT_PER_HOUR`.
+Changing `PILE_START` alone cannot reset a pile that already exists.
 
 ### Historical Lightning correction
 
 For order `test-OBL-ln-node-donos`, two newer live donations were already present. The manual
-correction **added** `8395` to the existing `pile.milli=65445`, producing `73840`
-(**65.445 + 8.395 = 73.840 bananas**). The update required that balance, the previously
-observed `pile.at`, and no `finished` row for the imported record. It moved `pile.at` to the
-import time and preserved `started`.
+correction **added** the second import's bananas to the existing pile. The update required
+the previously observed balance and `pile.at`, and no `finished` row for the imported record.
+It moved `pile.at` to the import time and preserved `started`.
 
 A separate conditional insert then added the D1 record's id to `finished.invoice`, with the
 same import time in `finished.at`, only after the corrected balance and timestamp matched.
@@ -269,11 +271,11 @@ It also used `ON CONFLICT (invoice) DO NOTHING`. Here the marker key is the BTCP
 id used by D1; its value is omitted from this public runbook.
 
 The pile update and marker insert were separate manual statements, unlike the normal
-transactional `finish()` path. `PILE_START=0` and `PILE_EAT_PER_HOUR=0` stayed unchanged.
+transactional `finish()` path. The starting-pile and consumption settings stayed unchanged.
 
 ### Duplicate-credit protection and persistence
 
-Both D1 inserts used `ON CONFLICT (id) DO NOTHING`. The D1 primary key prevents a repeated
+Both D1 inserts used `ON CONFLICT (id) DO NOTHING`. D1's unique `id` prevents a repeated
 insert from running the donor-total and tally triggers again. Separately, each imported
 record has a unique `finished.invoice` marker, so `finish()` cannot add that credit to the
 pile again. These storage protections supplement the relay's order-id filtering described
