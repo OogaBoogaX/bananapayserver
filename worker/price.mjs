@@ -17,7 +17,13 @@ const MESSAGE_MAX = 8_192;
 
 // Bitcoin's price in cents and which way it came, or null when neither answered.
 // platform: { socket(url), fetch(url, init) }.
-export async function fetchPrice(platform, { timeoutMs = PRICE_TIMEOUT_MS } = {}) {
+export async function fetchPrice(platform, { timeoutMs = PRICE_TIMEOUT_MS, socketFirst = false } = {}) {
+  if (socketFirst) {
+    const cents = await priceFromSocket(platform.socket, timeoutMs);
+    if (cents !== null) return { cents, from: "socket" };
+    const fallback = await priceFromRest(platform.fetch, timeoutMs);
+    return fallback === null ? null : { cents: fallback, from: "rest" };
+  }
   const fromRest = await priceFromRest(platform.fetch, timeoutMs);
   if (fromRest !== null) return { cents: fromRest, from: "rest" };
   const fromSocket = await priceFromSocket(platform.socket, timeoutMs);

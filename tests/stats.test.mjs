@@ -1,4 +1,4 @@
-// What a donation counts for: the rate locked when the invoice is made, the global pile, and
+// What a donation counts for: the rate recorded at receipt, the global pile, and
 // the leaderboard of signed-in donors.
 
 import assert from "node:assert/strict";
@@ -22,7 +22,7 @@ async function donate(w, relay, sats, { login = null, id = 1, handle, invoice = 
   return invoice;
 }
 
-test("the rate is fetched once, locked into the invoice, and recorded with the donation", async () => {
+test("the quote is an estimate and the receipt's price is recorded with the donation", async () => {
   const w = await world();
   const relay = await w.connectRelay();
   const { response } = await w.invoice(relay, { sats: 25_000 }, () => ({ id: INVOICE, bolt11: bolt11For(25_000), expires: EXPIRES }));
@@ -30,14 +30,12 @@ test("the rate is fetched once, locked into the invoice, and recorded with the d
   assert.deepEqual(reply.bananas, { exact: 25, rounded: 25 });
   assert.deepEqual(reply.rate, { usdPerBtc: 100_000, satsPerBanana: 1000, at: w.platform.now(), stale: false });
   assert.deepEqual(w.platform.fetched, [PRICE_URL], "one ask, by REST");
-  const priced = w.platform.now();
-
-  // Bitcoin halves before the donor pays; the donation still counts what they were shown.
+  // Bitcoin halves before the donor pays; the donation counts at receipt.
   w.platform.advance(HOUR);
   w.platform.prices = { socket: 50_000, rest: 50_000 };
   await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 25_000, method: "lightning" });
   const row = w.env.DB.db.prepare("SELECT sats, price_cents, price_at, banana_cents, milli FROM donations").get();
-  assert.deepEqual({ ...row }, { sats: 25_000, price_cents: 10_000_000, price_at: priced, banana_cents: 100, milli: 25_000 });
+  assert.deepEqual({ ...row }, { sats: 25_000, price_cents: 5_000_000, price_at: w.platform.now(), banana_cents: 100, milli: 12_500 });
 });
 
 test("every invoice gets a new price: from REST, or from the socket when REST doesn't answer", async (t) => {
@@ -257,7 +255,7 @@ test("an object made before the stats gets the new columns and tables in place",
   new DonationsObject(ctx, env, fakePlatform());
   const row = ctx.storage.sql.exec("SELECT request, github_id, price_cents, milli FROM pending").one();
   assert.deepEqual({ ...row }, { request: "r", github_id: null, price_cents: null, milli: null });
-  assert.equal(ctx.storage.sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 5);
+  assert.equal(ctx.storage.sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 6);
   new DonationsObject(ctx, env, fakePlatform());
   assert.equal(ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM pending").one().n, 1, "a second start changes nothing");
 });
@@ -358,7 +356,7 @@ test("the donor sats migration backfills history and keeps renamed, unpriced and
 });
 
 
-test("matching handles combine guest and account donations at their individual invoice rates", async () => {
+test("matching handles combine guest and account donations at their individual receipt rates", async () => {
   const w = await world();
   const relay = await w.connectRelay();
   const page = await w.connectPage();

@@ -43,6 +43,7 @@ means writing a new record.
 | [0020](0020-staging-then-production.md) | Production runs only what passed staging; releases are cut from main | accepted |
 | [0021](0021-editable-donation-handles.md) | Editable donation handles and rankings by entered name | accepted |
 | [0022](0022-edit-details-in-place.md) | Edit donation details on the same invoice | accepted |
+| [0023](0023-receipt-time-pricing.md) | Live estimates and receipt-time pricing | accepted |
 
 ## Waiting for a record
 

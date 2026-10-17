@@ -94,7 +94,8 @@
       request: r.request,
       invoice: { id: inv.id, bolt11: inv.bolt11 || null, expires: inv.expires },
       bananas: b && isNumber(b.exact) && isNumber(b.rounded) ? { exact: b.exact, rounded: b.rounded } : null,
-      rate: rateOf(rate)
+      rate: rateOf(rate),
+      pricing: r.pricing === "receipt" ? "receipt" : "invoice"
     };
   };
   // Replaces the message on a request not yet paid.
@@ -192,7 +193,10 @@
     } else if (data.type === "seen" && typeof data.id === "string" && data.id && Number.isInteger(data.sats) && data.sats > 0 && Number.isInteger(data.due) && data.due > 0 && Number.isInteger(data.left) && data.left >= 0) {
       // An on-chain payment seen before its block: everything received on that invoice so far, its amount, and what
       // is left to send, the network fee for a second payment included (0 once it is all there).
-      if (handlers.seen) handlers.seen(data.id, data.sats, data.due, data.left);
+      const p = data.pricing, b = p?.bananas;
+      const pricing = data.left === 0 && p && isNumber(p.receivedAt) && p.receivedAt > 0
+        ? { receivedAt: p.receivedAt, rate: rateOf(p.rate), bananas: b && isNumber(b.exact) && isNumber(b.rounded) && b.exact >= 0 && b.rounded >= 0 ? { exact: b.exact, rounded: b.rounded } : null } : null;
+      if (handlers.seen) handlers.seen(data.id, data.sats, data.due, data.left, pricing);
     }
   };
   const retry = () => {

@@ -2,6 +2,9 @@
 
 **Status:** accepted, 2026-10-17; supersedes the invoice-replacement requirement in 0021.
 
+Receipt-time pricing and live estimates supersede the invoice-locking policy in
+[0023](0023-receipt-time-pricing.md).
+
 ## Decision
 
 The request capability may update the donation's display handle and message until settlement

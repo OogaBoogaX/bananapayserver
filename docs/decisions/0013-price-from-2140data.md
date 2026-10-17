@@ -3,6 +3,9 @@
 **Status:** accepted, 2026-10-02. Supersedes where [0011](0011-bananas-in-dollars.md) gets the
 price. [0017](0017-tally-and-fresh-rate.md) adds a price check while pages are open.
 
+Receipt-time pricing and live estimates supersede the invoice-locking policy in
+[0023](0023-receipt-time-pricing.md).
+
 ## Decision
 
 The Durable Object gets bitcoin's price from 2140data's price service, which combines a dozen

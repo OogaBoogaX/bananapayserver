@@ -20,6 +20,7 @@ test("an invoice goes from the page to the relay and back, with its bananas", as
     invoice: { id: INVOICE, bolt11: BOLT11, expires: EXPIRES },
     bananas: { exact: 1, rounded: 1 },
     rate: { usdPerBtc: 100_000, satsPerBanana: 1000, at: w.platform.now(), stale: false },
+    pricing: "receipt",
   });
 });
 
