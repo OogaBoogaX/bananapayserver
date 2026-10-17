@@ -2,7 +2,7 @@
 // binding. Limits and secrets are deliberately not here: set them in the deployment, never in
 // this file. See docs/configuration.md.
 //
-// Deploy by hand from main, with CLOUDFLARE_ACCOUNT_ID set; the account isn't named here.
+// Deploy by hand from rock, with CLOUDFLARE_ACCOUNT_ID set; the account isn't named here.
 {
 	"name": "bananapayserver-production",
 	"main": "worker/index.mjs",

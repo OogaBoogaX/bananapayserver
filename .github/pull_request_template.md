@@ -9,8 +9,8 @@
 
 ## Checklist
 
-- [ ] I release this contribution under [The Ooga Booga License](https://github.com/OogaBoogaX/bananapayserver/blob/main/LICENSE), as
-      [CONTRIBUTING.md](https://github.com/OogaBoogaX/bananapayserver/blob/main/CONTRIBUTING.md#licensing-your-contribution) describes.
+- [ ] I release this contribution under [The Ooga Booga License](https://github.com/OogaBoogaX/bananapayserver/blob/rock/LICENSE), as
+      [CONTRIBUTING.md](https://github.com/OogaBoogaX/bananapayserver/blob/rock/CONTRIBUTING.md#licensing-your-contribution) describes.
 - [ ] Every commit carries a `Co-Authored-By` trailer naming the model that helped write it.
 - [ ] If I am not a maintainer, a maintainer agreed to this change on the linked issue first.
 - [ ] If this touches the relay, credentials, the relay's protocol or deployment, the

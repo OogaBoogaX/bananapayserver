@@ -66,7 +66,7 @@ Nothing in that table can spend from a node, and nothing in it can reach one.
   nothing in the server correlates one node with another.
 - **Donations and node feeds stay apart.** Joined to a channel's line, exact donation amounts
   and times can expose its balance. See "Never shown" in Foundry's
-  [`docs/lightning-factory.md`](https://github.com/OogaBoogaX/lightningfoundry/blob/main/docs/lightning-factory.md#never-shown).
+  [`docs/lightning-factory.md`](https://github.com/OogaBoogaX/lightningfoundry/blob/rock/docs/lightning-factory.md#never-shown).
 - **Never log or return a node's address.** The page only ever gets the BOLT11 invoice and, if
   the donor switches, an on-chain address. It never gets a BTCPay link.
 - **Checks happen at the boundaries:** the calls OBL's Worker passes on, at the Worker; the
@@ -213,7 +213,7 @@ donation amounts closely, and joined to a line they could expose its balance.
 
 Each operator's Foundry exporter POSTs signed batches, as Foundry's delivery contract sets out
 in the Delivery section of
-[`docs/event-model.md`](https://github.com/OogaBoogaX/lightningfoundry/blob/main/docs/event-model.md#delivery):
+[`docs/event-model.md`](https://github.com/OogaBoogaX/lightningfoundry/blob/rock/docs/event-model.md#delivery):
 
 - it authenticates with a per-node credential issued at enrollment;
 - the server checks each batch's signature;
@@ -226,7 +226,7 @@ The ingest isn't built yet. It waits for Foundry to specify the batch envelope i
 signs, which Foundry's docs say comes with the export implementation.
 
 The browser side follows Foundry's consumer contract in
-[`docs/lightning-factory.md`](https://github.com/OogaBoogaX/lightningfoundry/blob/main/docs/lightning-factory.md).
+[`docs/lightning-factory.md`](https://github.com/OogaBoogaX/lightningfoundry/blob/rock/docs/lightning-factory.md).
 
 ## Why BTCPay stays on the node's machine
 
