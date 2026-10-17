@@ -141,6 +141,9 @@ recorded under its payment's transaction id rather than its invoice id.
 - **They can't be counted twice:** the relay never acts on an invoice it didn't make.
 - **A rebuild from BTCPay** has to include those two order ids as well as the relay's.
 
+The completed manual pile corrections and `finished` duplicate-credit markers are recorded
+in the [Cloudflare runbook](cloudflare.md#historical-import-accounting).
+
 ## What follows launch
 
 The launch setup keeps the rules in [`AGENTS.md`](../AGENTS.md): nothing opens on the node, the

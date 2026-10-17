@@ -232,6 +232,78 @@ production limits and the hash supplied by the production relay's operator throu
 secret prompts. Donations stay closed while required limits or the relay are absent; creating
 the Cloudflare resources alone does not enable mainnet donations.
 
+## Historical import accounting
+
+The [production overview](production.md#donations-from-before-launch) records which
+pre-launch donations were imported and how to find their BTCPay records. The corrections
+below have already been completed. They are not steps to replay during a deployment.
+Any future correction to production's D1 or the object's storage must be proposed in a
+reviewed change before it is made.
+Payment identifiers remain in the operational records; this public runbook identifies each
+correction by the order id from the overview.
+
+### D1 records and the live pile
+
+Inserting a row into D1's `donations` table updates `totals`, `tally` and `tally_hours` through
+the existing insert triggers. It does **not** add to the live pile, which lives in the
+production Durable Object's SQLite `pile` table. Normal paid notices reach `paid()` and
+`finish()`, which adds the bananas and inserts a `finished` marker in one storage transaction.
+The historical imports used separate manual D1 inserts, pile updates and marker inserts.
+
+### Initial on-chain correction
+
+The team first agreed to start the pile at 10,000 bananas, then decided it should start from
+donations alone. For order `test-OBL-ln-node-BTC-donos`, the manual correction **replaced**
+that starting pile with the first import's bananas, rather than adding to it. `pile.at` was
+set to the payment's first-confirmation time. The update required the previously observed
+`milli`, `at` and `started` values to match and left `started` unchanged. The imported amounts
+and balances remain in the operational records.
+
+A separate conditional insert added the D1 record's id to `finished.invoice`, with the
+import time in `finished.at`, only after the corrected pile row was present. It used
+`ON CONFLICT (invoice) DO NOTHING`. For this record the marker key is the transaction id,
+matching the D1 key described in the overview, rather than the BTCPay invoice id.
+
+`PILE_START` was then set so a new pile starts from zero; eating was already off with
+`PILE_EAT_PER_HOUR`.
+Changing `PILE_START` alone cannot reset a pile that already exists.
+
+### Historical Lightning correction
+
+For order `test-OBL-ln-node-donos`, two newer live donations were already present. The manual
+correction **added** the second import's bananas to the existing pile. The update required
+the previously observed balance and `pile.at`, and no `finished` row for the imported record.
+It moved `pile.at` to the import time and preserved `started`.
+
+A separate conditional insert then added the D1 record's id to `finished.invoice`, with the
+same import time in `finished.at`, only after the corrected balance and timestamp matched.
+It also used `ON CONFLICT (invoice) DO NOTHING`. Here the marker key is the BTCPay invoice
+id used by D1; its value is omitted from this public runbook.
+
+The pile update and marker insert were separate manual statements, unlike the normal
+transactional `finish()` path. The starting-pile and consumption settings stayed unchanged.
+
+### Duplicate-credit protection and persistence
+
+Both D1 inserts used `ON CONFLICT (id) DO NOTHING`. D1's unique `id` prevents a repeated
+insert from running the donor-total and tally triggers again. Separately, each imported
+record has a unique `finished.invoice` marker, so `finish()` cannot add that credit to the
+pile again. These storage protections supplement the relay's order-id filtering described
+in the overview. Neither manual import broadcast a donation event, so neither triggered the
+falling-banana animation.
+
+The 2026-10-16 audit found the active production Worker byte-for-byte identical to a local
+dry-run build of `b7c9b27bba310f61d2fb43286becc2e54caaff49`, using pinned Wrangler 4.146.0.
+The deployment worktree's archived snapshot was exactly that commit, with no source changes.
+The manual SQLite corrections explain the pile changes; there was no additional
+pile-accounting code in production.
+
+Preserve the existing production D1 database, Durable Object namespace, `pile` row and
+`finished` markers when deploying. Audit an import by comparing its D1 row and triggered
+totals with the object's pile and corresponding marker, using the operational records to
+identify it. The current pile can include later payments and consumption; do not restore
+either historical balance or replay these corrections.
+
 ## Never
 
 - Deploy production before staging passes, or from anywhere but `main`.
