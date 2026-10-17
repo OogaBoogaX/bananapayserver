@@ -130,6 +130,15 @@ missed. After that:
   for each payment. `donation` is OBL's contract exactly, with the invoice id as `id`, the
   GitHub username or `""` as `handle`, and `at` in milliseconds. A username arrives whole, up
   to GitHub's 39 characters. The donor's page recognizes its own invoice id.
+- `{ "type": "seen", "id", "sats", "due", "left" }` when BTCPay sees an on-chain payment it
+  hasn't yet settled, before the donation itself, which follows once BTCPay settles the
+  invoice. `id` is the invoice id the donation will carry, `sats` is everything the invoice
+  has received on-chain so far, `due` is the invoice's amount, and `left` is what BTCPay still
+  wants on-chain, `0` once it's paid in full. After a short payment, `left` can be more than
+  `due − sats`: a store can add a network fee for a second payment, so `left` is the amount
+  to ask the donor for. It names nobody and counts nothing. It's sent once per payment, as it
+  happens, and is neither kept nor replayed; after the relay restarts, one may come again,
+  which a page takes as harmless. Lightning payments never send it.
 - `{ "type": "pile", "bananas": 980.5, "at": 1790000000000, "eatPerHour": 60 }` after each
   donation that counts. Every page works the pile out the same way: `bananas`, less
   `eatPerHour` for each hour since the message arrived, never below zero. Show whole bananas.
@@ -225,6 +234,7 @@ From the relay to the object:
 | `{ "type": "onchain", "request", "address", "sats" }` | The address, and what BTCPay expects on-chain |
 | `{ "type": "onchain", "request", "error": "unavailable" }` | No address |
 | `{ "type": "paid", "invoice", "sats", "method" }` | Settled, and how: `lightning`, `onchain`, or `mixed` for an invoice paid partly each way. Repeated until acknowledged |
+| `{ "type": "seen", "invoice", "sats", "left" }` | An on-chain payment BTCPay hasn't settled yet: everything received on-chain so far, and what BTCPay still wants on-chain, network fee included. Once per payment, never acknowledged |
 
 The handle and message never go down the line: the relay sees a request id and an amount.
 
@@ -232,7 +242,8 @@ The object checks every reply before a page sees it. An invoice must be for the 
 network and exactly the requested amount, an address must be for the configured network, and
 a payment must match its request's amount. A notice for an invoice the object never asked
 for is acknowledged as `unknown` and recorded nowhere. Anything that fails to record isn't
-acknowledged, so the relay sends it again.
+acknowledged, so the relay sends it again. A `seen` reaches pages only for an invoice the
+object is still waiting on.
 
 ## BTCPay
 
@@ -240,9 +251,9 @@ What the relay needs from the store on its machine:
 
 - **An API key** with `btcpay.store.cancreateinvoice` and `btcpay.store.canviewinvoices` on
   that one store, and nothing else.
-- **A webhook** for the "invoice settled" event, sent to `http://<relay>:8080/btcpay` on the
-  machine's internal network, with a secret the relay also holds, and automatic redelivery
-  on.
+- **A webhook** for the "invoice settled", "invoice received a payment" and "payment settled"
+  events, sent to `http://<relay>:8080/btcpay` on the machine's internal network, with a
+  secret the relay also holds, and automatic redelivery on.
 
 What the relay does with it:
 
@@ -254,6 +265,10 @@ What the relay does with it:
   settled.
 - The webhook sends the relay to look at an invoice when it settles and when it receives a
   payment, since a late payment settles nothing.
+- When an invoice of its own is `Processing`, `New` with `PaidPartial`, or `Expired` with
+  `PaidLate`, the relay reads its payments and announces each on-chain payment that isn't yet
+  settled as `seen`. It reads payments only then, so the invoices nobody has paid cost BTCPay
+  nothing more each minute.
 - Once a minute, the relay checks every open invoice of its own, which catches any webhook
   that never arrived. After a restart, it finds its invoices from the last day again, every
   page of BTCPay's list, late-paid ones included.

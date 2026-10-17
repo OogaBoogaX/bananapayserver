@@ -30,11 +30,13 @@ function fakeBtcpay(overrides = {}) {
     activate: async (id, method) => calls.push(["activate", id, method]),
     // The payments each method has received; paid over Lightning unless a test says otherwise.
     payments: { "BTC-LN": [{ status: "Settled" }], "BTC-CHAIN": [] },
+    // What BTCPay still wants by each method, network fee included.
+    dues: { "BTC-LN": "0.00001000", "BTC-CHAIN": "0.00001000" },
     paymentMethods: async (id) => {
       calls.push(["paymentMethods", id]);
       return [
-        { paymentMethodId: "BTC-LN", destination: BOLT11, due: "0.00001000", payments: btcpay.payments["BTC-LN"] },
-        { paymentMethodId: "BTC-CHAIN", destination: ADDRESS, due: "0.00001000", payments: btcpay.payments["BTC-CHAIN"] },
+        { paymentMethodId: "BTC-LN", destination: BOLT11, due: btcpay.dues["BTC-LN"], payments: btcpay.payments["BTC-LN"] },
+        { paymentMethodId: "BTC-CHAIN", destination: ADDRESS, due: btcpay.dues["BTC-CHAIN"], payments: btcpay.payments["BTC-CHAIN"] },
       ];
     },
     invoice: async (id) => {
@@ -310,6 +312,93 @@ test("how the donor paid comes from BTCPay's payments: Lightning, on-chain, or b
     await relay.check(INVOICE);
     assert.deepEqual(line.sent, [{ type: "paid", invoice: INVOICE, sats: 1000, method }], method);
   }
+});
+
+test("an on-chain payment on its way is announced once as seen, with what's received and what BTCPay still wants", async () => {
+  const { relay, line, btcpay } = setup();
+  const status = (fields) => btcpay.invoices.set(INVOICE, { ...btcpay.invoices.get(INVOICE), ...fields });
+  status({ status: "New", additionalStatus: "PaidPartial" });
+  btcpay.payments = { "BTC-LN": [], "BTC-CHAIN": [{ id: "pay1", value: "0.00000400", status: "Processing" }] };
+  // Short by 600, and a second payment brings BTCPay's network fee, here 15 sats.
+  btcpay.dues["BTC-CHAIN"] = "0.00000615";
+  relay.open.set(INVOICE, 1000);
+  await relay.check(INVOICE);
+  assert.deepEqual(line.sent, [{ type: "seen", invoice: INVOICE, sats: 400, left: 615 }], "short: 400 of 1,000");
+  await relay.sweep();
+  assert.equal(line.sent.length, 1, "the same payment isn't announced again");
+
+  // The donor sends what BTCPay asks for, and BTCPay counts both payments.
+  status({ status: "Processing", additionalStatus: "None" });
+  btcpay.payments["BTC-CHAIN"] = [
+    { id: "pay1", value: "0.00000400", status: "Settled" },
+    { id: "pay2", value: "0.00000615", status: "Processing" },
+  ];
+  btcpay.dues["BTC-CHAIN"] = "0.00000000";
+  await relay.check(INVOICE);
+  assert.deepEqual(line.sent.at(-1), { type: "seen", invoice: INVOICE, sats: 1015, left: 0 });
+
+  // Confirmed: the donation follows, and nothing more is seen.
+  status({ status: "Settled" });
+  btcpay.payments["BTC-CHAIN"] = btcpay.payments["BTC-CHAIN"].map((payment) => ({ ...payment, status: "Settled" }));
+  await relay.check(INVOICE);
+  assert.deepEqual(line.sent.at(-1), { type: "paid", invoice: INVOICE, sats: 1000, method: "onchain" });
+  assert.equal(line.sent.filter((message) => message.type === "seen").length, 2);
+});
+
+test("a late on-chain payment is seen too, but Lightning, invoices that aren't the relay's, and unpaid ones never are", async () => {
+  const onchain = { "BTC-LN": [], "BTC-CHAIN": [{ id: "pay1", value: "0.00001000", status: "Processing" }] };
+  const late = setup();
+  late.btcpay.invoices.set(INVOICE, { ...late.btcpay.invoices.get(INVOICE), status: "Expired", additionalStatus: "PaidLate" });
+  late.btcpay.payments = onchain;
+  late.btcpay.dues["BTC-CHAIN"] = "0.00000000";
+  await late.relay.check(INVOICE);
+  assert.deepEqual(late.line.sent, [{ type: "seen", invoice: INVOICE, sats: 1000, left: 0 }]);
+
+  const lightning = setup();
+  await lightning.relay.check(INVOICE);
+  assert.deepEqual(lightning.line.sent.map((message) => message.type), ["paid"]);
+
+  const other = setup();
+  other.btcpay.invoices.set(INVOICE, { ...other.btcpay.invoices.get(INVOICE), status: "Processing", metadata: { orderId: "someone-else" } });
+  other.btcpay.payments = onchain;
+  await other.relay.check(INVOICE);
+  assert.deepEqual(other.line.sent, []);
+
+  // Most open invoices are never paid, and the sweep looks at each every minute: those cost
+  // BTCPay no call beyond the invoice itself.
+  const unpaid = setup();
+  unpaid.btcpay.invoices.set(INVOICE, { ...unpaid.btcpay.invoices.get(INVOICE), status: "New" });
+  unpaid.relay.open.set(INVOICE, 1000);
+  await unpaid.relay.sweep();
+  assert.deepEqual(unpaid.btcpay.calls, [["invoice", INVOICE]]);
+  assert.deepEqual(unpaid.line.sent, []);
+});
+
+test("a seen payment counts as announced only once the line took it, and a failure leaves counting alone", async () => {
+  const { relay, line, btcpay } = setup();
+  btcpay.invoices.set(INVOICE, { ...btcpay.invoices.get(INVOICE), status: "Processing" });
+  btcpay.payments = { "BTC-LN": [], "BTC-CHAIN": [{ id: "pay1", value: "0.00001000", status: "Processing" }] };
+  btcpay.dues["BTC-CHAIN"] = "0.00000000";
+  const send = line.send;
+  line.send = () => false;
+  await relay.check(INVOICE);
+  line.send = send;
+  await relay.check(INVOICE);
+  assert.deepEqual(line.sent, [{ type: "seen", invoice: INVOICE, sats: 1000, left: 0 }]);
+
+  const failing = setup();
+  const real = failing.btcpay.paymentMethods;
+  let first = true;
+  failing.btcpay.paymentMethods = async (id) => {
+    if (!first) return real(id);
+    first = false;
+    throw new Error("BTCPay answered 503 to GET /invoices/x/payment-methods");
+  };
+  failing.btcpay.invoices.set(INVOICE, { ...failing.btcpay.invoices.get(INVOICE), status: "Expired", additionalStatus: "PaidLate" });
+  failing.btcpay.payments = { "BTC-LN": [], "BTC-CHAIN": [{ id: "pay1", value: "0.00001000", status: "Settled" }] };
+  await failing.relay.check(INVOICE);
+  assert.deepEqual(failing.line.sent, [{ type: "paid", invoice: INVOICE, sats: 1000, method: "onchain" }]);
+  assert.ok(failing.logs.some((message) => message.startsWith("seen:")));
 });
 
 test("a settled invoice with no payment to show for it stays open and keeps being reported", async () => {
