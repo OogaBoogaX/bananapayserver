@@ -49,19 +49,23 @@ test("a payment is recorded once, acknowledged, and pushed to every page", async
   assert.equal(pages[0].messages().filter((m) => m.type === "donation").length, 1);
 });
 
-test("the message can follow the amount, but who gave it can't change", async () => {
+test("the request can update display details on the same invoice before settlement", async () => {
   const w = await world();
   const relay = await w.connectRelay();
   const page = await w.connectPage();
-  const { asked } = await w.invoice(relay, { sats: 1000 });
+  const { asked } = await w.invoice(relay, { sats: 1000 }, undefined, { donor: donor("account-login", 42) });
+  const before = { ...w.ctx.storage.sql.exec("SELECT * FROM pending").one() };
   const noted = await w.post("/donations/note", { request: asked.request, message: "<i>hi</i>" });
   assert.equal(noted.status, 204);
   const renamed = await w.post("/donations/note", { request: asked.request, handle: "someone-else" });
-  assert.equal(renamed.status, 400);
+  assert.equal(renamed.status, 204);
+  const after = { ...w.ctx.storage.sql.exec("SELECT * FROM pending").one() };
+  for (const key of ["request", "sats", "invoice", "expires", "github_id", "price_cents", "price_at", "milli"]) assert.equal(after[key], before[key], key);
   await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
   const [{ donation }] = page.messages().filter((m) => m.type === "donation");
-  assert.equal(donation.handle, "");
+  assert.equal(donation.handle, "someone-else");
   assert.equal(donation.message, "ihii");
+  assert.equal((await w.post("/donations/note", { request: asked.request, message: "too late" })).status, 404);
   const unknown = await w.post("/donations/note", { request: "f".repeat(32), message: "x" });
   assert.equal(unknown.status, 404);
 });
@@ -575,4 +579,39 @@ test("empty custom handles become anon and long handles are bounded", async () =
     await w.invoice(relay, { sats: 1000, handle });
     assert.equal(w.ctx.storage.sql.exec("SELECT handle FROM pending").one().handle, expected);
   }
+});
+
+
+test("detail updates reject forged identity and invalid text and preserve omitted fields", async () => {
+  const w = await world();
+  const relay = await w.connectRelay();
+  const { asked } = await w.invoice(relay, { sats: 1000, handle: "first", message: "keep this" });
+  for (const bad of [{ handle: 42 }, { message: 42 }, { github: { id: 7, login: "forged" } }, { sats: 2000 }]) {
+    assert.equal((await w.post("/donations/note", { request: asked.request, ...bad })).status, 400);
+  }
+  assert.equal((await w.post("/donations/note", { request: asked.request, handle: " @Changed " })).status, 204);
+  assert.deepEqual({ ...w.ctx.storage.sql.exec("SELECT handle, message FROM pending").one() }, { handle: "Changed", message: "keep this" });
+  assert.equal((await w.post("/donations/note", { request: asked.request, message: "m".repeat(281) })).status, 204);
+  assert.deepEqual({ ...w.ctx.storage.sql.exec("SELECT handle, message FROM pending").one() }, { handle: "Changed", message: "m".repeat(280) });
+});
+
+test("a detail edit cannot report success while settlement is awaiting D1", async () => {
+  const w = await world();
+  const relay = await w.connectRelay();
+  const { asked } = await w.invoice(relay, { sats: 1000, handle: "original" });
+  const prepare = w.env.DB.prepare;
+  let release, reached;
+  const paused = new Promise((resolve) => { reached = resolve; });
+  w.env.DB.prepare = (sql) => {
+    const statement = prepare(sql);
+    if (!sql.startsWith("INSERT INTO donations")) return statement;
+    return { bind: (...args) => ({ first: () => new Promise((resolve) => {
+      release = () => resolve(statement.bind(...args).first()); reached();
+    }) }) };
+  };
+  const paid = w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+  await paused;
+  assert.equal((await w.post("/donations/note", { request: asked.request, handle: "too-late" })).status, 404);
+  release(); await paid;
+  assert.equal(w.env.DB.db.prepare("SELECT handle FROM donations").get().handle, "original");
 });

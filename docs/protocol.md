@@ -77,8 +77,8 @@ OBL prepopulates the handle with the signed-in login, otherwise `anon`; either c
 Account identity still comes only from OBL's authenticated service-binding argument, never
 from the display handle. Without `handle`, older clients retain the signed-in login or an
 empty anonymous name; `anon: true` still suppresses account identity for those clients.
-The handle belongs to the invoice. Changing it requires a new invoice; its message can also
-be updated using `/donations/note` before payment.
+The handle and message can be updated using `/donations/note` before settlement starts,
+without replacing the invoice or its rate.
 
 ```json
 {
@@ -89,7 +89,7 @@ be updated using `/donations/note` before payment.
 }
 ```
 
-`request` is the page's key to its own donation: only it can add the message or switch to
+`request` is the page's key to its own donation: only it can update display details or switch to
 on-chain. Keep it in memory, never in a URL. `expires` is in unix seconds. A banana is a
 dollar's worth of bitcoin at the price in `rate`, which is locked into this invoice: the donor
 is shown the rate and both counts, and the donation counts `exact` bananas. `rate.at` is when
@@ -101,11 +101,14 @@ price, and the page shows an alert for that too. Either way, the donation still 
 ### `POST /donations/note`
 
 ```json
-{ "request": "3f0c…", "message": "for the cave" }
+{ "request": "3f0c…", "handle": "chosen-name", "message": "for the cave" }
 ```
 
-Replaces the message, any time before the invoice is paid. Who gave it can't change. Answers
-204.
+Updates optional `handle` and/or `message` before settlement starts. Omitted fields are
+preserved; legacy calls with neither clear the message. Text uses the same sanitization as
+invoice creation. The invoice, its payment code/address, sats, expiry, rate and authenticated
+account identity stay fixed. Answers 204, or 404 once settlement has started or the request
+is unknown. Nothing edits an already recorded donation.
 
 ### `POST /donations/onchain`
 

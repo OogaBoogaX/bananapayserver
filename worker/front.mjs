@@ -50,19 +50,20 @@ async function invoice(request, env, donor, visitor) {
   const message = cleanMessage(body.value);
   if (message === null || Object.hasOwn(body.value, "handle") && typeof body.value.handle !== "string") return reply({ error: "invalid" }, 400);
   const github = anon || donor === null ? null : { id: donor.id, login: donor.login };
-  const handle = Object.hasOwn(body.value, "handle")
-    ? sanitize(body.value.handle, HANDLE_MAX).replace(/^@+/, "").trim() || "anon"
-    : github?.login || "";
+  const handle = Object.hasOwn(body.value, "handle") ? cleanHandle(body.value.handle) : github?.login || "";
   return toObject(env, "/invoice", { sats, handle, message, github, client: visitor });
 }
 
 async function note(request, env, visitor) {
   if (!visitor) return reply({ error: "invalid" }, 400);
-  const body = await readBody(request, ["request", "message"], ["request"]);
+  const body = await readBody(request, ["request", "handle", "message"], ["request"]);
   if (body.error) return reply({ error: body.error }, body.status);
-  const message = cleanMessage(body.value);
-  if (!isRequest(body.value.request) || message === null) return reply({ error: "invalid" }, 400);
-  return toObject(env, "/note", { request: body.value.request, message, client: visitor });
+  const value = body.value, message = cleanMessage(value), hasHandle = Object.hasOwn(value, "handle");
+  if (!isRequest(value.request) || message === null || hasHandle && typeof value.handle !== "string") return reply({ error: "invalid" }, 400);
+  const details = { request: value.request, client: visitor };
+  if (!hasHandle || Object.hasOwn(value, "message")) details.message = message;
+  if (hasHandle) details.handle = cleanHandle(value.handle);
+  return toObject(env, "/note", details);
 }
 
 async function onchain(request, env, visitor) {
@@ -111,6 +112,7 @@ const isRequest = (value) => typeof value === "string" && REQUEST.test(value);
 const visitorOf = (visitor) => (typeof visitor === "string" && visitor.length > 0 ? visitor.slice(0, VISITOR_MAX) : null);
 
 // The message, cleaned with OBL's rules, or null when it isn't text.
+const cleanHandle = (handle) => sanitize(handle, HANDLE_MAX).replace(/^@+/, "").trim() || "anon";
 const cleanMessage = ({ message = "" }) => (typeof message === "string" ? sanitize(message, MESSAGE_MAX) : null);
 
 async function readBody(request, allowed, required) {

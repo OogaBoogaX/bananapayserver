@@ -2,6 +2,9 @@
 
 **Status:** accepted, 2026-10-17; supersedes the display-name and leaderboard policy in 0010.
 
+The requirement to replace an invoice for handle changes is superseded by
+[0022](0022-edit-details-in-place.md).
+
 ## Decision
 
 Every donor may choose a display handle, signed in or not. OBL defaults it to the GitHub login

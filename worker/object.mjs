@@ -82,6 +82,8 @@ const MIGRATIONS = [
   // The minute's rate limit counts, so they hold when the object sleeps. Keyed by a visitor's
   // group, never their address, and gone when the minute is.
   `CREATE TABLE rate (key TEXT PRIMARY KEY, minute INTEGER NOT NULL, count INTEGER NOT NULL);`,
+  // Once settlement starts, freeze attribution before an awaited D1 write lets a note interleave.
+  `ALTER TABLE pending ADD COLUMN settling INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 export class DonationsObject {
@@ -193,15 +195,16 @@ export class DonationsObject {
     }
   }
 
-  // The message can follow the amount, any time before the invoice is paid. Who gave it was
-  // settled when the invoice was made.
-  note({ request, message, client }) {
+  // The request capability may update display text until settlement starts. Account identity,
+  // invoice, amount and rate stay fixed. A handle-only update preserves the existing message.
+  note({ request, handle, message, client }) {
     const limits = readLimits(this.env);
     if (!limits) return closed();
     if (!this.allow("note", client, limits)) return busy();
     const updated = this.sql.exec(
-      "UPDATE pending SET message = ? WHERE request = ? RETURNING request",
-      sanitize(message, MESSAGE_MAX), request,
+      "UPDATE pending SET handle = coalesce(?, handle), message = coalesce(?, message) WHERE request = ? AND settling = 0 RETURNING request",
+      handle === undefined ? null : sanitize(handle, HANDLE_MAX).replace(/^@+/, "").trim() || "anon",
+      message === undefined ? null : sanitize(message, MESSAGE_MAX), request,
     ).toArray();
     return updated.length ? new Response(null, { status: 204 }) : json({ error: "unknown" }, 404);
   }
@@ -327,6 +330,7 @@ export class DonationsObject {
       return known ? "duplicate" : "unknown";
     }
     if (row.sats !== sats) return "rejected";
+    this.sql.exec("UPDATE pending SET settling = 1 WHERE request = ?", row.request);
     const inserted = await this.env.DB.prepare(
       "INSERT INTO donations (id, sats, handle, message, at, method, github_id, price_cents, price_at, banana_cents, milli) " +
       "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +

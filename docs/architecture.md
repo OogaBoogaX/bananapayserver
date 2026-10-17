@@ -165,8 +165,9 @@ its own origin, and OBL's Worker passes it on over the binding, so OBL's content
 and login beside the request, independently of the page's editable donation handle. Anyone
 can enter a display name; OBL defaults it to the signed-in login or `anon`. The display name
 is unverified and does not establish account ownership. Names and messages are sanitized to
-39 and 280 characters. The relay receives neither. Changing the name on a quote creates a
-new invoice. This updates the display-name policy in decision 0010; the authenticated
+39 and 280 characters. The relay receives neither. The request capability can change display
+details until settlement starts, without changing the invoice, rate or account identity.
+This updates the display-name policy in decision 0010; the authenticated
 service-binding boundary in decision 0014 stays in place.
 
 **What it counts for** is set when the invoice is made: one banana is a dollar's worth of

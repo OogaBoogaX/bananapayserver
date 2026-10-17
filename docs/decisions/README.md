@@ -42,6 +42,7 @@ means writing a new record.
 | [0019](0019-production-relay-address.md) | Production's relay dials the Worker's workers.dev address | accepted |
 | [0020](0020-staging-then-production.md) | Production runs only what passed staging; releases are cut from main | accepted |
 | [0021](0021-editable-donation-handles.md) | Editable donation handles and rankings by entered name | accepted |
+| [0022](0022-edit-details-in-place.md) | Edit donation details on the same invoice | accepted |
 
 ## Waiting for a record
 

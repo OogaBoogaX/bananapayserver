@@ -14,7 +14,7 @@
   "use strict";
   const BL = window.BL = window.BL || {};
   const NETWORKS = ["mainnet", "testnet", "signet", "regtest"];
-  let real = false;
+  let real = false, invoiceMessageMax = 80;
   const config = {
     serverUrl: "https://btcpay.example.org",
     storeId: "REPLACE_WITH_STORE_ID",
@@ -89,6 +89,7 @@
     if (r.error) return r;
     const inv = r.invoice, b = r.bananas, rate = r.rate;
     if (typeof r.request !== "string" || !inv || typeof inv.id !== "string" || typeof inv.bolt11 !== "string" && inv.bolt11 != null || !isNumber(inv.expires)) return { error: "invalid" };
+    invoiceMessageMax = body.handle === undefined ? 80 : MESSAGE_MAX;
     return {
       request: r.request,
       invoice: { id: inv.id, bolt11: inv.bolt11 || null, expires: inv.expires },
@@ -97,7 +98,13 @@
     };
   };
   // Replaces the message on a request not yet paid.
-  const note = (request, message) => call("/donations/note", { request, message: sanitize(message, MESSAGE_MAX) });
+  const note = (request, message, handle) => {
+    const body = { request, message: sanitize(message, MESSAGE_MAX) };
+    // Older servers accept notes but silently cap them at 80 characters. Never claim a long edit saved there.
+    if (body.message.length > invoiceMessageMax) return Promise.resolve({ error: "invalid" });
+    if (handle !== undefined) body.handle = sanitize(handle, HANDLE_MAX).replace(/^@+/, "").trim() || "anon";
+    return call("/donations/note", body);
+  };
   // Switches a request's invoice to on-chain as well: `{ address, sats }`, the address and what to send there (more than
   // the invoice when the store adds a network fee), checked, or `{ error }` (`expired` once the invoice has).
   const onchain = async (request) => {
