@@ -44,8 +44,10 @@ The pile has <strong id="pile">?</strong> bananas.</p>
   <textarea id="pay" readonly placeholder="The invoice, or the on-chain payment, appears here"></textarea>
 </fieldset>
 
-<h2>Leaderboard</h2>
+<h2>Banana leaderboard</h2>
 <ol id="board"></ol>
+<h2>Sats leaderboard</h2>
+<ol id="sats-board"></ol>
 
 <h2>Donations on the socket</h2>
 <div id="log"></div>
@@ -122,10 +124,10 @@ setInterval(() => {
   $("pile").textContent = Math.floor(level).toLocaleString();
 }, 1000);
 
-function showBoard(entries) {
-  $("board").replaceChildren(...entries.map(({ handle, bananas }) => {
+function showBoard(id, entries, unit) {
+  $(id).replaceChildren(...entries.map((entry) => {
     const item = document.createElement("li");
-    item.textContent = `@${handle}: ${bananas.toLocaleString()} bananas`;
+    item.textContent = `@${entry.handle}: ${entry[unit].toLocaleString()} ${unit}`;
     return item;
   }));
 }
@@ -140,7 +142,10 @@ function connect() {
     const message = JSON.parse(event.data);
     if (message.type === "status") setStatus(`${message.open ? "open" : "closed"}, on ${message.network}`, message.open);
     if (message.type === "pile") pile = { ...message, received: Date.now() };
-    if (message.type === "board") showBoard(message.entries);
+    if (message.type === "board") {
+      showBoard("board", message.entries, "bananas");
+      showBoard("sats-board", message.satsEntries, "sats");
+    }
     if (message.type !== "donation" || seen.has(message.donation.id)) return;
     const d = message.donation;
     seen.add(d.id);

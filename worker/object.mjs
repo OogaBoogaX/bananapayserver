@@ -404,18 +404,17 @@ export class DonationsObject {
     if (refresh || !this.boardEntries) {
       const asked = ++this.boardAsked;
       try {
-        const { results } = await this.env.DB.prepare(
-          "SELECT login, milli, sats, github_id, milli AS amount, 'bananas' AS unit FROM " +
-          "(SELECT login, milli, sats, github_id FROM totals ORDER BY milli DESC, github_id LIMIT ?) " +
-          "UNION ALL SELECT login, milli, sats, github_id, sats AS amount, 'sats' AS unit FROM " +
-          "(SELECT login, milli, sats, github_id FROM totals ORDER BY sats DESC, github_id LIMIT ?) " +
-          "ORDER BY unit, amount DESC, github_id",
-        ).bind(BOARD_SIZE, BOARD_SIZE).all();
+        const [bananas, sats] = await Promise.all([
+          this.env.DB.prepare("SELECT login, milli, sats FROM totals WHERE milli > 0 ORDER BY milli DESC, github_id LIMIT ?")
+            .bind(BOARD_SIZE).all(),
+          this.env.DB.prepare("SELECT login, milli, sats FROM totals ORDER BY sats DESC, github_id LIMIT ?")
+            .bind(BOARD_SIZE).all(),
+        ]);
         if (asked > this.boardShown) {
           this.boardShown = asked;
           const entry = (r) => ({ handle: r.login, bananas: Math.round(r.milli / 1000), sats: r.sats });
-          this.boardEntries = results.filter((r) => r.unit === "bananas").map(entry);
-          this.boardSatsEntries = results.filter((r) => r.unit === "sats").map(entry);
+          this.boardEntries = bananas.results.map(entry);
+          this.boardSatsEntries = sats.results.map(entry);
         }
       } catch (error) {
         console.error("reading the leaderboard failed:", error.message);

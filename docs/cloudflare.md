@@ -70,9 +70,18 @@ Run `node --test --test-timeout=60000` before applying migrations or deploying b
    ```
 
 3. **Create its tables.**
-   Apply every pending migration, including `0001_donations.sql`, `0002_stats.sql` and
-   `0003_tally.sql`. Migrations always precede the Worker that needs them; without them,
-   payments can't be recorded and pile up unacknowledged at the relay.
+   Apply every pending migration, including `0001_donations.sql`, `0002_stats.sql`,
+   `0003_tally.sql` and `0004_donor_sats.sql`. Migrations always precede the Worker that needs
+   them; without them, payments can't be recorded and pile up unacknowledged at the relay.
+   The leaderboard reads require `0004`'s `totals.sats` column before this Worker is deployed,
+   in staging and production. `0004` has already been applied to both; do not edit or replay
+   it. Any later schema change needs a new migration.
+
+   `0004` rebuilds donor totals before recreating their insert trigger. Do not allow donation
+   writes between those statements: verify the migration runner applies the whole file
+   atomically, or pause writes for the migration. Record that safeguard and check the donor
+   totals against donation history afterwards. The original deployment record does not say
+   whether writes were paused; matching totals alone do not establish that they were.
 
    ```bash
    node .github/deploy/node_modules/wrangler/bin/wrangler.js \

@@ -140,26 +140,28 @@ test("how far a price may move is the deployment's setting", async () => {
   assert.equal(moved.rate.usdPerBtc, 250_000, "2.5 times is within 3");
 });
 
-test("with no price anywhere, the donation still goes through, worth no bananas until worked out again", async (t) => {
-  const errors = t.mock.method(console, "error", () => {});
-  const w = await world({}, { prices: { socket: null, rest: null } });
-  const relay = await w.connectRelay();
-  const page = await w.connectPage();
-  const { response } = await w.invoice(relay, { sats: 1000 }, undefined, { donor: donor("unpriced-donor") });
-  const reply = await response.json();
-  assert.equal(reply.bananas, null);
-  assert.equal(reply.rate, null);
-  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
-  assert.equal(typed(page, "donation")[0].bananas, null);
-  assert.equal(typed(page, "pile").length, 1, "the pile doesn't move");
-  const expected = [{ handle: "unpriced-donor", bananas: 0, sats: 1000 }];
-  assert.deepEqual(typed(page, "board").at(-1).entries, expected);
-  assert.deepEqual(typed(page, "board").at(-1).satsEntries, expected);
-  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
-  assert.deepEqual((await w.object.board({ refresh: true })).satsEntries, expected, "a repeated payment counts once");
-  assert.deepEqual({ ...w.env.DB.db.prepare("SELECT sats, price_cents, milli FROM donations").get() }, { sats: 1000, price_cents: null, milli: null });
-  assert.match(errors.mock.calls[0].arguments[0], /invoices get no price$/);
-});
+for (const login of [null, "unpriced-donor"]) {
+  test(`with no price anywhere, an ${login ? "identified" : "anonymous"} donation still goes through without bananas`, async (t) => {
+    const errors = t.mock.method(console, "error", () => {});
+    const w = await world({}, { prices: { socket: null, rest: null } });
+    const relay = await w.connectRelay();
+    const page = await w.connectPage();
+    const { response } = await w.invoice(relay, { sats: 1000 }, undefined, { donor: login ? donor(login) : null });
+    const reply = await response.json();
+    assert.equal(reply.bananas, null);
+    assert.equal(reply.rate, null);
+    await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+    assert.equal(typed(page, "donation")[0].bananas, null);
+    assert.equal(typed(page, "pile").length, 1, "the pile doesn't move");
+    const expected = login ? [{ handle: login, bananas: 0, sats: 1000 }] : [];
+    assert.deepEqual(typed(page, "board").at(-1).entries, [], "no unpriced donors on the banana list");
+    assert.deepEqual(typed(page, "board").at(-1).satsEntries, expected);
+    await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+    assert.deepEqual((await w.object.board({ refresh: true })).satsEntries, expected, "a repeated payment counts once");
+    assert.deepEqual({ ...w.env.DB.db.prepare("SELECT sats, price_cents, milli FROM donations").get() }, { sats: 1000, price_cents: null, milli: null });
+    assert.match(errors.mock.calls[0].arguments[0], /invoices get no price$/);
+  });
+}
 
 test("everyone sees one pile: it starts full, the Oogas eat at a fixed rate, and donations add to it", async () => {
   const w = await world({ PILE_START: "1000", PILE_EAT_PER_HOUR: "60" });
@@ -301,14 +303,16 @@ test("an older leaderboard read that answers last doesn't replace a newer one", 
   const prepare = w.env.DB.prepare;
   w.env.DB.prepare = (sql) => {
     if (!sql.includes("FROM totals")) return prepare(sql);
-    const login = releases.length ? "newer" : "older";
-    const entries = ["bananas", "sats"].map((unit) => ({ login, milli: 1000, sats: 1000, unit }));
+    const login = releases.length < 2 ? "older" : "newer";
+    const entries = [{ login, milli: 1000, sats: 1000 }];
     return { bind: () => ({ all: () => new Promise((resolve) => releases.push(() => resolve({ results: entries }))) }) };
   };
   const older = w.object.board({ refresh: true });
   const newer = w.object.board({ refresh: true });
-  releases[1]();
+  releases[3]();
+  releases[2]();
   await newer;
+  releases[1]();
   releases[0]();
   await older;
   const board = await w.object.board();
