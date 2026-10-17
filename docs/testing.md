@@ -82,7 +82,8 @@ Then the failure drills:
 | Turn the webhook off and pay an invoice | The donation still arrives, within about a minute |
 | Redeliver a webhook from BTCPay's list of deliveries | No second donation |
 | Switch to on-chain, pay the address with `./docker-customer-lncli.sh sendcoins --addr <address> --amt <sats>` in the checkout's `BTCPayServer.Tests`, and mine with `scripts/regtest.sh mine 6` | The donation arrives once the store has the confirmations it requires, recorded with method `onchain` |
-| Ask for more than `MAX_SATS` | The page shows the `amount` error |
+| Ask for more than `LIGHTNING_MAX_SATS` (or legacy `MAX_SATS`) | The page warns before Continue and offers only on-chain; no application maximum applies |
+| Ask for an invalid Bitcoin amount | The page shows the `amount` error |
 | Restart the Worker while the page is open | The page reconnects and catches up on anything it missed |
 | Stop the Worker while the stand-in is open | The stand-in answers `closed` for anything the page asks |
 | Ask the Worker's own address, `http://localhost:8787`, for `/donations/invoice` | 404: only the relay's line is public |

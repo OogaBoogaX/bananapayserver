@@ -3,6 +3,7 @@
 // falling back to a default. See docs/configuration.md.
 
 import { isNetwork } from "../shared/bolt11.mjs";
+import { MAX_SATS as MAX_MONEY } from "../shared/protocol.mjs";
 
 const positiveInt = (value) => {
   if (typeof value !== "string" || !/^[1-9]\d{0,15}$/.test(value.trim())) return null;
@@ -14,7 +15,8 @@ const wholeNumber = (value) => (value?.trim?.() === "0" ? 0 : positiveInt(value)
 
 // The limits, or null when donations must stay closed.
 export function readLimits(env) {
-  const maxSats = positiveInt(env.MAX_SATS);
+  const maxSats = MAX_MONEY;
+  const lightningMaxSats = positiveInt(env.LIGHTNING_MAX_SATS ?? env.MAX_SATS);
   const ratePerIp = positiveInt(env.RATE_PER_IP);
   const rateGlobal = positiveInt(env.RATE_GLOBAL);
   const socketsPerIp = positiveInt(env.SOCKETS_PER_IP);
@@ -23,9 +25,10 @@ export function readLimits(env) {
   const priceJumpMax = positiveInt(env.PRICE_JUMP_MAX);
   const onchainFeeAllowance = wholeNumber(env.ONCHAIN_FEE_ALLOWANCE);
   const minSats = env.MIN_SATS === undefined ? 1 : positiveInt(env.MIN_SATS);
-  if (!maxSats || !ratePerIp || !rateGlobal || !socketsPerIp || !minSats || minSats > maxSats) return null;
+  if (!ratePerIp || !rateGlobal || !socketsPerIp || !minSats || minSats > maxSats) return null;
+  if (!lightningMaxSats || lightningMaxSats > maxSats) return null;
   if (!priceJumpMax || priceJumpMax < 2 || onchainFeeAllowance === null) return null;
-  return { minSats, maxSats, ratePerIp, rateGlobal, socketsPerIp, priceJumpMax, onchainFeeAllowance };
+  return { minSats, maxSats, lightningMaxSats, ratePerIp, rateGlobal, socketsPerIp, priceJumpMax, onchainFeeAllowance };
 }
 
 // Settings that are not limits. A missing or unknown network also closes donations.

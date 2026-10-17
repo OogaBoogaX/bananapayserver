@@ -8,7 +8,7 @@ const REQUEST = /^[0-9a-f]{32}$/;
 const INVOICE_ID = /^[A-Za-z0-9]{8,64}$/;
 const BOLT11 = /^ln[a-z0-9]{1,90}1[02-9ac-hj-np-z]{100,6000}$/;
 const ADDRESS = /^[A-Za-z0-9]{14,90}$/;
-const MAX_SATS = 2_100_000_000_000_000;
+export const MAX_SATS = 2_100_000_000_000_000;
 
 const isRequest = (v) => typeof v === "string" && REQUEST.test(v);
 const isInvoiceId = (v) => typeof v === "string" && INVOICE_ID.test(v);
@@ -20,7 +20,7 @@ const isOneOf = (values) => (v) => values.includes(v);
 const isInvoice = (v) =>
   hasKeys(v, ["id", "bolt11", "expires"]) &&
   isInvoiceId(v.id) &&
-  typeof v.bolt11 === "string" && BOLT11.test(v.bolt11) &&
+  (v.bolt11 === null || typeof v.bolt11 === "string" && BOLT11.test(v.bolt11)) &&
   isTime(v.expires);
 
 // Down: from the Durable Object to the relay.
@@ -64,6 +64,8 @@ function parse(text) {
 export function parseDown(text) {
   const message = parse(text);
   if (!message || typeof message.type !== "string" || !Object.hasOwn(DOWN, message.type)) return null;
+  if (message.type === "invoice" && message.onchainOnly === true &&
+      hasKeys(message, ["type", "request", "sats", "onchainOnly"]) && isRequest(message.request) && isSats(message.sats)) return message;
   return matches(message, message.type, DOWN[message.type]) ? message : null;
 }
 

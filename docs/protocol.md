@@ -67,40 +67,69 @@ except the sign-in.
 ### `POST /donations/invoice`
 
 ```json
-{ "sats": 10000, "message": "for the cave", "anon": false }
+{ "sats": 10000, "handle": "ooga-dev", "message": "for the cave" }
 ```
 
-`message` and `anon` are optional. Who gave it comes from OBL's sign-in, never from the body: a
-signed-in donor gives as their GitHub username unless `anon` is true, and anyone else gives
-anonymously. The Worker cleans the message with OBL's rules. A page can send the amount alone
-as soon as the donor picks it, and the message afterwards.
+`handle` and `message` are optional editable display text, available with or without sign-in.
+The Worker sanitizes them with OBL's rules: at most 39 and 280 characters, respectively.
+Leading `@` is removed from the handle, and an explicitly empty handle becomes `anon`.
+OBL prepopulates the handle with the signed-in login, otherwise `anon`; either can be changed.
+Account identity still comes only from OBL's authenticated service-binding argument, never
+from the display handle. Without `handle`, older clients retain the signed-in login or an
+empty anonymous name; `anon: true` still suppresses account identity for those clients.
+The handle and message can be updated using `/donations/note` before settlement starts,
+without replacing the invoice or its rate.
 
 ```json
 {
   "request": "3f0c…32 hex characters",
   "invoice": { "id": "BTCPay invoice id", "bolt11": "lnbc…", "expires": 1790000900 },
   "bananas": { "exact": 10, "rounded": 10 },
-  "rate": { "usdPerBtc": 100000, "satsPerBanana": 1000, "at": 1790000000000, "stale": false }
+  "rate": { "usdPerBtc": 100000, "satsPerBanana": 1000, "at": 1790000000000, "stale": false },
+  "pricing": "receipt",
+  "lightning": "available"
 }
 ```
 
-`request` is the page's key to its own donation: only it can add the message or switch to
+`request` is the page's key to its own donation: only it can update display details or switch to
 on-chain. Keep it in memory, never in a URL. `expires` is in unix seconds. A banana is a
-dollar's worth of bitcoin at the price in `rate`, which is locked into this invoice: the donor
-is shown the rate and both counts, and the donation counts `exact` bananas. `rate.at` is when
-the price was fetched, in milliseconds. `rate.stale` is true when the price service didn't
-answer and the count uses the last price it gave, from `rate.at`; the page shows an alert
-saying so. `bananas` and `rate` are both null in the rare case that there has never been a
-price, and the page shows an alert for that too. Either way, the donation still goes through.
+dollar's worth of bitcoin. With `pricing: "receipt"`, `bananas` and `rate` are estimates,
+not locked amounts. OBL follows 2140data's live socket while a kiosk is open; the sats amount,
+Lightning code and on-chain address never change with the market. An older reply without
+`pricing: "receipt"` still means the legacy invoice-locked rule.
+
+Lightning records a price when the backend receives the paid notice. On-chain records it
+when the backend first sees `left: 0`: BTCPay has received the full amount, including any
+required fee and payments made through another method. Partial payments keep floating. If the first notice is already settled,
+that notice is the receipt. Confirmation credits the frozen amount; it never reprices it.
+The server independently samples 2140data's socket, then REST on failure, and keeps its existing
+jump guard and last-price fallback. It never trusts a price from the page.
+
+`rate.at` is the server's price observation time in milliseconds; `rate.stale` identifies a
+fallback. D1 stores `received_at` separately from `price_at`, along with `price_cents`,
+`price_stale`, `pricing` and `milli`. A missing price freezes a null price and zero credited
+bananas, without blocking payment. Once stored, a receipt is never repriced by retries,
+restarts or service recovery. Apply `0006_receipt_pricing.sql` before deploying. Historical
+rows and totals keep their recorded invoice prices.
+
+`lightning` is `available`, `limit` (above the configured Lightning threshold), or
+`unavailable`. The last two have `invoice.bolt11: null` and still support `/donations/onchain`.
+Amounts above `LIGHTNING_MAX_SATS` are accepted on-chain only, without an application cap.
+The Worker asks the relay for `onchainOnly: true`; the relay also enforces its own threshold.
+Invalid Bitcoin amounts or amounts below the configured minimum still return `amount`.
+Legacy `MAX_SATS` supplies the Lightning threshold only when `LIGHTNING_MAX_SATS` is absent.
 
 ### `POST /donations/note`
 
 ```json
-{ "request": "3f0c…", "message": "for the cave" }
+{ "request": "3f0c…", "handle": "chosen-name", "message": "for the cave" }
 ```
 
-Replaces the message, any time before the invoice is paid. Who gave it can't change. Answers
-204.
+Updates optional `handle` and/or `message` before settlement starts. Omitted fields are
+preserved; legacy calls with neither clear the message. Text uses the same sanitization as
+invoice creation. The invoice, its payment code/address, sats, expiry, rate and authenticated
+account identity stay fixed. Answers 204, or 404 once settlement has started or the request
+is unknown. Nothing edits an already recorded donation.
 
 ### `POST /donations/onchain`
 
@@ -125,11 +154,14 @@ missed. After that:
 
 - `{ "type": "status", "open": true, "network": "signet" }` whenever the relay's line opens or
   closes, so the page can say donations are closed before anyone tries. `network` is the
-  network this deployment takes payments on, so a page can label test donations.
+  network this deployment takes payments on, so a page can label test donations. It also has
+  `limits: { minSats, maxSats, lightningMaxSats }`, the public payment policy. `maxSats` is the fixed Bitcoin supply bound, not an application
+  cap. Kiosks warn about on-chain-only amounts before Continue and validate Bitcoin amounts. Legacy
+  clients may ignore these extra fields.
 - `{ "type": "donation", "donation": { "id", "sats", "handle", "message", "at" }, "bananas": { "exact", "rounded" } }`
   for each payment. `donation` is OBL's contract exactly, with the invoice id as `id`, the
-  GitHub username or `""` as `handle`, and `at` in milliseconds. A username arrives whole, up
-  to GitHub's 39 characters. The donor's page recognizes its own invoice id.
+  chosen display handle (or `""` from an older anonymous client), and `at` in milliseconds.
+  Handles run to 39 characters and messages to 280. The donor's page recognizes its own invoice id.
 - `{ "type": "seen", "id", "sats", "due", "left" }` when BTCPay sees an on-chain payment it
   hasn't yet settled, before the donation itself, which follows once BTCPay settles the
   invoice. `id` is the invoice id the donation will carry, `sats` is everything the invoice
@@ -138,19 +170,25 @@ missed. After that:
   `due − sats`: a store can add a network fee for a second payment, so `left` is the amount
   to ask the donor for. It names nobody and counts nothing. It's sent once per payment, as it
   happens, and is neither kept nor replayed; after the relay restarts, one may come again,
-  which a page takes as harmless. Lightning payments never send it.
+  which a page takes as harmless. When a receipt has frozen, this message also has
+  `pricing: { receivedAt, rate, bananas }`: the receipt timestamp, the recorded rate (or null),
+  and the recorded banana count (or null). Repeated notices return the same snapshot. The
+  snapshot is durable, though the notice itself isn't replayed. Lightning payments never send it.
 - `{ "type": "pile", "bananas": 980.5, "at": 1790000000000, "eatPerHour": 60 }` after each
   donation that counts. Every page works the pile out the same way: `bananas`, less
   `eatPerHour` for each hour since the message arrived, never below zero. Show whole bananas.
 - `{ "type": "board", "entries": [{ "handle": "ooga-dev", "bananas": 300.125, "sats": 300000 }], "satsEntries": [{ "handle": "ooga-dev", "bananas": 300.125, "sats": 300000 }] }`
-  after each signed-in donation. `entries` is the top 20 by total bananas,
+  after each named donation. `entries` is the top 20 by total bananas,
   excluding donors with no counted bananas; `satsEntries` is
   independently the top 20 by total sats, including unpriced donations. Each entry includes
   both totals. Banana totals preserve the recorded thousandths without rounding; clients may
-  round for display. Ties in either ranking follow GitHub's numeric id. Sats are
+  round for display. Matching handles combine case-insensitively across accounts and guests;
+  the latest spelling is displayed. Ties in either ranking follow handle order. Sats are
   recorded amounts, never converted from bananas at today's price. A donation without a
   price adds its sats and zero bananas. Both lists include earlier donations after migration
-  `0004_donor_sats.sql`, retain renamed accounts' history, and exclude anonymous donations.
+  `0005_handle_totals.sql`, grouped by their recorded display names. Changing the name starts
+  a separate total; old unnamed donations remain outside the ranking. `anon` is a regular
+  entered handle whose donations combine like any other name. Display names are not verified identities.
   If D1 can't be read, the last cached board is kept, or skipped if none has been read.
   Older clients can continue reading `entries` alone.
 - The tally, the donations board's figures, the same in every browser:
@@ -221,7 +259,7 @@ From the object to the relay:
 
 | Message | Meaning |
 |---|---|
-| `{ "type": "invoice", "request", "sats" }` | Make an invoice for this amount |
+| `{ "type": "invoice", "request", "sats" }` | Make an invoice for this amount; an optional `onchainOnly: true` creates only the on-chain method. When present it must be exactly `true` |
 | `{ "type": "onchain", "request", "invoice" }` | Add an on-chain address to this invoice |
 | `{ "type": "ack", "invoice", "result" }` | The payment notice arrived; `result` is `recorded`, `duplicate`, `unknown` or `rejected` |
 
@@ -229,7 +267,7 @@ From the relay to the object:
 
 | Message | Meaning |
 |---|---|
-| `{ "type": "invoice", "request", "invoice": { "id", "bolt11", "expires" } }` | The invoice |
+| `{ "type": "invoice", "request", "invoice": { "id", "bolt11", "expires" } }` | The invoice; `bolt11: null` for an on-chain-only invoice |
 | `{ "type": "invoice", "request", "error" }` | `cap` when the amount is over the relay's own cap, otherwise `unavailable` |
 | `{ "type": "onchain", "request", "address", "sats" }` | The address, and what BTCPay expects on-chain |
 | `{ "type": "onchain", "request", "error": "unavailable" }` | No address |

@@ -1,6 +1,6 @@
 # Copy to .dev.vars for local development with wrangler. Never commit .dev.vars.
 # Limits have no defaults on purpose: donations stay closed until each one is set.
-MAX_SATS=
+LIGHTNING_MAX_SATS=
 RATE_PER_IP=
 RATE_GLOBAL=
 SOCKETS_PER_IP=

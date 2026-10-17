@@ -3,6 +3,9 @@
 **Status:** accepted, 2026-10-01. Where the price comes from is superseded by
 [0013](0013-price-from-2140data.md).
 
+Receipt-time pricing and live estimates supersede the invoice-locking policy in
+[0023](0023-receipt-time-pricing.md).
+
 ## Decision
 
 One banana is a dollar's worth of bitcoin, at bitcoin's price when the invoice is made. The

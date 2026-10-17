@@ -68,7 +68,10 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
    - **`BITCOIN_RPC_PASSWORD` and `POSTGRES_PASSWORD`:** fresh values, made here and used
      nowhere else, from `openssl rand -hex 24`.
    - **`WORKER_URL`:** `wss://bananapayserver-staging.<account subdomain>.workers.dev/relay`.
-   - **`RELAY_MAX_SATS`:** the team's cap for staging.
+   - **`RELAY_LIGHTNING_MAX_SATS`:** the team's Lightning threshold for staging, passed as
+     `LIGHTNING_MAX_SATS` to the relay. It does not cap on-chain donations. Existing `.env`
+     files may keep `RELAY_MAX_SATS`; Compose uses it only when `RELAY_LIGHTNING_MAX_SATS`
+     is absent. An explicitly empty or invalid `RELAY_LIGHTNING_MAX_SATS` stops the relay.
    - **`RELAY_RATE_PER_MINUTE`:** the team's limit on invoices and on-chain addresses a
      minute, at least staging's `RATE_GLOBAL`.
 
@@ -192,7 +195,7 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
    alone, from `lncli -n signet getinfo`. Without a host, the faucet opens the channel over
    LND's own connection. It's usable once `lncli -n signet listchannels` shows it active, a
    few blocks later, and its `remote_balance` is the most LND can receive, so
-   `RELAY_MAX_SATS` stays below it.
+   `RELAY_LIGHTNING_MAX_SATS` stays below it.
 
 10. **Donate.** Once OBL's staging Worker has its binding, donate from OBL's staging page and
     pay the `lntbs…` invoice from a signet wallet, or the faucet's own Lightning payer. The
@@ -251,7 +254,8 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
 regtest, with a payer node, and points the relay at a Worker running on the workstation. It
 proves the wiring before anything touches the machine, in minutes rather than hours:
 
-1. `.env` from the example, with any placeholder for `SIGNET_PEER` and `RELAY_MAX_SATS` set.
+1. `.env` from the example, with any placeholder for `SIGNET_PEER` and
+   `RELAY_LIGHTNING_MAX_SATS` set.
 2. `export COMPOSE_FILE=compose.yaml:compose.rehearsal.yaml`, then step 4's build, and
    `docker compose -p obl-staging up -d` with step 4's services and `payer`. A workstation
    has no node to fence off, so it skips `start.sh` and the firewall.

@@ -161,25 +161,34 @@ its own origin, and OBL's Worker passes it on over the binding, so OBL's content
 
 ## Who gave it, and what it counts for
 
-**Who gave it** comes from OBL's GitHub sign-in, never from what the page sends. OBL's Worker
-passes the donor's numeric GitHub id, which survives a rename, and their username beside each
-invoice call, and the Worker checks both. A signed-in donor gives as their GitHub username
-unless they choose to give anonymously, and everyone else gives anonymously. Donations are the
-record, so they stay when a donor deletes their OBL account; whether the leaderboard shows an
-account that is gone is the page's choice. See
-[decision 0010](decisions/0010-handles-from-github.md) and
-[decision 0014](decisions/0014-pages-through-obl.md).
+**Account identity** comes from OBL's GitHub sign-in. Its Worker passes the numeric GitHub id
+and login beside the request, independently of the page's editable donation handle. Anyone
+can enter a display name; OBL defaults it to the signed-in login or `anon`. The display name
+is unverified and does not establish account ownership. Names and messages are sanitized to
+39 and 280 characters. The relay receives neither. The request capability can change display
+details until settlement starts, without changing the invoice, rate or account identity.
+This updates the display-name policy in decision 0010; the authenticated
+service-binding boundary in decision 0014 stays in place.
 
-**What it counts for** is set when the invoice is made: one banana is a dollar's worth of
-bitcoin. For each invoice, the object asks 2140data's price service for bitcoin's price: its
-REST API first, then its socket, which sends the price as soon as it connects. If neither
-answers, or the price is further from the last one, within a day of it, than the deployment
-allows, the invoice uses the last price, marked stale so the page can show an alert. The price
-is locked into the invoice, and the donor is shown the rate and both counts, exact and rounded.
-The donation records its sats, the price and when it was fetched, and its bananas in
-thousandths, so any count can be worked out again. See
-[decision 0011](decisions/0011-bananas-in-dollars.md) and
-[decision 0013](decisions/0013-price-from-2140data.md).
+**What it counts for** is set at full receipt: one banana is a dollar's worth of bitcoin.
+Invoice creation returns an estimate from 2140data; OBL follows its live socket while the
+kiosk is open. The backend independently samples that socket at receipt, falling back to
+REST, then its last known price marked stale. Its jump guard still applies. Lightning freezes
+on the paid notice; on-chain freezes on the first fully funded notice (including any required
+fee), and credits only at settlement. Partial payments do not freeze. If detection was missed,
+settlement is the first receipt. The existing relay contract is unchanged.
+
+Before D1 is awaited, the object's storage keeps the receipt timestamp, price, stale flag and
+banana thousandths. Concurrent notices share a lookup; restarts and retries keep the snapshot.
+D1 stores the receipt and price observation times separately, plus the pricing rule, so older
+invoice-priced rows stay auditable. No permanent server socket or per-tick database writes
+are needed. See [decision 0023](decisions/0023-receipt-time-pricing.md).
+
+Amounts above the configured Lightning threshold remain payable on-chain without an
+application cap. The Worker publishes the Lightning threshold and Bitcoin amount bound for
+the kiosk and asks the relay for an on-chain-only invoice. The relay independently validates amounts
+and creates no Lightning method for larger invoices. The address remains lazy until the donor
+chooses On-chain. See [decision 0025](decisions/0025-no-onchain-donation-cap.md).
 
 ## The pile and the leaderboard
 
@@ -190,14 +199,14 @@ Its clock never runs backwards. The pile can be rebuilt from the donations in D1
 starting level, then take the donations in order, each at the later of its own time and the
 last one's. See [decision 0012](decisions/0012-global-pile.md).
 
-**The leaderboard** has the top 20 signed-in donors by total bananas, preserving recorded thousandths,
-and independently the top 20 by exact sats. Each entry carries both totals.
-D1 keeps each donor's running total by GitHub's numeric id, so a renamed username keeps its
-bananas and sats, and a trigger adds to it only when a donation is actually recorded. Sats
-also count when a donation has no banana price; historical totals are backfilled from the
-recorded donations by migration `0004_donor_sats.sql`. Anonymous
-donations count toward the pile but never appear on the board. Both are pushed to every page
-when they change.
+**The leaderboard** has the top 20 entered handles by recorded fractional bananas, and
+independently the top 20 by exact sats. Each entry carries both totals. D1's `handle_totals`
+combines case-insensitive names across accounts and guests, using the latest spelling for
+display. A trigger changes it only for a newly recorded donation. Each donation retains its
+recorded price (receipt-time for new donations); unpriced donations add sats and zero bananas. Migration `0005_handle_totals.sql`
+backfills the recorded names without changing the donation rows. Legacy unnamed donations
+remain outside the ranking, while the explicit `anon` name combines normally. Choosing a
+different handle starts a separate total. Both rankings are pushed when they change.
 
 **The tally** is the donations board's figures: every donation recorded, all time, and the
 last seven days by the hour, with the rate the kiosk quotes. D1 keeps it with a trigger, like

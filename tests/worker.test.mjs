@@ -20,6 +20,8 @@ test("an invoice goes from the page to the relay and back, with its bananas", as
     invoice: { id: INVOICE, bolt11: BOLT11, expires: EXPIRES },
     bananas: { exact: 1, rounded: 1 },
     rate: { usdPerBtc: 100_000, satsPerBanana: 1000, at: w.platform.now(), stale: false },
+    pricing: "receipt",
+    lightning: "available",
   });
 });
 
@@ -49,19 +51,23 @@ test("a payment is recorded once, acknowledged, and pushed to every page", async
   assert.equal(pages[0].messages().filter((m) => m.type === "donation").length, 1);
 });
 
-test("the message can follow the amount, but who gave it can't change", async () => {
+test("the request can update display details on the same invoice before settlement", async () => {
   const w = await world();
   const relay = await w.connectRelay();
   const page = await w.connectPage();
-  const { asked } = await w.invoice(relay, { sats: 1000 });
+  const { asked } = await w.invoice(relay, { sats: 1000 }, undefined, { donor: donor("account-login", 42) });
+  const before = { ...w.ctx.storage.sql.exec("SELECT * FROM pending").one() };
   const noted = await w.post("/donations/note", { request: asked.request, message: "<i>hi</i>" });
   assert.equal(noted.status, 204);
   const renamed = await w.post("/donations/note", { request: asked.request, handle: "someone-else" });
-  assert.equal(renamed.status, 400);
+  assert.equal(renamed.status, 204);
+  const after = { ...w.ctx.storage.sql.exec("SELECT * FROM pending").one() };
+  for (const key of ["request", "sats", "invoice", "expires", "github_id", "price_cents", "price_at", "milli"]) assert.equal(after[key], before[key], key);
   await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
   const [{ donation }] = page.messages().filter((m) => m.type === "donation");
-  assert.equal(donation.handle, "");
+  assert.equal(donation.handle, "someone-else");
   assert.equal(donation.message, "ihii");
+  assert.equal((await w.post("/donations/note", { request: asked.request, message: "too late" })).status, 404);
   const unknown = await w.post("/donations/note", { request: "f".repeat(32), message: "x" });
   assert.equal(unknown.status, 404);
 });
@@ -85,13 +91,13 @@ test("when the line drops, waiting pages hear at once and every page sees donati
   const w = await world({ INVOICE_TIMEOUT_MS: "60000" });
   const relay = await w.connectRelay();
   const page = await w.connectPage();
-  assert.deepEqual(page.messages()[0], { type: "status", open: true, network: "regtest" });
+  assert.deepEqual(page.messages()[0], { type: "status", open: true, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000 } });
   const pending = w.post("/donations/invoice", { sats: 1000 });
   await until(() => relay.sent.length === 1);
   relay.close(1006, "");
   await w.object.webSocketClose(relay, 1006, "", false);
   assert.equal((await pending).status, 503);
-  assert.deepEqual(page.messages().at(-1), { type: "status", open: false, network: "regtest" });
+  assert.deepEqual(page.messages().at(-1), { type: "status", open: false, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000 } });
 });
 
 test("an invoice for the wrong amount or network never reaches the donor", async () => {
@@ -112,7 +118,7 @@ test("the relay's own cap reaches the page as an amount error", async () => {
 });
 
 test("a missing or inconsistent limit closes donations", async () => {
-  for (const overrides of [{ MAX_SATS: undefined }, { RATE_PER_IP: "" }, { MIN_SATS: "5000", MAX_SATS: "100" }, { NETWORK: undefined }]) {
+  for (const overrides of [{ MAX_SATS: undefined }, { RATE_PER_IP: "" }, { MIN_SATS: "2100000000000001" }, { NETWORK: undefined }]) {
     const w = await world(overrides);
     await w.connectRelay();
     const response = await w.post("/donations/invoice", { sats: 50 });
@@ -124,11 +130,12 @@ test("the Worker checks amounts and bodies before anything reaches the object", 
   const w = await world();
   const cases = [
     [{ sats: 0 }, 400, "amount"],
-    [{ sats: 100_001 }, 400, "amount"],
+    [{ sats: 2_100_000_000_000_001 }, 400, "amount"],
     [{ sats: "1000" }, 400, "invalid"],
     [{ sats: 10.5 }, 400, "invalid"],
     [{ sats: 1000, extra: true }, 400, "invalid"],
-    [{ sats: 1000, handle: "typed-in" }, 400, "invalid"],
+    [{ sats: 1000, handle: 42 }, 400, "invalid"],
+    [{ sats: 1000, github: { id: 7, login: "forged" } }, 400, "invalid"],
     [{ sats: 1000, message: 7 }, 400, "invalid"],
     [{ sats: 1000, anon: "yes" }, 400, "invalid"],
     [{}, 400, "invalid"],
@@ -257,7 +264,7 @@ test("a relay that redials replaces its old line", async () => {
   assert.equal(w.object.line(), second);
   const page = await w.connectPage();
   await w.object.webSocketClose(first, 4000, "replaced", true);
-  assert.deepEqual(page.messages().filter((m) => m.type === "status"), [{ type: "status", open: true, network: "regtest" }], "the old line closing doesn't close donations");
+  assert.deepEqual(page.messages().filter((m) => m.type === "status"), [{ type: "status", open: true, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000 } }], "the old line closing doesn't close donations");
 });
 
 test("rate limits apply per visitor and overall, per minute", async () => {
@@ -333,7 +340,7 @@ test("a page that reconnects gets what it missed, and no more than the cap", asy
   assert.equal(replayed[0], "Donation0003");
   const fresh = await w.connectPage("UnknownId1");
   assert.deepEqual(fresh.messages().filter((m) => m.type === "donation"), []);
-  assert.deepEqual(fresh.messages()[0], { type: "status", open: false, network: "regtest" });
+  assert.deepEqual(fresh.messages()[0], { type: "status", open: false, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000 } });
   const invalid = await w.page.fetch(upgrade("/donations/socket?after=../x", { "X-Client": "visitor-p" }));
   assert.equal(invalid.status, 400);
 });
@@ -512,7 +519,7 @@ test("donations close even when the closing line still reads as open", async () 
   const relay = await w.connectRelay();
   const page = await w.connectPage();
   await w.object.webSocketClose(relay, 1006, "", false);
-  assert.deepEqual(page.messages().at(-1), { type: "status", open: false, network: "regtest" });
+  assert.deepEqual(page.messages().at(-1), { type: "status", open: false, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000 } });
 });
 
 test("a chunked body is cut off at the cap without being read whole", async () => {
@@ -549,4 +556,64 @@ test("IPv6 visitors count by their /64", () => {
   for (const bad of ["1:2:3:4:5:6:7:8:9::1", "1::2::3", "1:2:3:4:5:6:7:8:9"]) {
     assert.equal(visitorKey(bad), bad, "something that isn't an address counts as itself");
   }
+});
+
+
+test("any donor can choose a display handle without changing authenticated account identity", async () => {
+  for (const who of [null, donor("account-login", 42)]) {
+    const w = await world();
+    const relay = await w.connectRelay();
+    const page = await w.connectPage();
+    await w.invoice(relay, { sats: 1000, handle: " @Chosen-Name ", message: "m".repeat(281) }, undefined, { donor: who });
+    await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+    const [{ donation }] = page.messages().filter((m) => m.type === "donation");
+    assert.equal(donation.handle, "Chosen-Name");
+    assert.equal(donation.message, "m".repeat(280));
+    assert.equal(w.env.DB.db.prepare("SELECT github_id FROM donations").get().github_id, who?.id ?? null);
+    assert.ok(relay.sent.every((text) => !text.includes("Chosen-Name")), "the relay never gets the display handle");
+  }
+});
+
+test("empty custom handles become anon and long handles are bounded", async () => {
+  for (const [handle, expected] of [[" @ ", "anon"], ["x".repeat(50), "x".repeat(39)]]) {
+    const w = await world();
+    const relay = await w.connectRelay();
+    await w.invoice(relay, { sats: 1000, handle });
+    assert.equal(w.ctx.storage.sql.exec("SELECT handle FROM pending").one().handle, expected);
+  }
+});
+
+
+test("detail updates reject forged identity and invalid text and preserve omitted fields", async () => {
+  const w = await world();
+  const relay = await w.connectRelay();
+  const { asked } = await w.invoice(relay, { sats: 1000, handle: "first", message: "keep this" });
+  for (const bad of [{ handle: 42 }, { message: 42 }, { github: { id: 7, login: "forged" } }, { sats: 2000 }]) {
+    assert.equal((await w.post("/donations/note", { request: asked.request, ...bad })).status, 400);
+  }
+  assert.equal((await w.post("/donations/note", { request: asked.request, handle: " @Changed " })).status, 204);
+  assert.deepEqual({ ...w.ctx.storage.sql.exec("SELECT handle, message FROM pending").one() }, { handle: "Changed", message: "keep this" });
+  assert.equal((await w.post("/donations/note", { request: asked.request, message: "m".repeat(281) })).status, 204);
+  assert.deepEqual({ ...w.ctx.storage.sql.exec("SELECT handle, message FROM pending").one() }, { handle: "Changed", message: "m".repeat(280) });
+});
+
+test("a detail edit cannot report success while settlement is awaiting D1", async () => {
+  const w = await world();
+  const relay = await w.connectRelay();
+  const { asked } = await w.invoice(relay, { sats: 1000, handle: "original" });
+  const prepare = w.env.DB.prepare;
+  let release, reached;
+  const paused = new Promise((resolve) => { reached = resolve; });
+  w.env.DB.prepare = (sql) => {
+    const statement = prepare(sql);
+    if (!sql.startsWith("INSERT INTO donations")) return statement;
+    return { bind: (...args) => ({ first: () => new Promise((resolve) => {
+      release = () => resolve(statement.bind(...args).first()); reached();
+    }) }) };
+  };
+  const paid = w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+  await paused;
+  assert.equal((await w.post("/donations/note", { request: asked.request, handle: "too-late" })).status, 404);
+  release(); await paid;
+  assert.equal(w.env.DB.db.prepare("SELECT handle FROM donations").get().handle, "original");
 });

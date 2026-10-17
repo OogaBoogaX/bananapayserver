@@ -42,7 +42,7 @@ Settled once, with the account's owners, before anything is deployed:
 - Node 22 or newer and git. Install Wrangler, Cloudflare's command-line tool, with
   `npm ci --prefix .github/deploy --ignore-scripts`. The deployment lockfile pins version
   4.146.0 and its dependencies with integrity hashes, without running install scripts.
-- The environment's limits, from the team: the largest donation in sats (`MAX_SATS`), the
+- The environment's limits, from the team: the Lightning threshold in sats (`LIGHTNING_MAX_SATS`, or legacy `MAX_SATS`), the
   invoice requests allowed per visitor and for everyone together each minute (`RATE_PER_IP`,
   `RATE_GLOBAL`), the page sockets one visitor may hold open (`SOCKETS_PER_IP`), how far a
   new price may be from the last (`PRICE_JUMP_MAX`), and the room for an on-chain fee
@@ -99,13 +99,13 @@ Run `node --test --test-timeout=60000` before applying migrations or deploying b
      deploy -c wrangler.staging.jsonc
    ```
 
-5. **Set missing limits.** Run this for `MAX_SATS`, then repeat with `RATE_PER_IP`,
+5. **Set missing limits.** Run this for `LIGHTNING_MAX_SATS` (legacy `MAX_SATS` also works), then repeat with `RATE_PER_IP`,
    `RATE_GLOBAL`, `SOCKETS_PER_IP`, `PRICE_JUMP_MAX` and `ONCHAIN_FEE_ALLOWANCE` in its place,
    typing each value at the prompt.
 
    ```bash
    node .github/deploy/node_modules/wrangler/bin/wrangler.js \
-     secret put MAX_SATS -c wrangler.staging.jsonc
+     secret put LIGHTNING_MAX_SATS -c wrangler.staging.jsonc
    ```
 
 6. **Set the relay's token hash, once the staging relay exists.** Whoever sets up the signet
@@ -157,7 +157,7 @@ Run `node --test --test-timeout=60000` before applying migrations or deploying b
 
    Until the workflow reaches `rock`, a maintainer can use steps 1–7 from the reviewed branch
    with no Cloudflare build or Action deployment running. The deploy command always names the
-   config file. Afterwards, the secret list should still include `MAX_SATS`, `RATE_PER_IP`,
+   config file. Afterwards, the secret list should still include `LIGHTNING_MAX_SATS` (or legacy `MAX_SATS`), `RATE_PER_IP`,
    `RATE_GLOBAL`, `SOCKETS_PER_IP`, `PRICE_JUMP_MAX`, `ONCHAIN_FEE_ALLOWANCE` and
    `RELAY_TOKEN_SHA256`.
 
