@@ -3,6 +3,8 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { BOARD_SIZE, DonationsObject, PRICE_RETRY_MS } from "../worker/object.mjs";
 import { PRICE_SOCKET, PRICE_URL } from "../worker/price.mjs";
 import { fakeCtx, fakeD1, fakePlatform } from "./helpers/cloudflare.mjs";
@@ -138,21 +140,28 @@ test("how far a price may move is the deployment's setting", async () => {
   assert.equal(moved.rate.usdPerBtc, 250_000, "2.5 times is within 3");
 });
 
-test("with no price anywhere, the donation still goes through, worth no bananas until worked out again", async (t) => {
-  const errors = t.mock.method(console, "error", () => {});
-  const w = await world({}, { prices: { socket: null, rest: null } });
-  const relay = await w.connectRelay();
-  const page = await w.connectPage();
-  const { response } = await w.invoice(relay, { sats: 1000 });
-  const reply = await response.json();
-  assert.equal(reply.bananas, null);
-  assert.equal(reply.rate, null);
-  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
-  assert.equal(typed(page, "donation")[0].bananas, null);
-  assert.equal(typed(page, "pile").length, 1, "the pile doesn't move");
-  assert.deepEqual({ ...w.env.DB.db.prepare("SELECT sats, price_cents, milli FROM donations").get() }, { sats: 1000, price_cents: null, milli: null });
-  assert.match(errors.mock.calls[0].arguments[0], /invoices get no price$/);
-});
+for (const login of [null, "unpriced-donor"]) {
+  test(`with no price anywhere, an ${login ? "identified" : "anonymous"} donation still goes through without bananas`, async (t) => {
+    const errors = t.mock.method(console, "error", () => {});
+    const w = await world({}, { prices: { socket: null, rest: null } });
+    const relay = await w.connectRelay();
+    const page = await w.connectPage();
+    const { response } = await w.invoice(relay, { sats: 1000 }, undefined, { donor: login ? donor(login) : null });
+    const reply = await response.json();
+    assert.equal(reply.bananas, null);
+    assert.equal(reply.rate, null);
+    await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+    assert.equal(typed(page, "donation")[0].bananas, null);
+    assert.equal(typed(page, "pile").length, 1, "the pile doesn't move");
+    const expected = login ? [{ handle: login, bananas: 0, sats: 1000 }] : [];
+    assert.deepEqual(typed(page, "board").at(-1).entries, [], "no unpriced donors on the banana list");
+    assert.deepEqual(typed(page, "board").at(-1).satsEntries, expected);
+    await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+    assert.deepEqual((await w.object.board({ refresh: true })).satsEntries, expected, "a repeated payment counts once");
+    assert.deepEqual({ ...w.env.DB.db.prepare("SELECT sats, price_cents, milli FROM donations").get() }, { sats: 1000, price_cents: null, milli: null });
+    assert.match(errors.mock.calls[0].arguments[0], /invoices get no price$/);
+  });
+}
 
 test("everyone sees one pile: it starts full, the Oogas eat at a fixed rate, and donations add to it", async () => {
   const w = await world({ PILE_START: "1000", PILE_EAT_PER_HOUR: "60" });
@@ -185,19 +194,26 @@ test("the pile keeps fractions, so small donations add up", async () => {
   assert.equal(typed(page, "pile").at(-1).bananas, 1.5);
 });
 
-test("the leaderboard lists signed-in donors by bananas, and anonymous donations never", async () => {
+test("the leaderboard preserves recorded thousandths, ranks bananas and sats independently, and excludes anonymous donations", async () => {
   const w = await world();
   const relay = await w.connectRelay();
   const page = await w.connectPage();
-  assert.deepEqual(typed(page, "board"), [{ type: "board", entries: [] }]);
-  await donate(w, relay, 5_000, { login: "ooga-one", id: 1 });
+  assert.deepEqual(typed(page, "board"), [{ type: "board", entries: [], satsEntries: [] }]);
+  await donate(w, relay, 5_001, { login: "ooga-one", id: 1 });
+  w.platform.prices = { socket: 50_000, rest: 50_000 };
   await donate(w, relay, 9_000, { login: "ooga-two", id: 2 });
   await donate(w, relay, 50_000);
   await donate(w, relay, 2_600, { login: "ooga-one", id: 1 });
   assert.deepEqual(typed(page, "board").at(-1).entries, [
-    { handle: "ooga-two", bananas: 9 },
-    { handle: "ooga-one", bananas: 8 },
+    { handle: "ooga-one", bananas: 6.301, sats: 7601 },
+    { handle: "ooga-two", bananas: 4.5, sats: 9000 },
   ]);
+  assert.deepEqual(typed(page, "board").at(-1).satsEntries, [
+    { handle: "ooga-two", bananas: 4.5, sats: 9000 },
+    { handle: "ooga-one", bananas: 6.301, sats: 7601 },
+  ]);
+  const reconnected = await w.connectPage();
+  assert.deepEqual(typed(reconnected, "board")[0], typed(page, "board").at(-1), "reconnecting gets both complete rankings");
   assert.equal(typed(page, "board").length, 4, "one board on connect, then one per signed-in donation");
   const after = page.messages().slice(-4).map((m) => m.type);
   assert.deepEqual(after, ["donation", "pile", "board", "tally"]);
@@ -209,7 +225,7 @@ test("a renamed GitHub login keeps its bananas, and the board shows the new name
   const page = await w.connectPage();
   await donate(w, relay, 3_000, { login: "old-name", id: 7 });
   await donate(w, relay, 4_000, { login: "new-name", id: 7 });
-  assert.deepEqual(typed(page, "board").at(-1).entries, [{ handle: "new-name", bananas: 7 }]);
+  assert.deepEqual(typed(page, "board").at(-1).entries, [{ handle: "new-name", bananas: 7, sats: 7000 }]);
 });
 
 test(`the board shows the top ${BOARD_SIZE}`, async () => {
@@ -219,9 +235,12 @@ test(`the board shows the top ${BOARD_SIZE}`, async () => {
   );
   for (let i = 1; i <= BOARD_SIZE + 5; i++) insert.run(`Donation${String(i).padStart(4, "0")}`, `donor-${i}`, i, i * 1000);
   const page = await w.connectPage();
-  const { entries } = typed(page, "board")[0];
+  const { entries, satsEntries } = typed(page, "board")[0];
   assert.equal(entries.length, BOARD_SIZE);
-  assert.deepEqual(entries[0], { handle: `donor-${BOARD_SIZE + 5}`, bananas: BOARD_SIZE + 5 });
+  assert.equal(satsEntries.length, BOARD_SIZE);
+  assert.deepEqual(satsEntries[0], { handle: "donor-1", bananas: 1, sats: 1000 }, "sat ties follow account id");
+  assert.ok(!entries.some((e) => e.handle === "donor-1"), "the sat leader is outside the banana list");
+  assert.deepEqual(entries[0], { handle: `donor-${BOARD_SIZE + 5}`, bananas: BOARD_SIZE + 5, sats: 1000 });
 });
 
 test("an object made before the stats gets the new columns and tables in place", () => {
@@ -284,14 +303,53 @@ test("an older leaderboard read that answers last doesn't replace a newer one", 
   const prepare = w.env.DB.prepare;
   w.env.DB.prepare = (sql) => {
     if (!sql.includes("FROM totals")) return prepare(sql);
-    const entries = [{ login: releases.length ? "newer" : "older", milli: 1000 }];
+    const login = releases.length < 2 ? "older" : "newer";
+    const entries = [{ login, milli: 1000, sats: 1000 }];
     return { bind: () => ({ all: () => new Promise((resolve) => releases.push(() => resolve({ results: entries }))) }) };
   };
   const older = w.object.board({ refresh: true });
   const newer = w.object.board({ refresh: true });
-  releases[1]();
+  releases[3]();
+  releases[2]();
   await newer;
+  releases[1]();
   releases[0]();
   await older;
-  assert.deepEqual((await w.object.board()).entries, [{ handle: "newer", bananas: 1 }]);
+  const board = await w.object.board();
+  assert.deepEqual(board.entries, [{ handle: "newer", bananas: 1, sats: 1000 }]);
+  assert.deepEqual(board.satsEntries, board.entries);
+});
+
+
+test("the donor sats migration backfills history and keeps renamed, unpriced and repeated payments correct", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    const migration = (file) => readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8");
+    for (const file of ["0001_donations.sql", "0002_stats.sql", "0003_tally.sql"]) db.exec(migration(file));
+    const insert = db.prepare(
+      "INSERT INTO donations (id, sats, handle, message, at, method, github_id, milli) " +
+      "VALUES (?, ?, ?, '', 1, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
+    );
+    insert.run("History0001", 1000, "old-name", "lightning", 7, 1000);
+    insert.run("History0002", 2000, "new-name", "onchain", 7, null);
+    insert.run("History0003", 3000, "unpriced-donor", "mixed", 8, null);
+    insert.run("History0004", 9000, "", "lightning", null, 9000);
+    const before = db.prepare("SELECT * FROM donations ORDER BY seq").all();
+    db.exec(migration("0004_donor_sats.sql"));
+    const totals = () => db.prepare("SELECT github_id, login, milli, donations, sats FROM totals ORDER BY github_id").all().map((r) => ({ ...r }));
+    assert.deepEqual(totals(), [
+      { github_id: 7, login: "new-name", milli: 1000, donations: 2, sats: 3000 },
+      { github_id: 8, login: "unpriced-donor", milli: 0, donations: 1, sats: 3000 },
+    ]);
+    assert.deepEqual(db.prepare("SELECT * FROM donations ORDER BY seq").all(), before, "donation records are unchanged");
+    insert.run("History0005", 500, "newest-name", "lightning", 7, 250);
+    insert.run("History0005", 500, "newest-name", "lightning", 7, 250);
+    insert.run("History0006", 700, "unpriced-donor", "onchain", 8, null);
+    assert.deepEqual(totals(), [
+      { github_id: 7, login: "newest-name", milli: 1250, donations: 3, sats: 3500 },
+      { github_id: 8, login: "unpriced-donor", milli: 0, donations: 2, sats: 3700 },
+    ]);
+  } finally {
+    db.close();
+  }
 });

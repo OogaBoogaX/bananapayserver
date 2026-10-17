@@ -95,6 +95,7 @@ export class DonationsObject {
     this.waiting = new Map();
     this.minute = null;
     this.boardEntries = null;
+    this.boardSatsEntries = null;
     this.boardAsked = 0;
     this.boardShown = 0;
     this.tallyFigures = null;
@@ -342,7 +343,7 @@ export class DonationsObject {
     if (pile !== false) {
       this.broadcast(donationMessage(recorded));
       if (pile) this.broadcast(pile);
-      if (row.github_id !== null && recorded.milli !== null) {
+      if (row.github_id !== null) {
         const board = await this.board({ refresh: true });
         if (board) this.broadcast(board);
       }
@@ -395,25 +396,31 @@ export class DonationsObject {
     return { type: "pile", bananas: level / 1000, at: now, eatPerHour: readSettings(this.env).pileEatPerHour };
   }
 
-  // The top signed-in donors, rounded to whole bananas. Anonymous donations count in the pile
-  // but never here. Kept in memory between donations; null if D1 can't be read and nothing is
+  // The top signed-in donors in each unit: recorded fractional bananas and exact sats. Each list is limited
+  // independently, since a changing price can give them different leaders. Anonymous donors
+  // never appear. Kept in memory between donations; null if D1 can't be read and nothing is
   // kept. Reads can come back out of order, so only the newest one asked for is kept.
   async board({ refresh = false } = {}) {
     if (refresh || !this.boardEntries) {
       const asked = ++this.boardAsked;
       try {
-        const { results } = await this.env.DB.prepare(
-          "SELECT login, milli FROM totals ORDER BY milli DESC, github_id LIMIT ?",
-        ).bind(BOARD_SIZE).all();
+        const [bananas, sats] = await Promise.all([
+          this.env.DB.prepare("SELECT login, milli, sats FROM totals WHERE milli > 0 ORDER BY milli DESC, github_id LIMIT ?")
+            .bind(BOARD_SIZE).all(),
+          this.env.DB.prepare("SELECT login, milli, sats FROM totals ORDER BY sats DESC, github_id LIMIT ?")
+            .bind(BOARD_SIZE).all(),
+        ]);
         if (asked > this.boardShown) {
           this.boardShown = asked;
-          this.boardEntries = results.map((r) => ({ handle: r.login, bananas: Math.round(r.milli / 1000) }));
+          const entry = (r) => ({ handle: r.login, bananas: r.milli / 1000, sats: r.sats });
+          this.boardEntries = bananas.results.map(entry);
+          this.boardSatsEntries = sats.results.map(entry);
         }
       } catch (error) {
         console.error("reading the leaderboard failed:", error.message);
       }
     }
-    return this.boardEntries ? { type: "board", entries: this.boardEntries } : null;
+    return this.boardEntries ? { type: "board", entries: this.boardEntries, satsEntries: this.boardSatsEntries } : null;
   }
 
   // Bitcoin's price for an invoice, in cents: a new one from 2140data's service, asked for
