@@ -194,23 +194,23 @@ test("the pile keeps fractions, so small donations add up", async () => {
   assert.equal(typed(page, "pile").at(-1).bananas, 1.5);
 });
 
-test("the leaderboard ranks signed-in donors independently by bananas and sats, and anonymous donations never", async () => {
+test("the leaderboard preserves recorded thousandths, ranks bananas and sats independently, and excludes anonymous donations", async () => {
   const w = await world();
   const relay = await w.connectRelay();
   const page = await w.connectPage();
   assert.deepEqual(typed(page, "board"), [{ type: "board", entries: [], satsEntries: [] }]);
-  await donate(w, relay, 5_000, { login: "ooga-one", id: 1 });
+  await donate(w, relay, 5_001, { login: "ooga-one", id: 1 });
   w.platform.prices = { socket: 50_000, rest: 50_000 };
   await donate(w, relay, 9_000, { login: "ooga-two", id: 2 });
   await donate(w, relay, 50_000);
   await donate(w, relay, 2_600, { login: "ooga-one", id: 1 });
   assert.deepEqual(typed(page, "board").at(-1).entries, [
-    { handle: "ooga-one", bananas: 6, sats: 7600 },
-    { handle: "ooga-two", bananas: 5, sats: 9000 },
+    { handle: "ooga-one", bananas: 6.301, sats: 7601 },
+    { handle: "ooga-two", bananas: 4.5, sats: 9000 },
   ]);
   assert.deepEqual(typed(page, "board").at(-1).satsEntries, [
-    { handle: "ooga-two", bananas: 5, sats: 9000 },
-    { handle: "ooga-one", bananas: 6, sats: 7600 },
+    { handle: "ooga-two", bananas: 4.5, sats: 9000 },
+    { handle: "ooga-one", bananas: 6.301, sats: 7601 },
   ]);
   const reconnected = await w.connectPage();
   assert.deepEqual(typed(reconnected, "board")[0], typed(page, "board").at(-1), "reconnecting gets both complete rankings");

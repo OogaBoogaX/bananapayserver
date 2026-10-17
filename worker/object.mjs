@@ -396,7 +396,7 @@ export class DonationsObject {
     return { type: "pile", bananas: level / 1000, at: now, eatPerHour: readSettings(this.env).pileEatPerHour };
   }
 
-  // The top signed-in donors in each unit: whole bananas and exact sats. Each list is limited
+  // The top signed-in donors in each unit: recorded fractional bananas and exact sats. Each list is limited
   // independently, since a changing price can give them different leaders. Anonymous donors
   // never appear. Kept in memory between donations; null if D1 can't be read and nothing is
   // kept. Reads can come back out of order, so only the newest one asked for is kept.
@@ -412,7 +412,7 @@ export class DonationsObject {
         ]);
         if (asked > this.boardShown) {
           this.boardShown = asked;
-          const entry = (r) => ({ handle: r.login, bananas: Math.round(r.milli / 1000), sats: r.sats });
+          const entry = (r) => ({ handle: r.login, bananas: r.milli / 1000, sats: r.sats });
           this.boardEntries = bananas.results.map(entry);
           this.boardSatsEntries = sats.results.map(entry);
         }

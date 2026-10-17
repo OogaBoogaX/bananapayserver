@@ -133,11 +133,12 @@ missed. After that:
 - `{ "type": "pile", "bananas": 980.5, "at": 1790000000000, "eatPerHour": 60 }` after each
   donation that counts. Every page works the pile out the same way: `bananas`, less
   `eatPerHour` for each hour since the message arrived, never below zero. Show whole bananas.
-- `{ "type": "board", "entries": [{ "handle": "ooga-dev", "bananas": 300, "sats": 300000 }], "satsEntries": [{ "handle": "ooga-dev", "bananas": 300, "sats": 300000 }] }`
-  after each signed-in donation. `entries` is the top 20 by total bananas, ranked before
-  rounding to whole bananas and excluding donors with no counted bananas; `satsEntries` is
+- `{ "type": "board", "entries": [{ "handle": "ooga-dev", "bananas": 300.125, "sats": 300000 }], "satsEntries": [{ "handle": "ooga-dev", "bananas": 300.125, "sats": 300000 }] }`
+  after each signed-in donation. `entries` is the top 20 by total bananas,
+  excluding donors with no counted bananas; `satsEntries` is
   independently the top 20 by total sats, including unpriced donations. Each entry includes
-  both totals. Ties in either ranking follow GitHub's numeric id. Sats are
+  both totals. Banana totals preserve the recorded thousandths without rounding; clients may
+  round for display. Ties in either ranking follow GitHub's numeric id. Sats are
   recorded amounts, never converted from bananas at today's price. A donation without a
   price adds its sats and zero bananas. Both lists include earlier donations after migration
   `0004_donor_sats.sql`, retain renamed accounts' history, and exclude anonymous donations.

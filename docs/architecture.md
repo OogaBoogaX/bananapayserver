@@ -190,7 +190,7 @@ Its clock never runs backwards. The pile can be rebuilt from the donations in D1
 starting level, then take the donations in order, each at the later of its own time and the
 last one's. See [decision 0012](decisions/0012-global-pile.md).
 
-**The leaderboard** has the top 20 signed-in donors by total bananas, rounded to whole ones,
+**The leaderboard** has the top 20 signed-in donors by total bananas, preserving recorded thousandths,
 and independently the top 20 by exact sats. Each entry carries both totals.
 D1 keeps each donor's running total by GitHub's numeric id, so a renamed username keeps its
 bananas and sats, and a trigger adds to it only when a donation is actually recorded. Sats
