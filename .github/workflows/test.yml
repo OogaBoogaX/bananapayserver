@@ -1,11 +1,11 @@
-# The tests, on every pull request and every push to main. No dependencies to install: Node
+# The tests, on every pull request and every push to rock. No dependencies to install: Node
 # runs them as they are. Actions are GitHub's own, pinned to a commit.
 name: test
 
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [rock]
 
 permissions:
   contents: read

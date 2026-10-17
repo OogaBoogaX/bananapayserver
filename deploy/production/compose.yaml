@@ -33,7 +33,7 @@ services:
       BTCPAY_STORE_ID: ${BTCPAY_STORE_ID:-}
       BTCPAY_API_KEY: ${BTCPAY_API_KEY:-}
       BTCPAY_WEBHOOK_SECRET: ${BTCPAY_WEBHOOK_SECRET:-}
-      MAX_SATS: ${MAX_SATS:-}
+      LIGHTNING_MAX_SATS: ${LIGHTNING_MAX_SATS-${MAX_SATS:-}}
       RATE_PER_MINUTE: ${RATE_PER_MINUTE:-}
       WEBHOOK_LISTEN: 0.0.0.0:8080
     # BTCPay's webhook reaches the relay as http://obl-relay:8080/btcpay.

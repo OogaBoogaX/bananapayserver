@@ -60,7 +60,7 @@ which signs donors in and checks origins; see
 
 Into the account OBL's Workers use. Staging deploys through a manually dispatched GitHub
 Action, from the selected branch ([decision 0018](decisions/0018-staging-github-action.md));
-production deploys by hand, and only from `main`. [`cloudflare.md`](cloudflare.md) has the
+production deploys by hand, and only from `rock`. [`cloudflare.md`](cloudflare.md) has the
 steps for both environments, and for OBL's side of the binding. A setting that isn't in the
 config file, such as `PILE_START`, is set with `wrangler secret put`: a deploy removes plain
 variables set in the dashboard. The Worker's own log lines, such as the price service's

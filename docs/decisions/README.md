@@ -46,6 +46,7 @@ means writing a new record.
 | [0023](0023-receipt-time-pricing.md) | Live estimates and receipt-time pricing | accepted |
 | [0024](0024-onchain-above-lightning-limit.md) | On-chain donations above the Lightning threshold | amount policy superseded by 0025 |
 | [0025](0025-no-onchain-donation-cap.md) | No application cap on on-chain donations | accepted |
+| [0026](0026-rock-default-branch.md) | rock is the default branch | accepted |
 
 ## Waiting for a record
 

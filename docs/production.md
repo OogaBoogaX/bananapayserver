@@ -10,7 +10,7 @@ invoices on one store. The files are in [`deploy/production/`](../deploy/product
 This is the launch setup. Its hardening follows after launch; see
 [What follows launch](#what-follows-launch).
 
-The machine's operator sets it up, by hand, from `main` only
+The machine's operator sets it up, by hand, from `rock` only
 ([decision 0020](decisions/0020-staging-then-production.md)). Nothing pushes to the machine.
 
 ## Before you start
@@ -35,10 +35,10 @@ The machine's operator sets it up, by hand, from `main` only
 
 ## Steps
 
-1. **Get the code,** from `main`, into a folder of its own:
+1. **Get the code,** from `rock`, into a folder of its own:
 
    ```bash
-   git clone --branch main https://github.com/OogaBoogaX/bananapayserver.git .
+   git clone --branch rock https://github.com/OogaBoogaX/bananapayserver.git .
    ```
 
    Then `cd deploy/production`. Every later step runs from there.
@@ -71,9 +71,11 @@ The machine's operator sets it up, by hand, from `main` only
      docker exec <BTCPay's container> printenv BTCPAY_SOCKSENDPOINT
      ```
 
-   - **`MAX_SATS` and `RATE_PER_MINUTE`:** the team's production values. `MAX_SATS` is the legacy
-     Lightning threshold; it no longer caps on-chain donations. `RATE_PER_MINUTE` is at
-     least twice the Worker's `RATE_GLOBAL`.
+   - **`LIGHTNING_MAX_SATS` and `RATE_PER_MINUTE`:** the team's production values. The
+     Lightning threshold does not cap on-chain donations. Existing `.env` files may keep
+     `MAX_SATS`; Compose uses it only when `LIGHTNING_MAX_SATS` is absent. An explicitly
+     empty or invalid `LIGHTNING_MAX_SATS` stops the relay. `RATE_PER_MINUTE` is at least
+     twice the Worker's `RATE_GLOBAL`.
 
 3. **In BTCPay,** signed in as the store's owner:
    - **The store's id,** from the store's settings, as `BTCPAY_STORE_ID`.
@@ -96,7 +98,7 @@ The machine's operator sets it up, by hand, from `main` only
 
    It writes the token to `.env` and prints only its SHA-256. Send the hash, and only the hash,
    to whoever deploys `bananapayserver-production`, who sets it as `RELAY_TOKEN_SHA256` after
-   production has been deployed from `main`; see [`cloudflare.md`](cloudflare.md#production).
+   production has been deployed from `rock`; see [`cloudflare.md`](cloudflare.md#production).
    The token stays in `.env` on this machine.
 
 5. **Build and start:**
@@ -126,7 +128,7 @@ The machine's operator sets it up, by hand, from `main` only
 - **Logs:** `docker compose -p obl-relay logs --tail 50 relay`.
 - **After a reboot or a crash:** Docker starts the relay again by itself.
 - **After a BTCPay update:** check again that BTCPay can't read LND's data folder.
-- **Update:** `git pull` on `main`, then `docker compose -p obl-relay up -d --build`.
+- **Update:** `git pull` on `rock`, then `docker compose -p obl-relay up -d --build`.
 - **Stop:** `docker compose -p obl-relay stop`. Donations close until it's back.
 - **Secrets:** `.env` holds the relay's token, BTCPay's key and the webhook's secret. It stays
   readable by its owner only, and is never copied off this machine.

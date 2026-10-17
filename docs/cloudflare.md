@@ -134,14 +134,14 @@ Run `node --test --test-timeout=60000` before applying migrations or deploying b
    workflow runs from whatever branch is chosen. So the environment needs these protections,
    which only GitHub's settings can give: required reviewers, with self-review prevented, a
    branch rule, and no bypass for administrators. Before approving a run, a reviewer checks
-   what the branch changes against `main` in `.github/`, `scripts/` and
+   what the branch changes against `rock` in `.github/`, `scripts/` and
    `wrangler.staging.jsonc`. The workflow also refuses a config that isn't
    `bananapayserver-staging` on signet, which catches a mistake but not malice. Worker limits
    and `RELAY_TOKEN_SHA256` stay in Cloudflare. The Action preserves them and never needs their
    values in GitHub.
 
    [The workflow](../.github/workflows/cloudflare-staging.yml) becomes available for manual
-   dispatch once its reviewed change reaches the default branch, `main`. In Actions, choose
+   dispatch once its reviewed change reaches the default branch, `rock`. In Actions, choose
    *Deploy Cloudflare staging*, then *Run workflow* and the branch to deploy, or run:
 
    ```bash
@@ -155,7 +155,7 @@ Run `node --test --test-timeout=60000` before applying migrations or deploying b
    responses above. One concurrency group serializes staging runs without cancelling an
    active deployment. Pushes and pull requests do not deploy.
 
-   Until the workflow reaches `main`, a maintainer can use steps 1–7 from the reviewed branch
+   Until the workflow reaches `rock`, a maintainer can use steps 1–7 from the reviewed branch
    with no Cloudflare build or Action deployment running. The deploy command always names the
    config file. Afterwards, the secret list should still include `LIGHTNING_MAX_SATS` (or legacy `MAX_SATS`), `RATE_PER_IP`,
    `RATE_GLOBAL`, `SOCKETS_PER_IP`, `PRICE_JUMP_MAX`, `ONCHAIN_FEE_ALLOWANCE` and
@@ -187,7 +187,7 @@ repository.
 
 ## Production
 
-Only what has passed staging, and only from `main`; see
+Only what has passed staging, and only from `rock`; see
 [decision 0020](decisions/0020-staging-then-production.md).
 
 1. **The relay's address.** Production's relay dials the Worker's own `workers.dev` address,
@@ -196,7 +196,7 @@ Only what has passed staging, and only from `main`; see
 2. **Workers Paid** on the account.
 3. **bananapayserver's side,** the staging steps with `production` in place of `staging`,
    except step 8: production has no Action and no deploy token, and a maintainer deploys it
-   by hand from `main`. It has its own secrets: production limits and a separate relay
+   by hand from `rock`. It has its own secrets: production limits and a separate relay
    token. Nothing from staging is reused.
 4. **The relay,** beside the donations store's BTCPay, set up as
    [`production.md`](production.md) describes. Its operator hands over only the token's hash.
@@ -306,7 +306,7 @@ either historical balance or replay these corrections.
 
 ## Never
 
-- Deploy production before staging passes, or from anywhere but `main`.
+- Deploy production before staging passes, or from anywhere but `rock`.
 - Put a limit, a token or a token's hash in a file, a commit, a chat or a screenshot.
 - Rename either Worker. OBL's bindings find them by name.
 - Add routes, custom domains or preview URLs beyond what this page says, or turn invocation

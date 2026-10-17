@@ -38,7 +38,7 @@ boundary, or the people on either side of it.
 - **Donations and node feeds stay apart.** Exact donation amounts and times, joined to a
   channel's line, can expose its balance. Never join them, in a query, a reply or on a page.
   See "Never shown" in Foundry's
-  [`docs/lightning-factory.md`](https://github.com/OogaBoogaX/lightningfoundry/blob/main/docs/lightning-factory.md#never-shown).
+  [`docs/lightning-factory.md`](https://github.com/OogaBoogaX/lightningfoundry/blob/rock/docs/lightning-factory.md#never-shown).
 - **Check at the boundaries:** the calls OBL's Worker passes on, at the Worker; the relay's
   messages at the Durable Object; and BTCPay's webhook at the relay. Inside them, trust the
   code.
