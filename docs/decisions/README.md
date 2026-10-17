@@ -30,7 +30,7 @@ means writing a new record.
 | [0007](0007-ai-assisted-commits.md) | Every commit is AI-assisted and names the model | accepted |
 | [0008](0008-limited-contributions.md) | Limited contributions | accepted |
 | [0009](0009-toolchain.md) | Plain JavaScript, no dependencies | accepted |
-| [0010](0010-handles-from-github.md) | Handles come from GitHub sign-in | accepted; where sign-in runs superseded by 0014 |
+| [0010](0010-handles-from-github.md) | Handles come from GitHub sign-in | superseded for sign-in by 0014, and display names and rankings by 0021 |
 | [0011](0011-bananas-in-dollars.md) | A banana is a dollar's worth of bitcoin | accepted; its price source superseded by 0013 |
 | [0012](0012-global-pile.md) | One global pile | accepted |
 | [0013](0013-price-from-2140data.md) | Bitcoin's price comes from 2140data's service | accepted; added to by 0017 |
@@ -41,6 +41,7 @@ means writing a new record.
 | [0018](0018-staging-github-action.md) | Staging deploys through a manual GitHub Action | accepted |
 | [0019](0019-production-relay-address.md) | Production's relay dials the Worker's workers.dev address | accepted |
 | [0020](0020-staging-then-production.md) | Production runs only what passed staging; releases are cut from main | accepted |
+| [0021](0021-editable-donation-handles.md) | Editable donation handles and rankings by entered name | accepted |
 
 ## Waiting for a record
 

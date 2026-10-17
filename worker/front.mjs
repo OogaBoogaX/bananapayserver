@@ -4,7 +4,7 @@
 // they are and where the call came from beside the page's own request. This checks each call and
 // passes what survives to the Durable Object. It never calls the relay; the relay dials in.
 
-import { MESSAGE_MAX, sanitize } from "../shared/donation.mjs";
+import { HANDLE_MAX, MESSAGE_MAX, sanitize } from "../shared/donation.mjs";
 import { readLimits, readSettings } from "./config.mjs";
 import { relayAuthorized } from "./relay-token.mjs";
 
@@ -36,11 +36,11 @@ export const pageApi = (env) => ({
   fetch: (request) => socket(request, env),
 });
 
-// Who gave it comes from OBL's sign-in, never from the request body. A signed-in donor can
-// still give anonymously.
+// Account identity comes from OBL's sign-in; the display handle is editable by any donor.
+// Older clients can still omit it or give anonymously.
 async function invoice(request, env, donor, visitor) {
   if (!isDonor(donor) || !visitor) return reply({ error: "invalid" }, 400);
-  const body = await readBody(request, ["sats", "message", "anon"], ["sats"]);
+  const body = await readBody(request, ["sats", "handle", "message", "anon"], ["sats"]);
   if (body.error) return reply({ error: body.error }, body.status);
   const limits = readLimits(env);
   if (!limits || !readSettings(env).network) return reply({ error: "closed" }, 503);
@@ -48,9 +48,12 @@ async function invoice(request, env, donor, visitor) {
   if (!Number.isSafeInteger(sats) || typeof anon !== "boolean") return reply({ error: "invalid" }, 400);
   if (sats < limits.minSats || sats > limits.maxSats) return reply({ error: "amount" }, 400);
   const message = cleanMessage(body.value);
-  if (message === null) return reply({ error: "invalid" }, 400);
+  if (message === null || Object.hasOwn(body.value, "handle") && typeof body.value.handle !== "string") return reply({ error: "invalid" }, 400);
   const github = anon || donor === null ? null : { id: donor.id, login: donor.login };
-  return toObject(env, "/invoice", { sats, message, github, client: visitor });
+  const handle = Object.hasOwn(body.value, "handle")
+    ? sanitize(body.value.handle, HANDLE_MAX).replace(/^@+/, "").trim() || "anon"
+    : github?.login || "";
+  return toObject(env, "/invoice", { sats, handle, message, github, client: visitor });
 }
 
 async function note(request, env, visitor) {

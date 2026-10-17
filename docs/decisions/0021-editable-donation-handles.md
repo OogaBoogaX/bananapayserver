@@ -1,0 +1,28 @@
+# 0021. Editable donation handles and rankings by entered name
+
+**Status:** accepted, 2026-10-17; supersedes the display-name and leaderboard policy in 0010.
+
+## Decision
+
+Every donor may choose a display handle, signed in or not. OBL defaults it to the GitHub login
+when signed in, otherwise `anon`. Matching entered handles combine case-insensitively on
+both leaderboards. Each donation retains its own recorded sats and invoice-rate bananas.
+Messages run to 280 sanitized characters; handles remain limited to 39.
+
+## Alternatives
+
+Keep account-based rankings and restrict names to authenticated logins, or change display
+names while keeping rankings tied to accounts. The maintainer chose totals by entered name.
+
+## Why
+
+The donation name is the donor's chosen attribution. It need not be their account login,
+and signed-out donors should be able to accumulate totals under the same name.
+
+## Consequences
+
+Display names are unverified and may be shared. Changing names starts a separate total;
+account ownership and sign-in still rely exclusively on the authenticated binding argument.
+The relay sees neither handle nor message. A changed handle needs a new invoice. Migration
+0005 backfills the public name totals from existing donation records, preserving all amounts;
+legacy unnamed donations stay outside the rankings. The old account totals remain stored.

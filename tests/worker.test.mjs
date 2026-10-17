@@ -128,7 +128,8 @@ test("the Worker checks amounts and bodies before anything reaches the object", 
     [{ sats: "1000" }, 400, "invalid"],
     [{ sats: 10.5 }, 400, "invalid"],
     [{ sats: 1000, extra: true }, 400, "invalid"],
-    [{ sats: 1000, handle: "typed-in" }, 400, "invalid"],
+    [{ sats: 1000, handle: 42 }, 400, "invalid"],
+    [{ sats: 1000, github: { id: 7, login: "forged" } }, 400, "invalid"],
     [{ sats: 1000, message: 7 }, 400, "invalid"],
     [{ sats: 1000, anon: "yes" }, 400, "invalid"],
     [{}, 400, "invalid"],
@@ -548,5 +549,30 @@ test("IPv6 visitors count by their /64", () => {
   assert.equal(visitorKey("2001:db8:1:2::1", 48), "2001:db8:1::/48", "pages' sockets count by the /48");
   for (const bad of ["1:2:3:4:5:6:7:8:9::1", "1::2::3", "1:2:3:4:5:6:7:8:9"]) {
     assert.equal(visitorKey(bad), bad, "something that isn't an address counts as itself");
+  }
+});
+
+
+test("any donor can choose a display handle without changing authenticated account identity", async () => {
+  for (const who of [null, donor("account-login", 42)]) {
+    const w = await world();
+    const relay = await w.connectRelay();
+    const page = await w.connectPage();
+    await w.invoice(relay, { sats: 1000, handle: " @Chosen-Name ", message: "m".repeat(281) }, undefined, { donor: who });
+    await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+    const [{ donation }] = page.messages().filter((m) => m.type === "donation");
+    assert.equal(donation.handle, "Chosen-Name");
+    assert.equal(donation.message, "m".repeat(280));
+    assert.equal(w.env.DB.db.prepare("SELECT github_id FROM donations").get().github_id, who?.id ?? null);
+    assert.ok(relay.sent.every((text) => !text.includes("Chosen-Name")), "the relay never gets the display handle");
+  }
+});
+
+test("empty custom handles become anon and long handles are bounded", async () => {
+  for (const [handle, expected] of [[" @ ", "anon"], ["x".repeat(50), "x".repeat(39)]]) {
+    const w = await world();
+    const relay = await w.connectRelay();
+    await w.invoice(relay, { sats: 1000, handle });
+    assert.equal(w.ctx.storage.sql.exec("SELECT handle FROM pending").one().handle, expected);
   }
 });

@@ -161,14 +161,13 @@ its own origin, and OBL's Worker passes it on over the binding, so OBL's content
 
 ## Who gave it, and what it counts for
 
-**Who gave it** comes from OBL's GitHub sign-in, never from what the page sends. OBL's Worker
-passes the donor's numeric GitHub id, which survives a rename, and their username beside each
-invoice call, and the Worker checks both. A signed-in donor gives as their GitHub username
-unless they choose to give anonymously, and everyone else gives anonymously. Donations are the
-record, so they stay when a donor deletes their OBL account; whether the leaderboard shows an
-account that is gone is the page's choice. See
-[decision 0010](decisions/0010-handles-from-github.md) and
-[decision 0014](decisions/0014-pages-through-obl.md).
+**Account identity** comes from OBL's GitHub sign-in. Its Worker passes the numeric GitHub id
+and login beside the request, independently of the page's editable donation handle. Anyone
+can enter a display name; OBL defaults it to the signed-in login or `anon`. The display name
+is unverified and does not establish account ownership. Names and messages are sanitized to
+39 and 280 characters. The relay receives neither. Changing the name on a quote creates a
+new invoice. This updates the display-name policy in decision 0010; the authenticated
+service-binding boundary in decision 0014 stays in place.
 
 **What it counts for** is set when the invoice is made: one banana is a dollar's worth of
 bitcoin. For each invoice, the object asks 2140data's price service for bitcoin's price: its
@@ -190,14 +189,14 @@ Its clock never runs backwards. The pile can be rebuilt from the donations in D1
 starting level, then take the donations in order, each at the later of its own time and the
 last one's. See [decision 0012](decisions/0012-global-pile.md).
 
-**The leaderboard** has the top 20 signed-in donors by total bananas, preserving recorded thousandths,
-and independently the top 20 by exact sats. Each entry carries both totals.
-D1 keeps each donor's running total by GitHub's numeric id, so a renamed username keeps its
-bananas and sats, and a trigger adds to it only when a donation is actually recorded. Sats
-also count when a donation has no banana price; historical totals are backfilled from the
-recorded donations by migration `0004_donor_sats.sql`. Anonymous
-donations count toward the pile but never appear on the board. Both are pushed to every page
-when they change.
+**The leaderboard** has the top 20 entered handles by recorded fractional bananas, and
+independently the top 20 by exact sats. Each entry carries both totals. D1's `handle_totals`
+combines case-insensitive names across accounts and guests, using the latest spelling for
+display. A trigger changes it only for a newly recorded donation. Each donation retains its
+invoice rate; unpriced donations add sats and zero bananas. Migration `0005_handle_totals.sql`
+backfills the recorded names without changing the donation rows. Legacy unnamed donations
+remain outside the ranking, while the explicit `anon` name combines normally. Choosing a
+different handle starts a separate total. Both rankings are pushed when they change.
 
 **The tally** is the donations board's figures: every donation recorded, all time, and the
 last seven days by the hour, with the rate the kiosk quotes. D1 keeps it with a trigger, like

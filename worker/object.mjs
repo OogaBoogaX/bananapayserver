@@ -14,7 +14,7 @@ import { BANANA_CENTS, bananasOf, fetchPrice, milliBananas, rateOf } from "./pri
 // The most donations a reconnecting page is sent to catch up.
 export const REPLAY_MAX = 50;
 
-// How many signed-in donors the leaderboard shows.
+// How many donation handles each leaderboard shows.
 export const BOARD_SIZE = 20;
 
 // After the price service fails to answer, how long invoices use the last price before the
@@ -142,7 +142,7 @@ export class DonationsObject {
   // github is the signed-in donor, { id, login }, or null for an anonymous donation. The front
   // door has already checked everything; the text is cleaned again here because every page shows
   // it, and another Worker in the account could reach this object without the front door.
-  async invoice({ sats, message, github, client }) {
+  async invoice({ sats, handle, message, github, client }) {
     const limits = readLimits(this.env);
     const { network, invoiceTimeoutMs } = readSettings(this.env);
     if (!limits || !network) return closed();
@@ -154,7 +154,7 @@ export class DonationsObject {
     const request = this.platform.id();
     this.sql.exec(
       "INSERT INTO pending (request, sats, handle, message, github_id, created) VALUES (?, ?, ?, ?, ?, ?)",
-      request, sats, sanitize(github?.login, HANDLE_MAX), sanitize(message, MESSAGE_MAX), github?.id ?? null, this.platform.now(),
+      request, sats, sanitize(handle === undefined ? github?.login : handle, HANDLE_MAX), sanitize(message, MESSAGE_MAX), github?.id ?? null, this.platform.now(),
     );
     // The price is looked up while the relay makes the invoice, so it costs the donor no time.
     const [reply, price] = await Promise.all([
@@ -344,7 +344,7 @@ export class DonationsObject {
     if (pile !== false) {
       this.broadcast(donationMessage(recorded));
       if (pile) this.broadcast(pile);
-      if (row.github_id !== null) {
+      if (row.handle) {
         const board = await this.board({ refresh: true });
         if (board) this.broadcast(board);
       }
@@ -405,23 +405,23 @@ export class DonationsObject {
     return { type: "pile", bananas: level / 1000, at: now, eatPerHour: readSettings(this.env).pileEatPerHour };
   }
 
-  // The top signed-in donors in each unit: recorded fractional bananas and exact sats. Each list is limited
-  // independently, since a changing price can give them different leaders. Anonymous donors
-  // never appear. Kept in memory between donations; null if D1 can't be read and nothing is
+  // The top entered handles in each unit: recorded fractional bananas and exact sats. Each list is limited
+  // independently, since a changing price can give them different leaders. Matching handles combine
+  // across accounts and guests, case-insensitively. Legacy unnamed donations never appear. Kept in memory between donations; null if D1 can't be read and nothing is
   // kept. Reads can come back out of order, so only the newest one asked for is kept.
   async board({ refresh = false } = {}) {
     if (refresh || !this.boardEntries) {
       const asked = ++this.boardAsked;
       try {
         const [bananas, sats] = await Promise.all([
-          this.env.DB.prepare("SELECT login, milli, sats FROM totals WHERE milli > 0 ORDER BY milli DESC, github_id LIMIT ?")
+          this.env.DB.prepare("SELECT handle, milli, sats FROM handle_totals WHERE milli > 0 ORDER BY milli DESC, handle LIMIT ?")
             .bind(BOARD_SIZE).all(),
-          this.env.DB.prepare("SELECT login, milli, sats FROM totals ORDER BY sats DESC, github_id LIMIT ?")
+          this.env.DB.prepare("SELECT handle, milli, sats FROM handle_totals ORDER BY sats DESC, handle LIMIT ?")
             .bind(BOARD_SIZE).all(),
         ]);
         if (asked > this.boardShown) {
           this.boardShown = asked;
-          const entry = (r) => ({ handle: r.login, bananas: r.milli / 1000, sats: r.sats });
+          const entry = (r) => ({ handle: r.handle, bananas: r.milli / 1000, sats: r.sats });
           this.boardEntries = bananas.results.map(entry);
           this.boardSatsEntries = sats.results.map(entry);
         }

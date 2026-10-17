@@ -16,8 +16,8 @@ const DAY = 24 * HOUR;
 const typed = (page, type) => page.messages().filter((m) => m.type === type);
 
 // A paid donation of some sats, signed in as login unless login is null.
-async function donate(w, relay, sats, { login = null, id = 1, invoice = `Inv${String(w.platform.id()).slice(-8)}` } = {}) {
-  await w.invoice(relay, { sats }, () => ({ id: invoice, bolt11: bolt11For(sats), expires: EXPIRES }), { donor: login ? donor(login, id) : null });
+async function donate(w, relay, sats, { login = null, id = 1, handle, invoice = `Inv${String(w.platform.id()).slice(-8)}` } = {}) {
+  await w.invoice(relay, { sats, ...(handle === undefined ? {} : { handle }) }, () => ({ id: invoice, bolt11: bolt11For(sats), expires: EXPIRES }), { donor: login ? donor(login, id) : null });
   await w.relaySays(relay, { type: "paid", invoice, sats, method: "lightning" });
   return invoice;
 }
@@ -219,13 +219,16 @@ test("the leaderboard preserves recorded thousandths, ranks bananas and sats ind
   assert.deepEqual(after, ["donation", "pile", "board", "tally"]);
 });
 
-test("a renamed GitHub login keeps its bananas, and the board shows the new name", async () => {
+test("different entered names keep separate totals even for the same account", async () => {
   const w = await world();
   const relay = await w.connectRelay();
   const page = await w.connectPage();
   await donate(w, relay, 3_000, { login: "old-name", id: 7 });
   await donate(w, relay, 4_000, { login: "new-name", id: 7 });
-  assert.deepEqual(typed(page, "board").at(-1).entries, [{ handle: "new-name", bananas: 7, sats: 7000 }]);
+  assert.deepEqual(typed(page, "board").at(-1).entries, [
+    { handle: "new-name", bananas: 4, sats: 4000 },
+    { handle: "old-name", bananas: 3, sats: 3000 },
+  ]);
 });
 
 test(`the board shows the top ${BOARD_SIZE}`, async () => {
@@ -238,7 +241,7 @@ test(`the board shows the top ${BOARD_SIZE}`, async () => {
   const { entries, satsEntries } = typed(page, "board")[0];
   assert.equal(entries.length, BOARD_SIZE);
   assert.equal(satsEntries.length, BOARD_SIZE);
-  assert.deepEqual(satsEntries[0], { handle: "donor-1", bananas: 1, sats: 1000 }, "sat ties follow account id");
+  assert.deepEqual(satsEntries[0], { handle: "donor-1", bananas: 1, sats: 1000 }, "sat ties follow handle order");
   assert.ok(!entries.some((e) => e.handle === "donor-1"), "the sat leader is outside the banana list");
   assert.deepEqual(entries[0], { handle: `donor-${BOARD_SIZE + 5}`, bananas: BOARD_SIZE + 5, sats: 1000 });
 });
@@ -302,9 +305,9 @@ test("an older leaderboard read that answers last doesn't replace a newer one", 
   const releases = [];
   const prepare = w.env.DB.prepare;
   w.env.DB.prepare = (sql) => {
-    if (!sql.includes("FROM totals")) return prepare(sql);
+    if (!sql.includes("FROM handle_totals")) return prepare(sql);
     const login = releases.length < 2 ? "older" : "newer";
-    const entries = [{ login, milli: 1000, sats: 1000 }];
+    const entries = [{ handle: login, milli: 1000, sats: 1000 }];
     return { bind: () => ({ all: () => new Promise((resolve) => releases.push(() => resolve({ results: entries }))) }) };
   };
   const older = w.object.board({ refresh: true });
@@ -352,4 +355,43 @@ test("the donor sats migration backfills history and keeps renamed, unpriced and
   } finally {
     db.close();
   }
+});
+
+
+test("matching handles combine guest and account donations at their individual invoice rates", async () => {
+  const w = await world();
+  const relay = await w.connectRelay();
+  const page = await w.connectPage();
+  await donate(w, relay, 1234, { handle: "Team" });
+  w.platform.prices = { socket: 50_000, rest: 50_000 };
+  await donate(w, relay, 2001, { login: "account-one", id: 1, handle: "@team" });
+  await donate(w, relay, 4000, { login: "account-two", id: 2, handle: "TEAM" });
+  assert.deepEqual(typed(page, "board").at(-1).entries, [{ handle: "TEAM", bananas: 4.235, sats: 7235 }]);
+  assert.deepEqual(typed(page, "board").at(-1).satsEntries, typed(page, "board").at(-1).entries);
+  await donate(w, relay, 1000, { handle: "anon" });
+  assert.ok(typed(page, "board").at(-1).entries.some((r) => r.handle === "anon"));
+});
+
+test("handle totals migration backfills names, keeps recorded fractions, and ignores duplicate settlements", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    const migration = (file) => readFileSync(new URL(`../migrations/${file}`, import.meta.url), "utf8");
+    for (const file of ["0001_donations.sql", "0002_stats.sql", "0003_tally.sql", "0004_donor_sats.sql"]) db.exec(migration(file));
+    const insert = db.prepare("INSERT INTO donations (id, sats, handle, message, at, method, github_id, milli) VALUES (?, ?, ?, '', 1, 'lightning', ?, ?) ON CONFLICT (id) DO NOTHING");
+    insert.run("History0001", 1234, "Team", 7, 1234);
+    insert.run("History0002", 2001, "team", null, 1001);
+    insert.run("History0003", 3000, "unpriced", null, null);
+    insert.run("History0004", 9000, "", null, 9000);
+    const before = db.prepare("SELECT * FROM donations ORDER BY seq").all();
+    db.exec(migration("0005_handle_totals.sql"));
+    const totals = () => db.prepare("SELECT * FROM handle_totals ORDER BY handle").all().map((r) => ({ ...r }));
+    assert.deepEqual(totals(), [
+      { handle: "team", milli: 2235, sats: 3235, donations: 2 },
+      { handle: "unpriced", milli: 0, sats: 3000, donations: 1 },
+    ]);
+    assert.deepEqual(db.prepare("SELECT * FROM donations ORDER BY seq").all(), before);
+    insert.run("History0005", 500, "TEAM", 8, 250);
+    insert.run("History0005", 500, "TEAM", 8, 250);
+    assert.deepEqual(totals()[0], { handle: "TEAM", milli: 2485, sats: 3735, donations: 3 });
+  } finally { db.close(); }
 });

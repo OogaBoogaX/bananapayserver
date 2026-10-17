@@ -67,13 +67,18 @@ except the sign-in.
 ### `POST /donations/invoice`
 
 ```json
-{ "sats": 10000, "message": "for the cave", "anon": false }
+{ "sats": 10000, "handle": "ooga-dev", "message": "for the cave" }
 ```
 
-`message` and `anon` are optional. Who gave it comes from OBL's sign-in, never from the body: a
-signed-in donor gives as their GitHub username unless `anon` is true, and anyone else gives
-anonymously. The Worker cleans the message with OBL's rules. A page can send the amount alone
-as soon as the donor picks it, and the message afterwards.
+`handle` and `message` are optional editable display text, available with or without sign-in.
+The Worker sanitizes them with OBL's rules: at most 39 and 280 characters, respectively.
+Leading `@` is removed from the handle, and an explicitly empty handle becomes `anon`.
+OBL prepopulates the handle with the signed-in login, otherwise `anon`; either can be changed.
+Account identity still comes only from OBL's authenticated service-binding argument, never
+from the display handle. Without `handle`, older clients retain the signed-in login or an
+empty anonymous name; `anon: true` still suppresses account identity for those clients.
+The handle belongs to the invoice. Changing it requires a new invoice; its message can also
+be updated using `/donations/note` before payment.
 
 ```json
 {
@@ -128,8 +133,8 @@ missed. After that:
   network this deployment takes payments on, so a page can label test donations.
 - `{ "type": "donation", "donation": { "id", "sats", "handle", "message", "at" }, "bananas": { "exact", "rounded" } }`
   for each payment. `donation` is OBL's contract exactly, with the invoice id as `id`, the
-  GitHub username or `""` as `handle`, and `at` in milliseconds. A username arrives whole, up
-  to GitHub's 39 characters. The donor's page recognizes its own invoice id.
+  chosen display handle (or `""` from an older anonymous client), and `at` in milliseconds.
+  Handles run to 39 characters and messages to 280. The donor's page recognizes its own invoice id.
 - `{ "type": "seen", "id", "sats", "due", "left" }` when BTCPay sees an on-chain payment it
   hasn't yet settled, before the donation itself, which follows once BTCPay settles the
   invoice. `id` is the invoice id the donation will carry, `sats` is everything the invoice
@@ -143,14 +148,17 @@ missed. After that:
   donation that counts. Every page works the pile out the same way: `bananas`, less
   `eatPerHour` for each hour since the message arrived, never below zero. Show whole bananas.
 - `{ "type": "board", "entries": [{ "handle": "ooga-dev", "bananas": 300.125, "sats": 300000 }], "satsEntries": [{ "handle": "ooga-dev", "bananas": 300.125, "sats": 300000 }] }`
-  after each signed-in donation. `entries` is the top 20 by total bananas,
+  after each named donation. `entries` is the top 20 by total bananas,
   excluding donors with no counted bananas; `satsEntries` is
   independently the top 20 by total sats, including unpriced donations. Each entry includes
   both totals. Banana totals preserve the recorded thousandths without rounding; clients may
-  round for display. Ties in either ranking follow GitHub's numeric id. Sats are
+  round for display. Matching handles combine case-insensitively across accounts and guests;
+  the latest spelling is displayed. Ties in either ranking follow handle order. Sats are
   recorded amounts, never converted from bananas at today's price. A donation without a
   price adds its sats and zero bananas. Both lists include earlier donations after migration
-  `0004_donor_sats.sql`, retain renamed accounts' history, and exclude anonymous donations.
+  `0005_handle_totals.sql`, grouped by their recorded display names. Changing the name starts
+  a separate total; old unnamed donations remain outside the ranking. `anon` is a regular
+  entered handle whose donations combine like any other name. Display names are not verified identities.
   If D1 can't be read, the last cached board is kept, or skipped if none has been read.
   Older clients can continue reading `entries` alone.
 - The tally, the donations board's figures, the same in every browser:
