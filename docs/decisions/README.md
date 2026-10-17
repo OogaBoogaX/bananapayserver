@@ -41,7 +41,7 @@ means writing a new record.
 | [0018](0018-staging-github-action.md) | Staging deploys through a manual GitHub Action | accepted |
 | [0019](0019-production-relay-address.md) | Production's relay dials the Worker's workers.dev address | accepted |
 | [0020](0020-staging-then-production.md) | Production runs only what passed staging; releases are cut from main | accepted |
-| [0021](0021-rock-default-branch.md) | rock is the default branch | accepted |
+| [0026](0026-rock-default-branch.md) | rock is the default branch | accepted |
 
 ## Waiting for a record
 

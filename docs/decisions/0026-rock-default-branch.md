@@ -1,4 +1,4 @@
-# 0021. rock is the default branch
+# 0026. rock is the default branch
 
 **Status:** accepted, 2026-10-17.
 
