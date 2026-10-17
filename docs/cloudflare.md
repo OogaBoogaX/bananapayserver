@@ -255,7 +255,8 @@ import time in `finished.at`, only after the corrected pile row was present. It 
 `ON CONFLICT (invoice) DO NOTHING`. For this record the marker key is the transaction id,
 matching the D1 key described in the overview, rather than the BTCPay invoice id.
 
-`PILE_START` was then disabled; consumption was already disabled with `PILE_EAT_PER_HOUR`.
+`PILE_START` was then set so a new pile starts from zero; eating was already off with
+`PILE_EAT_PER_HOUR`.
 Changing `PILE_START` alone cannot reset a pile that already exists.
 
 ### Historical Lightning correction
