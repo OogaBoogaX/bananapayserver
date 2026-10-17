@@ -9,6 +9,7 @@ const json = (value) => JSON.stringify(value);
 test("parseDown accepts each message the object sends", () => {
   for (const message of [
     { type: "invoice", request: REQUEST, sats: 1000 },
+    { type: "invoice", request: REQUEST, sats: 1000, onchainOnly: true },
     { type: "onchain", request: REQUEST, invoice: "Inv0ice1234" },
     { type: "ack", invoice: "Inv0ice1234", result: "recorded" },
   ]) assert.deepEqual(parseDown(json(message)), message);
@@ -17,6 +18,7 @@ test("parseDown accepts each message the object sends", () => {
 test("parseUp accepts each message the relay sends", () => {
   for (const message of [
     { type: "invoice", request: REQUEST, invoice: { id: "Inv0ice1234", bolt11: BOLT11, expires: 1_790_000_000 } },
+    { type: "invoice", request: REQUEST, invoice: { id: "Inv0ice1234", bolt11: null, expires: 1_790_000_000 } },
     { type: "invoice", request: REQUEST, error: "cap" },
     { type: "onchain", request: REQUEST, address: ADDRESS, sats: 1000 },
     { type: "onchain", request: REQUEST, error: "unavailable" },
@@ -34,6 +36,9 @@ test("anything else is dropped", () => {
     json(null),
     json([]),
     json({ type: "invoice", request: REQUEST, sats: 1000, extra: 1 }),
+    json({ type: "invoice", request: REQUEST, sats: 1000, onchainOnly: false }),
+    json({ type: "invoice", request: REQUEST, sats: 1000, onchainOnly: "true" }),
+    json({ type: "invoice", request: REQUEST, sats: 1000, onchainOnly: true, extra: 1 }),
     json({ type: "invoice", request: "short", sats: 1000 }),
     json({ type: "invoice", request: REQUEST, sats: 0 }),
     json({ type: "invoice", request: REQUEST, sats: 1.5 }),

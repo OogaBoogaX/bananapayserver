@@ -15,6 +15,7 @@ const wholeNumber = (value) => (value?.trim?.() === "0" ? 0 : positiveInt(value)
 // The limits, or null when donations must stay closed.
 export function readLimits(env) {
   const maxSats = positiveInt(env.MAX_SATS);
+  const lightningMaxSats = env.LIGHTNING_MAX_SATS === undefined ? maxSats : positiveInt(env.LIGHTNING_MAX_SATS);
   const ratePerIp = positiveInt(env.RATE_PER_IP);
   const rateGlobal = positiveInt(env.RATE_GLOBAL);
   const socketsPerIp = positiveInt(env.SOCKETS_PER_IP);
@@ -24,8 +25,9 @@ export function readLimits(env) {
   const onchainFeeAllowance = wholeNumber(env.ONCHAIN_FEE_ALLOWANCE);
   const minSats = env.MIN_SATS === undefined ? 1 : positiveInt(env.MIN_SATS);
   if (!maxSats || !ratePerIp || !rateGlobal || !socketsPerIp || !minSats || minSats > maxSats) return null;
+  if (!lightningMaxSats || lightningMaxSats > maxSats || maxSats > 2_100_000_000_000_000) return null;
   if (!priceJumpMax || priceJumpMax < 2 || onchainFeeAllowance === null) return null;
-  return { minSats, maxSats, ratePerIp, rateGlobal, socketsPerIp, priceJumpMax, onchainFeeAllowance };
+  return { minSats, maxSats, lightningMaxSats, ratePerIp, rateGlobal, socketsPerIp, priceJumpMax, onchainFeeAllowance };
 }
 
 // Settings that are not limits. A missing or unknown network also closes donations.

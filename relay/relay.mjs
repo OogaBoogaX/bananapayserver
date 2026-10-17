@@ -41,17 +41,21 @@ export class Relay {
   }
 
   // The relay checks the amount against its own cap, whatever the Worker allowed.
-  async invoice({ request, sats }) {
+  async invoice({ request, sats, onchainOnly = false }) {
     const { minSats, maxSats, invoiceMinutes, methods } = this.config;
     if (sats < minSats || sats > maxSats) return this.line.send({ type: "invoice", request, error: "cap" });
+    const chainOnly = onchainOnly || sats > (this.config.lightningMaxSats ?? maxSats);
     try {
       const created = await this.btcpay.createInvoice({
         sats,
         minutes: invoiceMinutes,
-        methods: [methods.lightning, methods.onchain],
+        methods: chainOnly ? [methods.onchain] : [methods.lightning, methods.onchain],
       });
-      await this.btcpay.activate(created.id, methods.lightning);
-      const { destination } = await this.paymentMethod(created.id, methods.lightning);
+      let destination = null;
+      if (!chainOnly) {
+        await this.btcpay.activate(created.id, methods.lightning);
+        ({ destination } = await this.paymentMethod(created.id, methods.lightning));
+      }
       this.open.set(created.id, sats);
       this.line.send({
         type: "invoice",

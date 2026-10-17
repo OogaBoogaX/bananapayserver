@@ -19,7 +19,7 @@ export function readConfig(env) {
   const count = (name, fallback) => {
     const value = text(name, fallback === undefined ? undefined : String(fallback));
     if (value === undefined) return undefined;
-    if (!/^[1-9]\d{0,15}$/.test(value)) problems.push(name);
+    if (!/^[1-9]\d{0,15}$/.test(value) || !Number.isSafeInteger(Number(value))) problems.push(name);
     return Number(value);
   };
   const hostPort = (name, fallback) => {
@@ -38,6 +38,9 @@ export function readConfig(env) {
   const socks = env.DIRECT === "yes" ? null : hostPort("TOR_SOCKS");
   const minSats = count("MIN_SATS", 1);
   const maxSats = count("MAX_SATS");
+  const lightningMaxSats = env.LIGHTNING_MAX_SATS === undefined ? maxSats : count("LIGHTNING_MAX_SATS");
+  if (lightningMaxSats > maxSats) problems.push("LIGHTNING_MAX_SATS");
+  if (maxSats > 2_100_000_000_000_000) problems.push("MAX_SATS");
   if (minSats && maxSats && minSats > maxSats) problems.push("MIN_SATS");
   const ratePerMinute = count("RATE_PER_MINUTE");
 
@@ -54,6 +57,7 @@ export function readConfig(env) {
     listen: hostPort("WEBHOOK_LISTEN", "0.0.0.0:8080"),
     minSats,
     maxSats,
+    lightningMaxSats,
     ratePerMinute,
     invoiceMinutes: count("INVOICE_MINUTES", 15),
     methods: {

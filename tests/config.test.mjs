@@ -72,7 +72,7 @@ test("numbers must be whole and in order", () => {
 test("the Worker's caps and rate limits have no defaults, and a bad one closes donations", () => {
   const limits = { MAX_SATS: "100000", RATE_PER_IP: "5", RATE_GLOBAL: "50", SOCKETS_PER_IP: "4", PRICE_JUMP_MAX: "3", ONCHAIN_FEE_ALLOWANCE: "20000" };
   assert.deepEqual(readLimits(limits), {
-    minSats: 1, maxSats: 100_000, ratePerIp: 5, rateGlobal: 50, socketsPerIp: 4, priceJumpMax: 3, onchainFeeAllowance: 20_000,
+    minSats: 1, maxSats: 100_000, lightningMaxSats: 100_000, ratePerIp: 5, rateGlobal: 50, socketsPerIp: 4, priceJumpMax: 3, onchainFeeAllowance: 20_000,
   });
   for (const name of Object.keys(limits)) assert.equal(readLimits({ ...limits, [name]: undefined }), null, name);
   for (const bad of ["0", "-1", "1.5", "lots", " ", "1e3"]) assert.equal(readLimits({ ...limits, MAX_SATS: bad }), null, bad);
@@ -93,4 +93,15 @@ test("the Worker's other settings", () => {
   const pile = readSettings({ PILE_START: "0", PILE_EAT_PER_HOUR: "0" });
   assert.deepEqual([pile.pileStart, pile.pileEatPerHour], [0, 0], "zero is allowed for the pile");
   assert.equal(readSettings({ PILE_EAT_PER_HOUR: "-3" }).pileEatPerHour, 60);
+});
+
+test("Lightning thresholds are separate from the overall cap, default to it, and reject invalid configuration", () => {
+  const limits = { MAX_SATS: "100000", RATE_PER_IP: "5", RATE_GLOBAL: "50", SOCKETS_PER_IP: "4", PRICE_JUMP_MAX: "3", ONCHAIN_FEE_ALLOWANCE: "20000" };
+  assert.equal(readConfig(RELAY).lightningMaxSats, 50_000);
+  assert.equal(readConfig({ ...RELAY, LIGHTNING_MAX_SATS: "1000" }).lightningMaxSats, 1000);
+  assert.equal(readLimits({ ...limits, LIGHTNING_MAX_SATS: "1000" }).lightningMaxSats, 1000);
+  for (const bad of ["", "0", "-1", "1e3", "1.5", "100001", "9007199254740992"]) {
+    assert.equal(readLimits({ ...limits, LIGHTNING_MAX_SATS: bad }), null, bad);
+    assert.throws(() => readConfig({ ...RELAY, LIGHTNING_MAX_SATS: bad }), /LIGHTNING_MAX_SATS/);
+  }
 });

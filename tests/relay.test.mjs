@@ -80,6 +80,23 @@ test("the relay's own cap holds whatever the Worker allowed", async () => {
   assert.deepEqual(btcpay.calls, []);
 });
 
+test("above the relay's Lightning threshold only the on-chain method is created", async () => {
+  const { relay, line, btcpay } = setup({}, { lightningMaxSats: 999 });
+  await relay.handle({ type: "invoice", request: REQUEST, sats: 1000 });
+  assert.deepEqual(btcpay.calls, [["createInvoice", { sats: 1000, minutes: 15, methods: ["BTC-CHAIN"] }]]);
+  assert.deepEqual(line.sent, [{ type: "invoice", request: REQUEST, invoice: { id: INVOICE, bolt11: null, expires: EXPIRES } }]);
+  await relay.handle({ type: "onchain", request: REQUEST, invoice: INVOICE });
+  assert.deepEqual(line.sent.at(-1), { type: "onchain", request: REQUEST, address: ADDRESS, sats: 1000 });
+  assert.ok(!btcpay.calls.some(c => c[0] === "activate" && c[2] === "BTC-LN"));
+});
+
+test("a Worker may request on-chain only below the relay's Lightning threshold", async () => {
+  const { relay, line, btcpay } = setup();
+  await relay.handle({ type: "invoice", request: REQUEST, sats: 1000, onchainOnly: true });
+  assert.deepEqual(btcpay.calls, [["createInvoice", { sats: 1000, minutes: 15, methods: ["BTC-CHAIN"] }]]);
+  assert.equal(line.sent[0].invoice.bolt11, null);
+});
+
 test("the relay makes only so many invoices and addresses a minute, whatever the Worker asks", async () => {
   const { relay, line, btcpay, logs, clock } = setup({}, { ratePerMinute: 2 });
   await relay.handle({ type: "invoice", request: REQUEST, sats: 1000 });

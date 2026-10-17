@@ -44,6 +44,7 @@ means writing a new record.
 | [0021](0021-editable-donation-handles.md) | Editable donation handles and rankings by entered name | accepted |
 | [0022](0022-edit-details-in-place.md) | Edit donation details on the same invoice | accepted |
 | [0023](0023-receipt-time-pricing.md) | Live estimates and receipt-time pricing | accepted |
+| [0024](0024-onchain-above-lightning-limit.md) | On-chain donations above the Lightning threshold | accepted |
 
 ## Waiting for a record
 

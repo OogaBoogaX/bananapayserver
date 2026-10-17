@@ -86,7 +86,8 @@ without replacing the invoice or its rate.
   "invoice": { "id": "BTCPay invoice id", "bolt11": "lnbc…", "expires": 1790000900 },
   "bananas": { "exact": 10, "rounded": 10 },
   "rate": { "usdPerBtc": 100000, "satsPerBanana": 1000, "at": 1790000000000, "stale": false },
-  "pricing": "receipt"
+  "pricing": "receipt",
+  "lightning": "available"
 }
 ```
 
@@ -110,6 +111,12 @@ fallback. D1 stores `received_at` separately from `price_at`, along with `price_
 bananas, without blocking payment. Once stored, a receipt is never repriced by retries,
 restarts or service recovery. Apply `0006_receipt_pricing.sql` before deploying. Historical
 rows and totals keep their recorded invoice prices.
+
+`lightning` is `available`, `limit` (above the configured Lightning threshold), or
+`unavailable`. The last two have `invoice.bolt11: null` and still support `/donations/onchain`.
+Amounts above `LIGHTNING_MAX_SATS` up to the overall `MAX_SATS` are accepted on-chain only.
+The Worker asks the relay for `onchainOnly: true`; the relay also enforces its own threshold.
+An amount above the overall cap still returns `amount`.
 
 ### `POST /donations/note`
 
@@ -146,7 +153,10 @@ missed. After that:
 
 - `{ "type": "status", "open": true, "network": "signet" }` whenever the relay's line opens or
   closes, so the page can say donations are closed before anyone tries. `network` is the
-  network this deployment takes payments on, so a page can label test donations.
+  network this deployment takes payments on, so a page can label test donations. It also has
+  `limits: { minSats, maxSats, lightningMaxSats }`, the configured public payment policy. Kiosks
+  warn about on-chain-only amounts before Continue and enforce the overall range. Legacy
+  clients may ignore these extra fields.
 - `{ "type": "donation", "donation": { "id", "sats", "handle", "message", "at" }, "bananas": { "exact", "rounded" } }`
   for each payment. `donation` is OBL's contract exactly, with the invoice id as `id`, the
   chosen display handle (or `""` from an older anonymous client), and `at` in milliseconds.
@@ -248,7 +258,7 @@ From the object to the relay:
 
 | Message | Meaning |
 |---|---|
-| `{ "type": "invoice", "request", "sats" }` | Make an invoice for this amount |
+| `{ "type": "invoice", "request", "sats" }` | Make an invoice for this amount; an optional `onchainOnly: true` creates only the on-chain method. When present it must be exactly `true` |
 | `{ "type": "onchain", "request", "invoice" }` | Add an on-chain address to this invoice |
 | `{ "type": "ack", "invoice", "result" }` | The payment notice arrived; `result` is `recorded`, `duplicate`, `unknown` or `rejected` |
 
@@ -256,7 +266,7 @@ From the relay to the object:
 
 | Message | Meaning |
 |---|---|
-| `{ "type": "invoice", "request", "invoice": { "id", "bolt11", "expires" } }` | The invoice |
+| `{ "type": "invoice", "request", "invoice": { "id", "bolt11", "expires" } }` | The invoice; `bolt11: null` for an on-chain-only invoice |
 | `{ "type": "invoice", "request", "error" }` | `cap` when the amount is over the relay's own cap, otherwise `unavailable` |
 | `{ "type": "onchain", "request", "address", "sats" }` | The address, and what BTCPay expects on-chain |
 | `{ "type": "onchain", "request", "error": "unavailable" }` | No address |

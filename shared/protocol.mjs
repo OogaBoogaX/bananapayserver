@@ -20,7 +20,7 @@ const isOneOf = (values) => (v) => values.includes(v);
 const isInvoice = (v) =>
   hasKeys(v, ["id", "bolt11", "expires"]) &&
   isInvoiceId(v.id) &&
-  typeof v.bolt11 === "string" && BOLT11.test(v.bolt11) &&
+  (v.bolt11 === null || typeof v.bolt11 === "string" && BOLT11.test(v.bolt11)) &&
   isTime(v.expires);
 
 // Down: from the Durable Object to the relay.
@@ -64,6 +64,8 @@ function parse(text) {
 export function parseDown(text) {
   const message = parse(text);
   if (!message || typeof message.type !== "string" || !Object.hasOwn(DOWN, message.type)) return null;
+  if (message.type === "invoice" && message.onchainOnly === true &&
+      hasKeys(message, ["type", "request", "sats", "onchainOnly"]) && isRequest(message.request) && isSats(message.sats)) return message;
   return matches(message, message.type, DOWN[message.type]) ? message : null;
 }
 

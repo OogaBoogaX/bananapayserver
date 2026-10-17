@@ -95,7 +95,8 @@
       invoice: { id: inv.id, bolt11: inv.bolt11 || null, expires: inv.expires },
       bananas: b && isNumber(b.exact) && isNumber(b.rounded) ? { exact: b.exact, rounded: b.rounded } : null,
       rate: rateOf(rate),
-      pricing: r.pricing === "receipt" ? "receipt" : "invoice"
+      pricing: r.pricing === "receipt" ? "receipt" : "invoice",
+      lightning: ["available", "limit", "unavailable"].includes(r.lightning) ? r.lightning : inv.bolt11 ? "available" : "unavailable"
     };
   };
   // Replaces the message on a request not yet paid.
@@ -130,7 +131,11 @@
   // API's last word on whether donations are open, and `state.network` the network it takes payments on, each null
   // before it has said. `state.tally` is its latest tally, null before the first.
   const SOCKET_MIN = 1000, SOCKET_MAX = 60000, PLAYED = 64;
-  const state = { open: null, network: null, connected: false, attempts: 0, donations: 0, tally: null, board: null, boardSats: null };
+  const state = { open: null, network: null, connected: false, attempts: 0, donations: 0, tally: null, board: null, boardSats: null, limits: null };
+  const limitsOf = (v) => v && Number.isSafeInteger(v.minSats) && v.minSats > 0
+    && Number.isSafeInteger(v.maxSats) && v.maxSats >= v.minSats
+    && Number.isSafeInteger(v.lightningMaxSats) && v.lightningMaxSats > 0 && v.lightningMaxSats <= v.maxSats
+    ? { minSats: v.minSats, maxSats: v.maxSats, lightningMaxSats: v.lightningMaxSats } : null;
   const readers = new Set();
   const notify = () => { for (const reader of readers) reader(); };
   const subscribeState = (reader) => {
@@ -168,6 +173,8 @@
     if (data.type === "status" && typeof data.open === "boolean") {
       state.open = data.open;
       if (NETWORKS.includes(data.network)) state.network = data.network;
+      const limits = limitsOf(data.limits);
+      if (data.limits === null || limits) state.limits = limits;
       if (handlers.status) handlers.status(data.open);
       notify();
     } else if (data.type === "donation") {

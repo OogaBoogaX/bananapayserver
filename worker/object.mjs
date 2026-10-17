@@ -155,19 +155,23 @@ export class DonationsObject {
     const limits = readLimits(this.env);
     const { network, invoiceTimeoutMs } = readSettings(this.env);
     if (!limits || !network) return closed();
+    if (!Number.isSafeInteger(sats) || sats < limits.minSats || sats > limits.maxSats) return json({ error: "amount" }, 400);
     if (!this.allow("work", client, limits)) return busy();
     const line = this.line();
     if (!line) return closed();
 
     this.purge();
     const request = this.platform.id();
+    const onchainOnly = sats > limits.lightningMaxSats;
+    const command = { type: "invoice", request, sats };
+    if (onchainOnly) command.onchainOnly = true;
     this.sql.exec(
       "INSERT INTO pending (request, sats, handle, message, github_id, created) VALUES (?, ?, ?, ?, ?, ?)",
       request, sats, sanitize(handle === undefined ? github?.login : handle, HANDLE_MAX), sanitize(message, MESSAGE_MAX), github?.id ?? null, this.platform.now(),
     );
     // The price is looked up while the relay makes the invoice, so it costs the donor no time.
     const [reply, price] = await Promise.all([
-      this.ask(line, { type: "invoice", request, sats }, invoiceTimeoutMs),
+      this.ask(line, command, invoiceTimeoutMs),
       this.price(),
     ]);
     // The pages' tally follows the price this lookup got, without holding up the donor.
@@ -175,7 +179,8 @@ export class DonationsObject {
     const invoice = reply?.invoice;
     // This is an estimate. The first full receipt takes its own price snapshot.
     const milli = price ? milliBananas(sats, price.cents) : null;
-    if (!invoice || !invoiceMatches(invoice.bolt11, network, sats) || !this.attach(request, invoice, price, milli)) {
+    if (!invoice || invoice.bolt11 !== null && !invoiceMatches(invoice.bolt11, network, sats)
+        || onchainOnly && invoice.bolt11 !== null || !this.attach(request, invoice, price, milli)) {
       this.sql.exec("DELETE FROM pending WHERE request = ?", request);
       return reply?.error === "cap" ? json({ error: "amount" }, 400) : closed();
     }
@@ -185,6 +190,7 @@ export class DonationsObject {
       bananas: bananasOf(milli),
       rate: price ? { ...rateOf(price.cents, price.at), stale: price.stale } : null,
       pricing: "receipt",
+      lightning: invoice.bolt11 === null ? onchainOnly ? "limit" : "unavailable" : "available",
     });
   }
 
@@ -675,7 +681,9 @@ export class DonationsObject {
 
   // Whether donations are open, and on which network, so a page can label test donations.
   statusMessage(open) {
-    return { type: "status", open, network: readSettings(this.env).network };
+    const limits = readLimits(this.env);
+    return { type: "status", open, network: readSettings(this.env).network,
+      limits: limits ? { minSats: limits.minSats, maxSats: limits.maxSats, lightningMaxSats: limits.lightningMaxSats } : null };
   }
 
   line(excluding = null) {
