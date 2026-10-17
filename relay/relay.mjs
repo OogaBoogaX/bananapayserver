@@ -11,6 +11,7 @@ export class Relay {
     Object.assign(this, { btcpay, line, config, now, log });
     this.open = new Map(); // invoice id → sats: made here, not yet settled or expired
     this.unacked = new Map(); // invoice id → { sats, method }: settled, until the object acknowledges
+    this.seenPayments = new Map(); // invoice id → ids of its on-chain payments already announced as seen
     this.checking = new Set();
     this.recheck = new Set(); // invoice ids a webhook asked about while they were being checked
     this.sweeping = false;
@@ -111,8 +112,14 @@ export class Relay {
       // Paid in full after it expired, which only an on-chain payment can be. It counts, as the
       // donor gave and the node has it, once BTCPay has settled every payment.
       const late = invoice.status === "Expired" && invoice.additionalStatus === "PaidLate";
+      // A payment that can still settle this invoice has arrived. A failure here leaves the
+      // counting below alone.
+      if (invoice.status === "Processing" || late || (invoice.status === "New" && invoice.additionalStatus === "PaidPartial")) {
+        await this.seen(invoiceId).catch((error) => this.log(`seen: ${error.message}`));
+      }
       if ((invoice.status === "Expired" && !late) || invoice.status === "Invalid") {
         this.open.delete(invoiceId);
+        this.seenPayments.delete(invoiceId);
         return;
       }
       if (invoice.status !== "Settled" && !late) return;
@@ -138,6 +145,7 @@ export class Relay {
       // sweep asks again and the log keeps saying so.
       if (!method) return this.log(`check: invoice ${invoiceId} is settled, but BTCPay lists no payment for it`);
       this.open.delete(invoiceId);
+      this.seenPayments.delete(invoiceId);
       this.unacked.set(invoiceId, { sats, method });
       this.line.send({ type: "paid", invoice: invoiceId, sats, method });
     } catch (error) {
@@ -148,6 +156,26 @@ export class Relay {
       else if (!this.open.has(invoiceId)) this.open.set(invoiceId, null);
       this.log(`check: ${error.message}`);
     }
+  }
+
+  // Tells the object about an on-chain payment BTCPay has seen but not yet settled, once per
+  // payment: everything the invoice has received on-chain so far, and what BTCPay still wants
+  // on-chain, network fee included, which is more than the difference when the store adds a fee
+  // for a second payment. Lightning payments settle at once and come as the donation. A payment
+  // counts as announced only once the line takes the message; after a restart one may be
+  // announced again, which pages take as harmless.
+  async seen(invoiceId) {
+    const methods = await this.btcpay.paymentMethods(invoiceId);
+    const onchain = methods?.find((m) => (m.paymentMethodId ?? m.paymentMethod) === this.config.methods.onchain);
+    const payments = (onchain?.payments ?? []).filter((payment) => payment.status !== "Invalid");
+    const announced = this.seenPayments.get(invoiceId) ?? new Set();
+    const fresh = payments.filter((payment) => payment.status === "Processing" && !announced.has(payment.id));
+    const sats = payments.reduce((sum, payment) => sum + (btcToSats(payment.value) ?? 0), 0);
+    const left = btcToSats(onchain?.due);
+    if (!fresh.length || !sats || left === null) return;
+    if (!this.line.send({ type: "seen", invoice: invoiceId, sats, left })) return;
+    for (const payment of fresh) announced.add(payment.id);
+    this.seenPayments.set(invoiceId, announced);
   }
 
   // Sends every notice the object hasn't acknowledged. Repeats are harmless: the object

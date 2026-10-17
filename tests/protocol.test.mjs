@@ -23,6 +23,8 @@ test("parseUp accepts each message the relay sends", () => {
     { type: "paid", invoice: "Inv0ice1234", sats: 1000, method: "lightning" },
     { type: "paid", invoice: "Inv0ice1234", sats: 1000, method: "onchain" },
     { type: "paid", invoice: "Inv0ice1234", sats: 1000, method: "mixed" },
+    { type: "seen", invoice: "Inv0ice1234", sats: 400, left: 615 },
+    { type: "seen", invoice: "Inv0ice1234", sats: 1000, left: 0 },
   ]) assert.deepEqual(parseUp(json(message)), message);
 });
 
@@ -51,6 +53,12 @@ test("anything else is dropped", () => {
     json({ type: "invoice", request: REQUEST, invoice: { id: "Inv0ice1234", bolt11: BOLT11, expires: 1, x: 1 } }),
     json({ type: "invoice", request: REQUEST, error: "cap", invoice: null }),
     json({ type: "onchain", request: REQUEST, address: "has spaces in it!", sats: 1 }),
+    json({ type: "seen", invoice: "Inv0ice1234", sats: 0, left: 0 }),
+    json({ type: "seen", invoice: "Inv0ice1234", sats: 400 }),
+    json({ type: "seen", invoice: "Inv0ice1234", sats: 400, left: -1 }),
+    json({ type: "seen", invoice: "Inv0ice1234", sats: 400, left: 1.5 }),
+    json({ type: "seen", invoice: "Inv0ice1234", sats: 400, left: 600, due: 1000 }),
+    json({ type: "seen", request: REQUEST, sats: 400, left: 600 }),
   ]) assert.equal(parseUp(text), null, text);
 });
 

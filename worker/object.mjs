@@ -295,6 +295,7 @@ export class DonationsObject {
     // Anything from the relay that isn't the protocol is dropped.
     const reply = typeof message === "string" ? parseUp(message) : null;
     if (!reply) return;
+    if (reply.type === "seen") return this.seen(reply);
     if (reply.type !== "paid") {
       this.waiting.get(`${reply.type}:${reply.request}`)?.resolve(reply);
       return;
@@ -349,6 +350,14 @@ export class DonationsObject {
       await this.pushTally({ refresh: true });
     }
     return inserted ? "recorded" : "duplicate";
+  }
+
+  // An on-chain payment BTCPay has seen but not yet settled, on an invoice still waiting here:
+  // pages hear of it at once, with the invoice's amount and what BTCPay still wants on-chain, so
+  // a short payment is plain. Nothing is kept; the donation follows once BTCPay settles it.
+  seen({ invoice, sats, left }) {
+    const [row] = this.sql.exec("SELECT sats FROM pending WHERE invoice = ?", invoice).toArray();
+    if (row) this.broadcast({ type: "seen", id: invoice, sats, due: row.sats, left });
   }
 
   // Marks a recorded donation finished and adds it to the pile, in one step. False if it was

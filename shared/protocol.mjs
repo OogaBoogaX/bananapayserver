@@ -13,6 +13,7 @@ const MAX_SATS = 2_100_000_000_000_000;
 const isRequest = (v) => typeof v === "string" && REQUEST.test(v);
 const isInvoiceId = (v) => typeof v === "string" && INVOICE_ID.test(v);
 const isSats = (v) => Number.isSafeInteger(v) && v > 0 && v <= MAX_SATS;
+const isSatsOrNone = (v) => v === 0 || isSats(v);
 const isTime = (v) => Number.isSafeInteger(v) && v > 0;
 const isOneOf = (values) => (v) => values.includes(v);
 
@@ -36,6 +37,7 @@ const UP = [
   ["onchain", { request: isRequest, address: (v) => typeof v === "string" && ADDRESS.test(v), sats: isSats }],
   ["onchain", { request: isRequest, error: isOneOf(["unavailable"]) }],
   ["paid", { invoice: isInvoiceId, sats: isSats, method: isOneOf(["lightning", "onchain", "mixed"]) }],
+  ["seen", { invoice: isInvoiceId, sats: isSats, left: isSatsOrNone }],
 ];
 
 function hasKeys(value, keys) {

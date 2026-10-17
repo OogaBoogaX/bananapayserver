@@ -351,6 +351,29 @@ test("a donor who switches gets an on-chain address for the same invoice", async
   assert.deepEqual(await response.json(), { address: ADDRESS, sats: 1000 });
 });
 
+test("an on-chain payment the relay has seen reaches pages at once, with what's due, and isn't kept", async () => {
+  const w = await world();
+  const relay = await w.connectRelay();
+  await w.invoice(relay, { sats: 1000 });
+  const page = await w.connectPage();
+  await w.relaySays(relay, { type: "seen", invoice: INVOICE, sats: 400, left: 615 });
+  assert.deepEqual(page.messages().filter((m) => m.type === "seen"), [{ type: "seen", id: INVOICE, sats: 400, due: 1000, left: 615 }]);
+  const later = await w.connectPage();
+  assert.equal(later.messages().filter((m) => m.type === "seen").length, 0, "not replayed");
+  assert.equal(w.env.DB.db.prepare("SELECT COUNT(*) AS n FROM donations").get().n, 0, "nothing recorded");
+});
+
+test("a seen payment for an invoice the object isn't waiting on goes nowhere", async () => {
+  const w = await world();
+  const relay = await w.connectRelay();
+  const page = await w.connectPage();
+  await w.relaySays(relay, { type: "seen", invoice: "NotWaiting01", sats: 400, left: 600 });
+  await w.invoice(relay, { sats: 1000 });
+  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "onchain" });
+  await w.relaySays(relay, { type: "seen", invoice: INVOICE, sats: 1000, left: 0 });
+  assert.equal(page.messages().filter((m) => m.type === "seen").length, 0);
+});
+
 test("an on-chain switch is refused for a wrong address, an unknown request, or an expired invoice", async () => {
   const w = await world();
   const relay = await w.connectRelay();
