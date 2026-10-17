@@ -85,11 +85,12 @@ const MIGRATIONS = [
   // Once settlement starts, freeze attribution before an awaited D1 write lets a note interleave.
   `ALTER TABLE pending ADD COLUMN settling INTEGER NOT NULL DEFAULT 0;`,
   // Estimates may move; the first full receipt freezes a separate, durable pricing snapshot.
+  // Already-issued invoices keep their quoted price; their receipt time is unknown.
   `ALTER TABLE pending ADD COLUMN received_at INTEGER;
   ALTER TABLE pending ADD COLUMN price_frozen INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE pending ADD COLUMN price_stale INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE pending ADD COLUMN pricing TEXT NOT NULL DEFAULT 'receipt';
-  UPDATE pending SET price_frozen = 1, received_at = created, pricing = 'invoice' WHERE settling = 1;`,
+  UPDATE pending SET price_frozen = 1, pricing = 'invoice' WHERE invoice IS NOT NULL;`,
 ];
 
 export class DonationsObject {

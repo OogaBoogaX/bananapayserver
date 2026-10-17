@@ -9,7 +9,8 @@ The requirement to replace an invoice for handle changes is superseded by
 
 Every donor may choose a display handle, signed in or not. OBL defaults it to the GitHub login
 when signed in, otherwise `anon`. Matching entered handles combine case-insensitively on
-both leaderboards. Each donation retains its own recorded sats and invoice-rate bananas.
+both leaderboards. Each donation retains its own recorded sats and bananas; invoice-time
+pricing is superseded by [0023](0023-receipt-time-pricing.md).
 Messages run to 280 sanitized characters; handles remain limited to 39.
 
 ## Alternatives
@@ -26,6 +27,7 @@ and signed-out donors should be able to accumulate totals under the same name.
 
 Display names are unverified and may be shared. Changing names starts a separate total;
 account ownership and sign-in still rely exclusively on the authenticated binding argument.
-The relay sees neither handle nor message. A changed handle needs a new invoice. Migration
-0005 backfills the public name totals from existing donation records, preserving all amounts;
-legacy unnamed donations stay outside the rankings. The old account totals remain stored.
+The relay sees neither handle nor message. Handle changes keep the same invoice under
+[0022](0022-edit-details-in-place.md). Migration 0005 backfills the public name totals from
+existing donation records, preserving all amounts; legacy unnamed donations stay outside the
+rankings. The old account totals remain stored.

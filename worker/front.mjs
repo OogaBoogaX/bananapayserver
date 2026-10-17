@@ -111,8 +111,8 @@ const isRequest = (value) => typeof value === "string" && REQUEST.test(value);
 
 const visitorOf = (visitor) => (typeof visitor === "string" && visitor.length > 0 ? visitor.slice(0, VISITOR_MAX) : null);
 
-// The message, cleaned with OBL's rules, or null when it isn't text.
 const cleanHandle = (handle) => sanitize(handle, HANDLE_MAX).replace(/^@+/, "").trim() || "anon";
+// The message, cleaned with OBL's rules, or null when it isn't text.
 const cleanMessage = ({ message = "" }) => (typeof message === "string" ? sanitize(message, MESSAGE_MAX) : null);
 
 async function readBody(request, allowed, required) {
