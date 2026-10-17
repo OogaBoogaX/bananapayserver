@@ -70,7 +70,7 @@ and we want to hear it.
 
 Ooga Booga Land's page and Foundry's exporter live in their own repositories,
 [`oogaboogaland`](https://github.com/OogaBoogaX/oogaboogaland) and
-[`lightningfoundry`](https://github.com/OogaBoogaX/lightningfoundry/blob/main/SECURITY.md), and
+[`lightningfoundry`](https://github.com/OogaBoogaX/lightningfoundry/blob/rock/SECURITY.md), and
 reports about them belong there.
 
 Also out of scope: attacks requiring physical access to a node's machine.
