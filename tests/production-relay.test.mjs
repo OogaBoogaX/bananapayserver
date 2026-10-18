@@ -94,7 +94,6 @@ test("the relay publishes no port, runs read-only, and only joins BTCPay's netwo
   assert.match(yaml, /external: true/);
   const example = readFileSync(dir(".env.example"), "utf8");
   for (const name of new Set([...yaml.matchAll(/\$\{([A-Z_]+)/g)].map((m) => m[1]))) {
-    const prefix = name === "MAX_SATS" ? "# " : ""; // Only the legacy fallback is commented out.
-    assert.match(example, new RegExp(`^${prefix}${name}=`, "m"), `.env.example lists ${name}`);
+    assert.match(example, new RegExp(`^${name}=`, "m"), `.env.example lists ${name}`);
   }
 });

@@ -212,7 +212,8 @@ services:
     image: obl-staging-relay
     pull_policy: build
     read_only: true
-    # Empty until setup.sh has run; the relay refuses to start without them.
+    # Empty until setup.sh has run; the relay refuses to start without them. Each value reads
+    # one variable: an older Compose turns a variable inside another into a stray "}".
     environment:
       WORKER_URL: ${WORKER_URL:-}
       RELAY_TOKEN: ${RELAY_TOKEN:-}
@@ -221,7 +222,7 @@ services:
       BTCPAY_STORE_ID: ${BTCPAY_STORE_ID:-}
       BTCPAY_API_KEY: ${BTCPAY_API_KEY:-}
       BTCPAY_WEBHOOK_SECRET: ${BTCPAY_WEBHOOK_SECRET:-}
-      LIGHTNING_MAX_SATS: ${RELAY_LIGHTNING_MAX_SATS-${RELAY_MAX_SATS:-}}
+      LIGHTNING_MAX_SATS: ${RELAY_LIGHTNING_MAX_SATS:-}
       RATE_PER_MINUTE: ${RELAY_RATE_PER_MINUTE:-}
       WEBHOOK_LISTEN: 0.0.0.0:8080
     networks: [front]
