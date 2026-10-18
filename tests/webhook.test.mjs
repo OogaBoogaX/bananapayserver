@@ -46,6 +46,16 @@ test("a payment, settled or not, sends the relay to look too, since a late one s
   assert.equal(settled.length, 2);
 });
 
+test("the relay hears which event it was, so a payment is looked at whatever the invoice's status", async (t) => {
+  const heard = [];
+  const server = createWebhookServer({ secret: SECRET, storeId: "Store1234", onPayment: (id, type) => heard.push([id, type]) });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const body = event({ type: "InvoiceReceivedPayment" });
+  await fetch(`http://127.0.0.1:${server.address().port}${WEBHOOK_PATH}`, { method: "POST", body, headers: { "BTCPay-Sig": sign(body) } });
+  assert.deepEqual(heard, [["Inv0ice1234", "InvoiceReceivedPayment"]]);
+});
+
 test("other events, other stores, other paths and methods do nothing", async (t) => {
   const { settled, deliver } = await listen(t);
   assert.equal((await deliver(event({ type: "InvoiceExpired" }))).status, 200);

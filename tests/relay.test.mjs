@@ -53,13 +53,27 @@ function fakeBtcpay(overrides = {}) {
   return btcpay;
 }
 
-function setup(overrides, config = {}) {
+function setup(overrides, config = {}, options = {}) {
   const line = { sent: [], send(message) { this.sent.push(message); return true; } };
   const btcpay = fakeBtcpay(overrides);
   const logs = [];
   const clock = { now: 1_790_000_000_000 };
-  const relay = new Relay({ btcpay, line, config: { ...CONFIG, ...config }, now: () => clock.now, log: (m) => logs.push(m) });
+  const relay = new Relay({ btcpay, line, config: { ...CONFIG, ...config }, now: () => clock.now, log: (m) => logs.push(m), ...options });
   return { relay, line, btcpay, logs, clock };
+}
+
+// Timers for Lightning's deadline: each one set is noted, and runs at once when `due` says so.
+function timers({ due = false } = {}) {
+  const set = [];
+  return {
+    set,
+    setTimer: (fn, ms) => {
+      set.push(ms);
+      if (due) fn();
+      return set.length;
+    },
+    clearTimer: () => {},
+  };
 }
 
 test("an invoice is made with lazy methods, Lightning activated first", async () => {
@@ -128,6 +142,56 @@ test("the relay makes only so many invoices and addresses a minute, whatever the
   clock.now += 60_000;
   await relay.handle({ type: "invoice", request: REQUEST, sats: 1000 });
   assert.equal(line.sent.at(-1).invoice?.id, INVOICE, "a new minute, a new allowance");
+});
+
+test("when BTCPay can't make Lightning, the invoice comes back without it, so the donor can still pay on-chain", async () => {
+  const { relay, line, btcpay, logs } = setup({
+    activate: async (id, method) => {
+      if (method === "BTC-LN") throw new Error("BTCPay answered 503 to POST /invoices/x/payment-methods/BTC-LN/activate");
+    },
+  });
+  await relay.handle({ type: "invoice", request: REQUEST, sats: 1000 });
+  assert.deepEqual(line.sent, [{ type: "invoice", request: REQUEST, invoice: { id: INVOICE, bolt11: null, expires: EXPIRES } }]);
+  assert.equal(relay.open.get(INVOICE), 1000, "open, so the on-chain switch is allowed");
+  assert.ok(logs.some((m) => m.startsWith("invoice: ") && m.includes("offering on-chain only")));
+  await relay.handle({ type: "onchain", request: REQUEST, invoice: INVOICE });
+  assert.deepEqual(line.sent.at(-1), { type: "onchain", request: REQUEST, address: ADDRESS, sats: 1000 });
+  assert.deepEqual(btcpay.calls[0], ["createInvoice", { sats: 1000, minutes: 15, methods: ["BTC-LN", "BTC-CHAIN"] }]);
+});
+
+test("Lightning that misses the deadline is left out, and the deadline counts from the ask", async () => {
+  const clock = { now: 1_790_000_000_000 };
+  const due = timers({ due: true });
+  const { relay, line, logs } = setup(
+    {
+      // BTCPay takes 3 s to make the invoice, then LND never answers.
+      createInvoice: async () => {
+        clock.now += 3_000;
+        return { id: INVOICE, expirationTime: EXPIRES };
+      },
+      activate: () => new Promise(() => {}),
+    },
+    { invoiceDeadlineMs: 8_000 },
+    { now: () => clock.now, setTimer: due.setTimer, clearTimer: due.clearTimer },
+  );
+  await relay.handle({ type: "invoice", request: REQUEST, sats: 1000 });
+  assert.deepEqual(due.set, [5_000], "Lightning gets what's left of the 8 s");
+  assert.deepEqual(line.sent, [{ type: "invoice", request: REQUEST, invoice: { id: INVOICE, bolt11: null, expires: EXPIRES } }]);
+  assert.ok(logs.some((m) => m.includes("offering on-chain only")));
+});
+
+test("Lightning made in time is sent as before, with how long it took in the log", async () => {
+  const clock = { now: 1_790_000_000_000 };
+  const pending = timers();
+  const { relay, line, logs } = setup(
+    { activate: async () => { clock.now += 2_500; } },
+    {},
+    { now: () => clock.now, setTimer: pending.setTimer, clearTimer: pending.clearTimer },
+  );
+  await relay.handle({ type: "invoice", request: REQUEST, sats: 1000 });
+  assert.equal(line.sent[0].invoice.bolt11, BOLT11);
+  assert.deepEqual(pending.set, [8_000], "an 8 s deadline unless the deployment sets one");
+  assert.ok(logs.includes("invoice: Lightning in 2500 ms, 2500 ms from the ask"));
 });
 
 test("a BTCPay failure answers unavailable rather than leaving the page waiting", async () => {
@@ -421,6 +485,61 @@ test("a late on-chain payment is seen too, but Lightning, invoices that aren't t
   await unpaid.relay.sweep();
   assert.deepEqual(unpaid.btcpay.calls, [["invoice", INVOICE]]);
   assert.deepEqual(unpaid.line.sent, []);
+});
+
+test("a payment the webhook reports is looked at even while BTCPay still shows the invoice as New", async () => {
+  const { relay, line, btcpay, logs } = setup();
+  btcpay.invoices.set(INVOICE, { ...btcpay.invoices.get(INVOICE), status: "New" });
+  btcpay.payments = { "BTC-LN": [], "BTC-CHAIN": [{ id: "pay1", value: "0.00001000", status: "Processing" }] };
+  btcpay.dues["BTC-CHAIN"] = "0.00000000";
+  relay.open.set(INVOICE, 1000);
+  await relay.check(INVOICE, { arrived: true });
+  assert.deepEqual(line.sent, [{ type: "seen", invoice: INVOICE, sats: 1000, left: 0 }]);
+  assert.ok(logs.includes(`seen: invoice ${INVOICE}, 1000 sats received on-chain, 0 left`));
+
+  // The minute's sweep, with no webhook behind it, still costs nothing for an invoice shown as New.
+  btcpay.calls.length = 0;
+  await relay.sweep();
+  assert.deepEqual(btcpay.calls, [["invoice", INVOICE]]);
+
+  // A webhook about another app's invoice on the same store leaves nothing behind.
+  btcpay.invoices.set("OtherApp0001", { id: "OtherApp0001", status: "New", metadata: { orderId: "someone-else" } });
+  await relay.check("OtherApp0001", { arrived: true });
+  assert.equal(relay.arrived.size, 0);
+});
+
+test("an overpaid invoice is seen with nothing left, though BTCPay's due goes negative", async () => {
+  const { relay, line, btcpay } = setup();
+  btcpay.invoices.set(INVOICE, { ...btcpay.invoices.get(INVOICE), status: "Processing", additionalStatus: "PaidOver" });
+  btcpay.payments = { "BTC-LN": [], "BTC-CHAIN": [{ id: "pay1", value: "0.00001500", status: "Processing" }] };
+  btcpay.dues["BTC-CHAIN"] = "-0.00000500";
+  await relay.check(INVOICE, { arrived: true });
+  assert.deepEqual(line.sent, [{ type: "seen", invoice: INVOICE, sats: 1500, left: 0 }]);
+
+  // A due BTCPay writes some other way still sends nothing, rather than a guess.
+  const odd = setup();
+  odd.btcpay.invoices.set(INVOICE, { ...odd.btcpay.invoices.get(INVOICE), status: "Processing" });
+  odd.btcpay.payments = { "BTC-LN": [], "BTC-CHAIN": [{ id: "pay1", value: "0.00001000", status: "Processing" }] };
+  odd.btcpay.dues["BTC-CHAIN"] = "-lots";
+  await odd.relay.check(INVOICE, { arrived: true });
+  assert.deepEqual(odd.line.sent, []);
+});
+
+test("a short payment is announced even once confirmed, but a full one that confirmed before the relay looked isn't", async () => {
+  const short = setup();
+  short.btcpay.invoices.set(INVOICE, { ...short.btcpay.invoices.get(INVOICE), status: "New", additionalStatus: "PaidPartial" });
+  short.btcpay.payments = { "BTC-LN": [], "BTC-CHAIN": [{ id: "pay1", value: "0.00000400", status: "Settled" }] };
+  short.btcpay.dues["BTC-CHAIN"] = "0.00000615";
+  await short.relay.check(INVOICE);
+  assert.deepEqual(short.line.sent, [{ type: "seen", invoice: INVOICE, sats: 400, left: 615 }], "so the kiosk learns what's left");
+
+  // Paid in full and already confirmed: the donation itself follows, so there's nothing to see.
+  const full = setup();
+  full.btcpay.invoices.set(INVOICE, { ...full.btcpay.invoices.get(INVOICE), status: "Processing" });
+  full.btcpay.payments = { "BTC-LN": [], "BTC-CHAIN": [{ id: "pay1", value: "0.00001000", status: "Settled" }] };
+  full.btcpay.dues["BTC-CHAIN"] = "0.00000000";
+  await full.relay.check(INVOICE, { arrived: true });
+  assert.deepEqual(full.line.sent, []);
 });
 
 test("a seen payment counts as announced only once the line took it, and a failure leaves counting alone", async () => {

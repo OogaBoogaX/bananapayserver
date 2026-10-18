@@ -115,7 +115,8 @@ restarts or service recovery. Apply all migrations through 0007 before deploying
 rows and totals keep their recorded invoice prices; legacy price freshness is unknown (NULL).
 
 `lightning` is `available`, `limit` (above the configured Lightning threshold), or
-`unavailable`. The last two have `invoice.bolt11: null` and still support `/donations/onchain`.
+`unavailable` (BTCPay couldn't make Lightning in time, for example while LND is down or
+slow). The last two have `invoice.bolt11: null` and still support `/donations/onchain`.
 Amounts above `LIGHTNING_MAX_SATS` are accepted on-chain only, without an application cap.
 The Worker asks the relay for `onchainOnly: true`; the relay also enforces its own threshold.
 Invalid Bitcoin amounts or amounts below the configured minimum still return `amount`.
@@ -170,7 +171,7 @@ missed. After that:
   hasn't yet settled, before the donation itself, which follows once BTCPay settles the
   invoice. `id` is the invoice id the donation will carry, `sats` is everything the invoice
   has received on-chain so far, `due` is the invoice's amount, and `left` is what BTCPay still
-  wants on-chain, `0` once it's paid in full. After a short payment, `left` can be more than
+  wants on-chain, `0` once it's paid in full or overpaid. After a short payment, `left` can be more than
   `due − sats`: a store can add a network fee for a second payment, so `left` is the amount
   to ask the donor for. It names nobody and counts nothing. It's sent once per payment, as it
   happens, and is neither kept nor replayed; after the relay restarts, one may come again,
@@ -271,7 +272,7 @@ From the relay to the object:
 
 | Message | Meaning |
 |---|---|
-| `{ "type": "invoice", "request", "invoice": { "id", "bolt11", "expires" } }` | The invoice; `bolt11: null` for an on-chain-only invoice |
+| `{ "type": "invoice", "request", "invoice": { "id", "bolt11", "expires" } }` | The invoice; `bolt11: null` for an on-chain-only invoice, or when Lightning couldn't be made in time |
 | `{ "type": "invoice", "request", "error" }` | `cap` when the amount is over the relay's own cap, otherwise `unavailable` |
 | `{ "type": "onchain", "request", "address", "sats" }` | The address, and what BTCPay expects on-chain |
 | `{ "type": "onchain", "request", "error": "unavailable" }` | No address |
@@ -301,6 +302,12 @@ What the relay does with it:
 
 - Each invoice is in BTC, carries `metadata.orderId` `bananapayserver`, and has lazy payment
   methods. The relay activates Lightning at once and on-chain only when the donor switches.
+- The relay aims to answer an invoice ask within `INVOICE_DEADLINE_MS` of receiving it, 8
+  seconds when unset, so its answer reaches the Worker inside the Worker's own wait. Lightning
+  gets whatever time making the invoice left. If BTCPay fails to make Lightning, or doesn't
+  make it in time, the invoice goes back with `bolt11: null`, and the donor can still pay
+  on-chain. How long Lightning took, or that it didn't, goes in the relay's log, durations
+  only.
 - A payment counts once BTCPay's API, not the webhook, says the invoice is `Settled` and it
   wasn't marked settled by hand. An invoice paid in full after it expired, `Expired` with
   `PaidLate`, which only an on-chain payment can be, counts too, once every payment on it is
@@ -308,9 +315,12 @@ What the relay does with it:
 - The webhook sends the relay to look at an invoice when it settles and when it receives a
   payment, since a late payment settles nothing.
 - When an invoice of its own is `Processing`, `New` with `PaidPartial`, or `Expired` with
-  `PaidLate`, the relay reads its payments and announces each on-chain payment that isn't yet
-  settled as `seen`. It reads payments only then, so the invoices nobody has paid cost BTCPay
-  nothing more each minute.
+  `PaidLate`, or a webhook says a payment arrived, whatever the invoice's status shows yet,
+  the relay reads its payments and announces each new on-chain payment as `seen`. A short
+  payment is announced even once it has confirmed, so the page learns what's left; a full
+  payment that has already confirmed isn't, since the donation follows. The relay reads
+  payments only then, so the invoices nobody has paid cost BTCPay nothing more each minute.
+  Each `seen` it sends goes in its log, with the amounts and no names.
 - Once a minute, the relay checks every open invoice of its own, which catches any webhook
   that never arrived. After a restart, it finds its invoices from the last day again, every
   page of BTCPay's list, late-paid ones included.

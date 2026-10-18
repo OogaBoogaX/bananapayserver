@@ -6,17 +6,21 @@ import { MAX_SATS as MAX_MONEY } from "../shared/protocol.mjs";
 
 const INVOICE_ID = /^[A-Za-z0-9]{8,64}$/;
 const LOOKBACK_SECONDS = 24 * 60 * 60;
+// How long after an ask the relay aims to answer it. The Worker waits about 10 s in all, and
+// the answer still has to cross Tor.
+export const INVOICE_DEADLINE_MS = 8_000;
 
 export class Relay {
-  constructor({ btcpay, line, config, now = Date.now, log = console.log }) {
+  constructor({ btcpay, line, config, now = Date.now, log = console.log, setTimer = setTimeout, clearTimer = clearTimeout }) {
     if (!Number.isSafeInteger(config.lightningMaxSats) || config.lightningMaxSats < 1 ||
         config.lightningMaxSats > MAX_MONEY || config.lightningMaxSats < config.minSats) {
       throw new Error("missing or invalid settings: LIGHTNING_MAX_SATS");
     }
-    Object.assign(this, { btcpay, line, config, now, log });
+    Object.assign(this, { btcpay, line, config, now, log, setTimer, clearTimer });
     this.open = new Map(); // invoice id → sats: made here, not yet settled or expired
     this.unacked = new Map(); // invoice id → { sats, method }: settled, until the object acknowledges
     this.seenPayments = new Map(); // invoice id → ids of its on-chain payments already announced as seen
+    this.arrived = new Set(); // invoice ids a webhook said received a payment, until they're next checked
     this.checking = new Set();
     this.recheck = new Set(); // invoice ids a webhook asked about while they were being checked
     this.sweeping = false;
@@ -50,17 +54,14 @@ export class Relay {
     const { minSats, lightningMaxSats, invoiceMinutes, methods } = this.config;
     if (!Number.isSafeInteger(sats) || sats < minSats || sats > MAX_MONEY) return this.line.send({ type: "invoice", request, error: "cap" });
     const chainOnly = onchainOnly || sats > lightningMaxSats;
+    const asked = this.now();
     try {
       const created = await this.btcpay.createInvoice({
         sats,
         minutes: invoiceMinutes,
         methods: chainOnly ? [methods.onchain] : [methods.lightning, methods.onchain],
       });
-      let destination = null;
-      if (!chainOnly) {
-        await this.btcpay.activate(created.id, methods.lightning);
-        ({ destination } = await this.paymentMethod(created.id, methods.lightning));
-      }
+      const destination = chainOnly ? null : await this.lightning(created.id, asked);
       this.open.set(created.id, sats);
       this.line.send({
         type: "invoice",
@@ -70,6 +71,36 @@ export class Relay {
     } catch (error) {
       this.log(`invoice: ${error.message}`);
       this.line.send({ type: "invoice", request, error: "unavailable" });
+    }
+  }
+
+  // A new invoice's Lightning code, or null when BTCPay can't make it before the deadline: the
+  // invoice then goes back without it, and the donor can still pay on-chain. The deadline
+  // counts from the ask, so Lightning gets whatever time making the invoice left. How long
+  // Lightning took goes in the log, durations only, so the deadline can be tuned.
+  async lightning(invoiceId, asked) {
+    const { lightning } = this.config.methods;
+    const started = this.now();
+    const make = (async () => {
+      await this.btcpay.activate(invoiceId, lightning);
+      return (await this.paymentMethod(invoiceId, lightning)).destination;
+    })();
+    // A late answer or failure, after the deadline has already decided, changes nothing.
+    make.catch(() => {});
+    let timer;
+    const deadline = new Promise((resolve, reject) => {
+      const left = (this.config.invoiceDeadlineMs ?? INVOICE_DEADLINE_MS) - (started - asked);
+      timer = this.setTimer(() => reject(new Error(`no Lightning within ${this.now() - asked} ms of the ask`)), Math.max(0, left));
+    });
+    try {
+      const destination = await Promise.race([make, deadline]);
+      this.log(`invoice: Lightning in ${this.now() - started} ms, ${this.now() - asked} ms from the ask`);
+      return destination;
+    } catch (error) {
+      this.log(`invoice: ${error.message}; offering on-chain only`);
+      return null;
+    } finally {
+      this.clearTimer(timer);
     }
   }
 
@@ -96,9 +127,11 @@ export class Relay {
 
   // Called for each webhook delivery and by the sweep. BTCPay's API decides, not the delivery. A
   // delivery that arrives while the same invoice is being checked is checked again afterwards:
-  // the check under way may have read the invoice before it settled.
-  async check(invoiceId) {
+  // the check under way may have read the invoice before it settled. `arrived` is a webhook
+  // saying a payment came: its payments are read even if the invoice's status hasn't caught up.
+  async check(invoiceId, { arrived = false } = {}) {
     if (!INVOICE_ID.test(invoiceId)) return;
+    if (arrived) this.arrived.add(invoiceId);
     if (this.checking.has(invoiceId)) return void this.recheck.add(invoiceId);
     this.checking.add(invoiceId);
     try {
@@ -112,6 +145,8 @@ export class Relay {
   }
 
   async checkOnce(invoiceId) {
+    // Taken at once, so a webhook about another app's invoice leaves nothing behind.
+    const arrived = this.arrived.delete(invoiceId);
     try {
       const invoice = await this.btcpay.invoice(invoiceId);
       if (invoice?.metadata?.orderId !== ORDER_ID) {
@@ -121,9 +156,10 @@ export class Relay {
       // Paid in full after it expired, which only an on-chain payment can be. It counts, as the
       // donor gave and the node has it, once BTCPay has settled every payment.
       const late = invoice.status === "Expired" && invoice.additionalStatus === "PaidLate";
-      // A payment that can still settle this invoice has arrived. A failure here leaves the
-      // counting below alone.
-      if (invoice.status === "Processing" || late || (invoice.status === "New" && invoice.additionalStatus === "PaidPartial")) {
+      // A payment that can still settle this invoice has arrived, as its status shows or a
+      // webhook said. A failure here leaves the counting below alone.
+      const unsettled = invoice.status === "New" || invoice.status === "Processing" || late;
+      if (unsettled && (arrived || invoice.status === "Processing" || late || invoice.additionalStatus === "PaidPartial")) {
         await this.seen(invoiceId).catch((error) => this.log(`seen: ${error.message}`));
       }
       if ((invoice.status === "Expired" && !late) || invoice.status === "Invalid") {
@@ -167,25 +203,29 @@ export class Relay {
     }
   }
 
-  // Tells the object about an on-chain payment BTCPay has seen but not yet settled, once per
-  // payment: everything the invoice has received on-chain so far, and what BTCPay still wants
+  // Tells the object about each new on-chain payment on an invoice that isn't settled yet, once
+  // per payment: everything the invoice has received on-chain so far, and what BTCPay still wants
   // on-chain, network fee included, which is more than the difference when the store adds a fee
-  // for a second payment. Lightning payments settle at once and come as the donation. A payment
-  // counts as announced only once the line takes the message; after a restart one may be
-  // announced again, which pages take as harmless.
+  // for a second payment. A short payment is announced even once it has confirmed, so the page
+  // learns what's left; a full one that has already confirmed isn't, as the donation follows.
+  // Lightning payments settle at once and come as the donation. A payment counts as announced
+  // only once the line takes the message; after a restart one may be announced again, which
+  // pages take as harmless.
   async seen(invoiceId) {
     const methods = await this.btcpay.paymentMethods(invoiceId);
     const onchain = methods?.find((m) => (m.paymentMethodId ?? m.paymentMethod) === this.config.methods.onchain);
     const payments = (onchain?.payments ?? []).filter((payment) => payment.status !== "Invalid");
     const announced = this.seenPayments.get(invoiceId) ?? new Set();
-    const fresh = payments.filter((payment) => payment.status === "Processing" && !announced.has(payment.id));
+    const fresh = payments.filter((payment) => !announced.has(payment.id));
     const sats = payments.reduce((sum, payment) => sum + (btcToSats(payment.value) ?? 0), 0);
     // BTCPay's due goes negative once an invoice is overpaid: nothing is left to pay then.
     const left = /^-\d+(\.\d+)?$/.test(String(onchain?.due)) ? 0 : btcToSats(onchain?.due);
-    if (!fresh.length || !sats || left === null) return;
+    const confirming = payments.some((payment) => payment.status === "Processing");
+    if (!fresh.length || !sats || left === null || (left === 0 && !confirming)) return;
     if (!this.line.send({ type: "seen", invoice: invoiceId, sats, left })) return;
     for (const payment of fresh) announced.add(payment.id);
     this.seenPayments.set(invoiceId, announced);
+    this.log(`seen: invoice ${invoiceId}, ${sats} sats received on-chain, ${left} left`);
   }
 
   // Sends every notice the object hasn't acknowledged. Repeats are harmless: the object

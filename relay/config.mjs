@@ -62,6 +62,8 @@ export function readConfig(env) {
     lightningMaxSats,
     ratePerMinute,
     invoiceMinutes: count("INVOICE_MINUTES", 15),
+    // How long after an ask the relay aims to answer, inside the Worker's own wait.
+    invoiceDeadlineMs: count("INVOICE_DEADLINE_MS", 8_000),
     methods: {
       lightning: text("LIGHTNING_METHOD", "BTC-LN"),
       onchain: text("ONCHAIN_METHOD", "BTC-CHAIN"),

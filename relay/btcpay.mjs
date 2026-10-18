@@ -91,7 +91,13 @@ export class BTCPay {
       throw Object.assign(error, { status: response.status });
     }
     const text = await response.text();
-    return text ? JSON.parse(text) : null;
+    if (!text) return null;
+    try {
+      return JSON.parse(text);
+    } catch {
+      // JSON.parse errors can quote the response, including the node's address.
+      throw new Error(`BTCPay returned invalid JSON to ${method} ${path.split("?")[0]}`);
+    }
   }
 }
 

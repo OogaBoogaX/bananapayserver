@@ -42,6 +42,36 @@ test("a donation above Lightning's threshold gets an on-chain invoice, address a
   assert.equal(w.env.DB.db.prepare("SELECT sats FROM donations").get().sats, 1000);
 });
 
+test("when LND can't make Lightning, an ordinary amount is still offered on-chain, end to end", async () => {
+  const w = await world();
+  const socket = await w.connectRelay();
+  const replies = [];
+  const node = new Relay({
+    config: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 50000, invoiceMinutes: 15, ratePerMinute: 10,
+      methods: { lightning: "BTC-LN", onchain: "BTC-CHAIN" } },
+    line: { send: message => { replies.push(w.relaySays(socket, message)); return true; } },
+    btcpay: {
+      createInvoice: async () => ({ id: INVOICE, expirationTime: EXPIRES }),
+      activate: async (id, method) => { if (method === "BTC-LN") throw new Error("BTCPay answered 503: the node is unreachable"); },
+      paymentMethods: async () => [{ paymentMethodId: "BTC-CHAIN", destination: ADDRESS, due: "0.00001000" }],
+    }, now: w.platform.now, log() {},
+  });
+  const quoting = w.post("/donations/invoice", { sats: 1000 });
+  await until(() => socket.sent.length > 0);
+  const command = parseDown(socket.sent.at(-1));
+  assert.equal(command.onchainOnly, undefined, "an ordinary amount, so Lightning is tried");
+  await node.handle(command); await Promise.all(replies);
+  const response = await quoting;
+  assert.equal(response.status, 200, "a quote rather than closed");
+  const quote = await response.json();
+  assert.equal(quote.lightning, "unavailable");
+  assert.equal(quote.invoice.bolt11, null);
+  const switching = w.post("/donations/onchain", { request: quote.request });
+  await until(() => JSON.parse(socket.sent.at(-1)).type === "onchain");
+  await node.handle(parseDown(socket.sent.at(-1))); await Promise.all(replies);
+  assert.deepEqual(await (await switching).json(), { address: ADDRESS, sats: 1000 });
+});
+
 test("the Lightning boundary is inclusive and invalid Bitcoin amounts are still rejected", async () => {
   const w = await world({ LIGHTNING_MAX_SATS: "1000" });
   const relay = await w.connectRelay();
