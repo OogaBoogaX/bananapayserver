@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { BTCPay, btcToSats, ORDER_ID, satsToBtc } from "../relay/btcpay.mjs";
+import { Relay } from "../relay/relay.mjs";
 
 function client(respond = () => new Response("{}")) {
   const requests = [];
@@ -37,7 +38,7 @@ test("an invoice is asked for in BTC, tagged as the relay's, with lazy payment m
 
 test("the other calls use the store-scoped paths", async () => {
   const { btcpay, requests } = client((url) => new Response(String(url).includes("/invoices?") ? "[]" : ""));
-  await btcpay.activate("Inv0ice1234", "BTC-CHAIN");
+  assert.equal(await btcpay.activate("Inv0ice1234", "BTC-CHAIN"), null, "an empty response stays valid");
   await btcpay.paymentMethods("Inv0ice1234");
   await btcpay.invoice("Inv0ice1234");
   await btcpay.recent(1_790_000_000);
@@ -84,6 +85,42 @@ test("errors name the call but never BTCPay's address, and ids are checked befor
   });
   assert.throws(() => btcpay.invoice("../../server/info"), /not a BTCPay id/);
   assert.equal(requests.length, 1);
+});
+
+test("malformed JSON errors name the call without quoting response text or query parameters", async () => {
+  for (const body of ["http://node.invalid", "synthetic-response-secret"]) {
+    const { btcpay } = client(() => new Response(body));
+    for (const [call, path] of [
+      [() => btcpay.invoice("Inv0ice1234"), "/invoices/Inv0ice1234"],
+      [() => btcpay.recent(1_790_000_000), "/invoices"],
+    ]) {
+      await assert.rejects(call(), (error) => {
+        assert.equal(error.message, `BTCPay returned invalid JSON to GET ${path}`);
+        assert.ok(!error.stack.includes(body));
+        assert.equal(error.cause, undefined, "the unsafe parser error is not attached");
+        return true;
+      });
+    }
+  }
+});
+
+test("a malformed Lightning reply falls back to on-chain without its response body reaching the relay log", async () => {
+  const { btcpay } = client((url) => url.pathname.endsWith("/invoices")
+    ? Response.json({ id: "Inv0ice1234", expirationTime: 1_790_000_900 })
+    : new Response("http://node.invalid"));
+  const sent = [], logs = [];
+  const relay = new Relay({
+    btcpay,
+    line: { send: (message) => { sent.push(message); return true; } },
+    config: { minSats: 1, maxSats: 50_000, invoiceMinutes: 15, ratePerMinute: 60, methods: { lightning: "BTC-LN", onchain: "BTC-CHAIN" } },
+    now: () => 1_790_000_000_000,
+    log: (message) => logs.push(message),
+  });
+  await relay.handle({ type: "invoice", request: "1".repeat(32), sats: 1000 });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].invoice.bolt11, null);
+  assert.equal(relay.open.get("Inv0ice1234"), 1000);
+  assert.deepEqual(logs, ["invoice: BTCPay returned invalid JSON to POST /invoices/Inv0ice1234/payment-methods/BTC-LN/activate; offering on-chain only"]);
 });
 
 test("no call follows a redirect off the machine's own network", async () => {
