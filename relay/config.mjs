@@ -1,6 +1,9 @@
 // The relay's settings, read once at start. Anything missing or malformed stops the relay, and
 // the error names the settings, never their values. See docs/configuration.md.
 
+import { MAX_SATS as MAX_MONEY } from "../shared/protocol.mjs";
+import { readLightningMaxSats } from "../shared/config.mjs";
+
 const HOST_PORT = /^([A-Za-z0-9.-]{1,253}):(\d{1,5})$/;
 const TOKEN = /^[A-Za-z0-9_-]{32,128}$/;
 // BTCPay's API keys are hex. Anything with a space or a line break would end up in an error
@@ -19,7 +22,7 @@ export function readConfig(env) {
   const count = (name, fallback) => {
     const value = text(name, fallback === undefined ? undefined : String(fallback));
     if (value === undefined) return undefined;
-    if (!/^[1-9]\d{0,15}$/.test(value)) problems.push(name);
+    if (!/^[1-9]\d{0,15}$/.test(value) || !Number.isSafeInteger(Number(value))) problems.push(name);
     return Number(value);
   };
   const hostPort = (name, fallback) => {
@@ -37,8 +40,10 @@ export function readConfig(env) {
   // machine's address.
   const socks = env.DIRECT === "yes" ? null : hostPort("TOR_SOCKS");
   const minSats = count("MIN_SATS", 1);
-  const maxSats = count("MAX_SATS");
-  if (minSats && maxSats && minSats > maxSats) problems.push("MIN_SATS");
+  const maxSats = MAX_MONEY;
+  const lightningMaxSats = readLightningMaxSats(env);
+  if (!lightningMaxSats) problems.push("LIGHTNING_MAX_SATS");
+  if (minSats && lightningMaxSats && minSats > lightningMaxSats) problems.push("MIN_SATS");
   const ratePerMinute = count("RATE_PER_MINUTE");
 
   const config = {
@@ -54,6 +59,7 @@ export function readConfig(env) {
     listen: hostPort("WEBHOOK_LISTEN", "0.0.0.0:8080"),
     minSats,
     maxSats,
+    lightningMaxSats,
     ratePerMinute,
     invoiceMinutes: count("INVOICE_MINUTES", 15),
     methods: {

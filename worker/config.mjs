@@ -1,8 +1,9 @@
-// The Worker's settings. Every limit comes from the deployment's configuration, never from
-// this repository, and a limit that is missing or malformed closes donations rather than
-// falling back to a default. See docs/configuration.md.
+// The Worker's settings. Deployment limits have no defaults: a missing or malformed limit
+// closes donations. Bitcoin's supply bound is fixed by the protocol. See docs/configuration.md.
 
 import { isNetwork } from "../shared/bolt11.mjs";
+import { readLightningMaxSats } from "../shared/config.mjs";
+import { MAX_SATS as MAX_MONEY } from "../shared/protocol.mjs";
 
 const positiveInt = (value) => {
   if (typeof value !== "string" || !/^[1-9]\d{0,15}$/.test(value.trim())) return null;
@@ -14,8 +15,10 @@ const wholeNumber = (value) => (value?.trim?.() === "0" ? 0 : positiveInt(value)
 
 // The limits, or null when donations must stay closed.
 export function readLimits(env) {
-  const maxSats = positiveInt(env.MAX_SATS);
+  const maxSats = MAX_MONEY;
+  const lightningMaxSats = readLightningMaxSats(env);
   const ratePerIp = positiveInt(env.RATE_PER_IP);
+  const noteRatePerIp = env.NOTE_RATE_PER_IP === undefined ? ratePerIp : positiveInt(env.NOTE_RATE_PER_IP);
   const rateGlobal = positiveInt(env.RATE_GLOBAL);
   const socketsPerIp = positiveInt(env.SOCKETS_PER_IP);
   // How many times the last price a new one may be, or the last divided by, before it's taken
@@ -23,9 +26,10 @@ export function readLimits(env) {
   const priceJumpMax = positiveInt(env.PRICE_JUMP_MAX);
   const onchainFeeAllowance = wholeNumber(env.ONCHAIN_FEE_ALLOWANCE);
   const minSats = env.MIN_SATS === undefined ? 1 : positiveInt(env.MIN_SATS);
-  if (!maxSats || !ratePerIp || !rateGlobal || !socketsPerIp || !minSats || minSats > maxSats) return null;
+  if (!ratePerIp || !noteRatePerIp || !rateGlobal || !socketsPerIp || !minSats) return null;
+  if (!lightningMaxSats || minSats > lightningMaxSats) return null;
   if (!priceJumpMax || priceJumpMax < 2 || onchainFeeAllowance === null) return null;
-  return { minSats, maxSats, ratePerIp, rateGlobal, socketsPerIp, priceJumpMax, onchainFeeAllowance };
+  return { minSats, maxSats, lightningMaxSats, ratePerIp, noteRatePerIp, rateGlobal, socketsPerIp, priceJumpMax, onchainFeeAllowance };
 }
 
 // Settings that are not limits. A missing or unknown network also closes donations.

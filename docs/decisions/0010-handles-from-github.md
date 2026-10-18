@@ -3,6 +3,8 @@
 **Status:** accepted, 2026-10-01. Where sign-in runs is superseded by
 [0014](0014-pages-through-obl.md).
 
+The display-name and leaderboard policy is superseded by [0021](0021-editable-donation-handles.md).
+
 ## Decision
 
 A donation's handle is the donor's GitHub username, proven by signing in with GitHub through

@@ -71,8 +71,11 @@ The machine's operator sets it up, by hand, from `rock` only
      docker exec <BTCPay's container> printenv BTCPAY_SOCKSENDPOINT
      ```
 
-   - **`MAX_SATS` and `RATE_PER_MINUTE`:** the team's production values. `RATE_PER_MINUTE` is at
-     least twice the Worker's `RATE_GLOBAL`.
+   - **`LIGHTNING_MAX_SATS` and `RATE_PER_MINUTE`:** the team's production values. The
+     Lightning threshold does not cap on-chain donations. Existing `.env` files may keep
+     `MAX_SATS`; Compose uses it only when `LIGHTNING_MAX_SATS` is absent. An explicitly
+     empty or invalid `LIGHTNING_MAX_SATS` stops the relay. `RATE_PER_MINUTE` is at least
+     twice the Worker's `RATE_GLOBAL`.
 
 3. **In BTCPay,** signed in as the store's owner:
    - **The store's id,** from the store's settings, as `BTCPAY_STORE_ID`.

@@ -10,7 +10,8 @@ import { ADDRESS, BOLT11, INVOICE, REQUEST } from "./helpers/values.mjs";
 
 const CONFIG = {
   minSats: 1,
-  maxSats: 50_000,
+  maxSats: 2_100_000_000_000_000,
+  lightningMaxSats: 50_000,
   ratePerMinute: 100,
   invoiceMinutes: 15,
   methods: { lightning: "BTC-LN", onchain: "BTC-CHAIN" },
@@ -73,11 +74,42 @@ test("an invoice is made with lazy methods, Lightning activated first", async ()
   assert.equal(relay.open.get(INVOICE), 1000);
 });
 
-test("the relay's own cap holds whatever the Worker allowed", async () => {
+test("the relay independently rejects invalid Bitcoin amounts", async () => {
   const { relay, line, btcpay } = setup();
-  await relay.handle({ type: "invoice", request: REQUEST, sats: 50_001 });
+  await relay.handle({ type: "invoice", request: REQUEST, sats: 2_100_000_000_000_001 });
   assert.deepEqual(line.sent, [{ type: "invoice", request: REQUEST, error: "cap" }]);
   assert.deepEqual(btcpay.calls, []);
+});
+
+test("above the relay's Lightning threshold only the on-chain method is created", async () => {
+  const { relay, line, btcpay } = setup({}, { lightningMaxSats: 999 });
+  await relay.handle({ type: "invoice", request: REQUEST, sats: 1000 });
+  assert.deepEqual(btcpay.calls, [["createInvoice", { sats: 1000, minutes: 15, methods: ["BTC-CHAIN"] }]]);
+  assert.deepEqual(line.sent, [{ type: "invoice", request: REQUEST, invoice: { id: INVOICE, bolt11: null, expires: EXPIRES } }]);
+  await relay.handle({ type: "onchain", request: REQUEST, invoice: INVOICE });
+  assert.deepEqual(line.sent.at(-1), { type: "onchain", request: REQUEST, address: ADDRESS, sats: 1000 });
+  assert.ok(!btcpay.calls.some(c => c[0] === "activate" && c[2] === "BTC-LN"));
+});
+
+test("a larger invoice stays on-chain without using the Bitcoin supply bound as a Lightning threshold", async () => {
+  const { relay, line, btcpay } = setup();
+  await relay.handle({ type: "invoice", request: REQUEST, sats: 1000000 });
+  assert.deepEqual(btcpay.calls, [["createInvoice", { sats: 1000000, minutes: 15, methods: ["BTC-CHAIN"] }]]);
+  assert.equal(line.sent[0].invoice.bolt11, null);
+});
+
+test("a directly constructed relay requires an explicit valid Lightning threshold", () => {
+  for (const lightningMaxSats of [undefined, null, 0, -1, 1.5, "50000", 2_100_000_000_000_001]) {
+    assert.throws(() => setup({}, { lightningMaxSats }), /LIGHTNING_MAX_SATS/);
+  }
+  assert.throws(() => setup({}, { minSats: 1001, lightningMaxSats: 1000 }), /LIGHTNING_MAX_SATS/);
+});
+
+test("a Worker may request on-chain only below the relay's Lightning threshold", async () => {
+  const { relay, line, btcpay } = setup();
+  await relay.handle({ type: "invoice", request: REQUEST, sats: 1000, onchainOnly: true });
+  assert.deepEqual(btcpay.calls, [["createInvoice", { sats: 1000, minutes: 15, methods: ["BTC-CHAIN"] }]]);
+  assert.equal(line.sent[0].invoice.bolt11, null);
 });
 
 test("the relay makes only so many invoices and addresses a minute, whatever the Worker asks", async () => {
@@ -343,6 +375,23 @@ test("an on-chain payment on its way is announced once as seen, with what's rece
   await relay.check(INVOICE);
   assert.deepEqual(line.sent.at(-1), { type: "paid", invoice: INVOICE, sats: 1000, method: "onchain" });
   assert.equal(line.sent.filter((message) => message.type === "seen").length, 2);
+});
+
+test("an overpaid invoice is seen with nothing left, though BTCPay's due goes negative", async () => {
+  const { relay, line, btcpay } = setup();
+  btcpay.invoices.set(INVOICE, { ...btcpay.invoices.get(INVOICE), status: "Processing", additionalStatus: "PaidOver" });
+  btcpay.payments = { "BTC-LN": [], "BTC-CHAIN": [{ id: "pay1", value: "0.00001500", status: "Processing" }] };
+  btcpay.dues["BTC-CHAIN"] = "-0.00000500";
+  await relay.check(INVOICE);
+  assert.deepEqual(line.sent, [{ type: "seen", invoice: INVOICE, sats: 1500, left: 0 }]);
+
+  // A due BTCPay writes some other way still sends nothing, rather than a guess.
+  const odd = setup();
+  odd.btcpay.invoices.set(INVOICE, { ...odd.btcpay.invoices.get(INVOICE), status: "Processing" });
+  odd.btcpay.payments = { "BTC-LN": [], "BTC-CHAIN": [{ id: "pay1", value: "0.00001000", status: "Processing" }] };
+  odd.btcpay.dues["BTC-CHAIN"] = "-lots";
+  await odd.relay.check(INVOICE);
+  assert.deepEqual(odd.line.sent, []);
 });
 
 test("a late on-chain payment is seen too, but Lightning, invoices that aren't the relay's, and unpaid ones never are", async () => {

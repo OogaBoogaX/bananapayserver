@@ -1,7 +1,7 @@
 # Configuration
 
-Every setting the Worker and the relay read. The limits are the caps on amounts and the rate
-limits, and they have no defaults: one that is missing or malformed keeps donations closed on
+Every setting the Worker and the relay read. Configured limits cover the Lightning threshold
+and request rates, and they have no defaults: one that is missing or malformed keeps donations closed on
 the Worker and stops the relay. Limits and secrets are set in each deployment and never
 committed. The few settings with defaults are not limits; their defaults are below.
 
@@ -17,15 +17,17 @@ mainnet for production, so staging refuses mainnet invoices even if its relay is
 the wrong BTCPay.
 
 Set limits and the relay's token hash as secrets, so they stay out of the config files, for
-example `wrangler secret put MAX_SATS --config wrangler.staging.jsonc`. For local development,
+example `wrangler secret put LIGHTNING_MAX_SATS --config wrangler.staging.jsonc`. For local development,
 copy [`.dev.vars.example`](../.dev.vars.example) to `.dev.vars`, which also sets `NETWORK` to
 regtest.
 
 | Setting | Kind | Meaning |
 |---|---|---|
-| `MAX_SATS` | limit, required | The largest donation the Worker accepts, in sats |
+| `MAX_SATS` | legacy alias | Lightning threshold when `LIGHTNING_MAX_SATS` is absent; no longer an on-chain cap |
+| `LIGHTNING_MAX_SATS` | limit, required unless legacy alias is set | Largest Lightning donation, in sats. Above this, donations remain available on-chain. Advertised to kiosks |
 | `MIN_SATS` | optional | The smallest; 1 when unset, the smallest invoice there is |
 | `RATE_PER_IP` | limit, required | Per visitor and per minute: invoice requests and on-chain switches together, and separately each of notes and page sockets. An IPv6 visitor counts by its /64. Counts are kept for the minute under a 16-bit hash of the address, never the address, so a visitor shares theirs with the rare other in the same group |
+| `NOTE_RATE_PER_IP` | optional limit | Separate per-visitor note autosave budget per minute. When absent, uses `RATE_PER_IP`; an explicitly empty or invalid value closes donations. Configure this for the site's typing debounce without raising the invoice or page-socket budget |
 | `SOCKETS_PER_IP` | limit, required | Page sockets one visitor may hold open at once. An IPv6 visitor counts by its /48. Visitors are counted in 65,536 groups by a hash of the address, so a visitor shares the limit with the few others in their group, and no address is ever kept |
 | `PRICE_JUMP_MAX` | limit, required | A whole number, 2 or more. A price more than this many times the last one, or the last divided by it, within a day of it, is taken for a fault at the price service and refused; invoices get the last price, marked stale. Banana counts are kept for good, so a wrong price would stay on the pile and the board |
 | `ONCHAIN_FEE_ALLOWANCE` | limit, required | How many sats more than its invoice the relay may ask a donor to pay on-chain, as room for a network fee the store adds. 0 allows none. Anything more is refused, as a mistake |
@@ -36,6 +38,45 @@ regtest.
 | `PENDING_DAYS` | optional | How long a request is kept while unpaid; 7 when unset |
 | `PILE_START` | optional | Where the global pile starts, in bananas; 1,000 when unset, a placeholder for the team. It applies only when the pile is first made |
 | `PILE_EAT_PER_HOUR` | optional | How many bananas the Oogas eat an hour; 60 when unset, a placeholder for the team |
+
+On-chain donations have no application maximum. Amounts must still be positive whole sats,
+meet `MIN_SATS`, and fit Bitcoin's supply bound (21 million BTC). The advertised `maxSats`
+is that fixed protocol bound, not a configurable donation cap. `LIGHTNING_MAX_SATS` controls
+Lightning only; legacy `MAX_SATS` is its fallback alias. Either setting must be a positive
+safe integer within the Bitcoin amount bound, and `MIN_SATS` must not exceed it. An explicitly
+empty canonical setting is invalid even if the legacy alias is valid. Keep the Worker's Lightning threshold at or
+below the relay's so the kiosk can warn before Continue accurately.
+
+Use this order when upgrading from the old overall-cap protocol, including a relay with
+Lightning-failure fallback:
+
+1. Deploy the compatible site, which understands null BOLT11 invoices and receipt estimates.
+2. Let current invoice requests finish, then stop the relay. Keep its state and the Worker's
+   pending invoices. Once its line closes, new invoice requests immediately report closed.
+3. With the relay stopped, apply all D1 migrations through 0007 and deploy the compatible
+   Worker. Migrations 0005 and 0006 already applied in an environment must not be rewritten.
+   Keep the minimum at or below both Lightning thresholds and the Worker's threshold at or
+   below the relay's. Set the canonical `LIGHTNING_MAX_SATS` in both deployments; the alias
+   remains available for an existing deployment only when the canonical name is absent.
+4. Upgrade and start the matching relay, retaining its state. Verify its authenticated line
+   reconnects and check invoice creation below and above the threshold with synthetic or test
+   funds. The restarted relay reconciles its tagged BTCPay invoices from the last 24 hours;
+   older missed receipts need operator reconciliation with BTCPay. Preserve pending state and
+   keep the rollout within that recovery window; never reset storage to complete an upgrade.
+
+The closed interval is intentional: an old relay drops `onchainOnly`, and an old Worker drops
+null BOLT11 replies, including a new relay's Lightning-failure fallback. Do not run either mixed
+pair or change thresholds as a substitute for this stop/deploy/start sequence. For rollback,
+stop the relay before changing either component and resume only a matching pair. The legacy
+account totals are historical after 0007; rolling back to an account-based leaderboard does
+not make it current. Existing `MAX_SATS` values cease limiting on-chain amounts after upgrade.
+This feature needs two-maintainer review; it changes no credentials and exposes no listener.
+
+Notes already have a separate counter from invoice work. Set `NOTE_RATE_PER_IP` for the site's
+autosave rate (currently a 350 ms typing debounce), including repeated pauses and tabs, without
+raising `RATE_PER_IP`. A 429 leaves the last successfully saved text unchanged. Clients must
+show failed saves and retry/coalesce edits; only a successful save before settlement changes
+the recorded attribution. No server budget can guarantee that an unsaved edit wins a payment.
 
 There are no sign-in or origin settings. Pages reach the Worker only through OBL's Worker,
 which signs donors in and checks origins; see
@@ -67,7 +108,8 @@ them.
 | `BTCPAY_STORE_ID` | required | The one store the key can use |
 | `BTCPAY_API_KEY` | secret | A key that can only create and view invoices on that store |
 | `BTCPAY_WEBHOOK_SECRET` | secret | The webhook's secret, as set in BTCPay |
-| `MAX_SATS` | limit, required | The relay's own cap, in sats, whatever the Worker allows |
+| `MAX_SATS` | legacy alias | Lightning threshold when `LIGHTNING_MAX_SATS` is absent; no longer an on-chain cap |
+| `LIGHTNING_MAX_SATS` | limit, required unless legacy alias is set | The relay's independently enforced Lightning threshold. Above this, create only the on-chain method and never activate Lightning |
 | `RATE_PER_MINUTE` | limit, required | How many invoices and on-chain addresses the relay makes in a minute, whatever the Worker asks. At least the Worker's `RATE_GLOBAL`, so it only ever stops a Worker gone wrong |
 | `MIN_SATS` | optional | 1 when unset |
 | `WEBHOOK_LISTEN` | optional | Where the webhook listener binds inside the container; `0.0.0.0:8080` when unset. Never publish this port, and never run the relay with host networking, where this would listen on the machine itself |

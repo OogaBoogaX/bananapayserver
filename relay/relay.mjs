@@ -2,12 +2,17 @@
 // the object acknowledges it. It runs on the node's machine but never touches LND; BTCPay does.
 
 import { btcToSats, ORDER_ID } from "./btcpay.mjs";
+import { MAX_SATS as MAX_MONEY } from "../shared/protocol.mjs";
 
 const INVOICE_ID = /^[A-Za-z0-9]{8,64}$/;
 const LOOKBACK_SECONDS = 24 * 60 * 60;
 
 export class Relay {
   constructor({ btcpay, line, config, now = Date.now, log = console.log }) {
+    if (!Number.isSafeInteger(config.lightningMaxSats) || config.lightningMaxSats < 1 ||
+        config.lightningMaxSats > MAX_MONEY || config.lightningMaxSats < config.minSats) {
+      throw new Error("missing or invalid settings: LIGHTNING_MAX_SATS");
+    }
     Object.assign(this, { btcpay, line, config, now, log });
     this.open = new Map(); // invoice id → sats: made here, not yet settled or expired
     this.unacked = new Map(); // invoice id → { sats, method }: settled, until the object acknowledges
@@ -40,18 +45,22 @@ export class Relay {
     return this.asked <= this.config.ratePerMinute;
   }
 
-  // The relay checks the amount against its own cap, whatever the Worker allowed.
-  async invoice({ request, sats }) {
-    const { minSats, maxSats, invoiceMinutes, methods } = this.config;
-    if (sats < minSats || sats > maxSats) return this.line.send({ type: "invoice", request, error: "cap" });
+  // Validate Bitcoin amounts independently; the configured threshold applies only to Lightning.
+  async invoice({ request, sats, onchainOnly = false }) {
+    const { minSats, lightningMaxSats, invoiceMinutes, methods } = this.config;
+    if (!Number.isSafeInteger(sats) || sats < minSats || sats > MAX_MONEY) return this.line.send({ type: "invoice", request, error: "cap" });
+    const chainOnly = onchainOnly || sats > lightningMaxSats;
     try {
       const created = await this.btcpay.createInvoice({
         sats,
         minutes: invoiceMinutes,
-        methods: [methods.lightning, methods.onchain],
+        methods: chainOnly ? [methods.onchain] : [methods.lightning, methods.onchain],
       });
-      await this.btcpay.activate(created.id, methods.lightning);
-      const { destination } = await this.paymentMethod(created.id, methods.lightning);
+      let destination = null;
+      if (!chainOnly) {
+        await this.btcpay.activate(created.id, methods.lightning);
+        ({ destination } = await this.paymentMethod(created.id, methods.lightning));
+      }
       this.open.set(created.id, sats);
       this.line.send({
         type: "invoice",
@@ -171,7 +180,8 @@ export class Relay {
     const announced = this.seenPayments.get(invoiceId) ?? new Set();
     const fresh = payments.filter((payment) => payment.status === "Processing" && !announced.has(payment.id));
     const sats = payments.reduce((sum, payment) => sum + (btcToSats(payment.value) ?? 0), 0);
-    const left = btcToSats(onchain?.due);
+    // BTCPay's due goes negative once an invoice is overpaid: nothing is left to pay then.
+    const left = /^-\d+(\.\d+)?$/.test(String(onchain?.due)) ? 0 : btcToSats(onchain?.due);
     if (!fresh.length || !sats || left === null) return;
     if (!this.line.send({ type: "seen", invoice: invoiceId, sats, left })) return;
     for (const payment of fresh) announced.add(payment.id);

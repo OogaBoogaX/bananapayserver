@@ -14,7 +14,7 @@ const RELAY = {
   BTCPAY_STORE_ID: "Store1234",
   BTCPAY_API_KEY: "synthetic-api-key",
   BTCPAY_WEBHOOK_SECRET: "synthetic-webhook-secret",
-  MAX_SATS: "50000",
+  LIGHTNING_MAX_SATS: "50000",
   RATE_PER_MINUTE: "60",
 };
 
@@ -24,14 +24,15 @@ test("the relay reads a complete configuration, with Tor and the defaults", () =
   assert.deepEqual(config.socks, { host: "tor", port: 9050 });
   assert.deepEqual(config.listen, { host: "0.0.0.0", port: 8080 });
   assert.equal(config.minSats, 1);
-  assert.equal(config.maxSats, 50_000);
+  assert.equal(config.maxSats, 2_100_000_000_000_000);
+  assert.equal(config.lightningMaxSats, 50_000);
   assert.equal(config.ratePerMinute, 60);
   assert.equal(config.invoiceMinutes, 15);
   assert.deepEqual(config.methods, { lightning: "BTC-LN", onchain: "BTC-CHAIN" });
 });
 
 test("the relay won't start without its secrets, its limits, or Tor, and never prints them", () => {
-  for (const name of ["RELAY_TOKEN", "TOR_SOCKS", "BTCPAY_API_KEY", "BTCPAY_WEBHOOK_SECRET", "MAX_SATS", "RATE_PER_MINUTE", "WORKER_URL"]) {
+  for (const name of ["RELAY_TOKEN", "TOR_SOCKS", "BTCPAY_API_KEY", "BTCPAY_WEBHOOK_SECRET", "LIGHTNING_MAX_SATS", "RATE_PER_MINUTE", "WORKER_URL"]) {
     assert.throws(() => readConfig({ ...RELAY, [name]: "" }), new RegExp(name), name);
   }
   assert.throws(() => readConfig({ ...RELAY, RELAY_TOKEN: "short" }), (error) => {
@@ -64,19 +65,20 @@ test("the line must be wss, except to this machine", () => {
 });
 
 test("numbers must be whole and in order", () => {
-  for (const [name, value] of [["MAX_SATS", "1e5"], ["MAX_SATS", "0"], ["RATE_PER_MINUTE", "0"], ["RATE_PER_MINUTE", "1.5"], ["MAX_SATS", "-5"], ["MIN_SATS", "60000"], ["INVOICE_MINUTES", "1.5"], ["WEBHOOK_LISTEN", "0.0.0.0:99999"], ["TOR_SOCKS", "tor"]]) {
+  for (const [name, value] of [["LIGHTNING_MAX_SATS", "1e5"], ["LIGHTNING_MAX_SATS", "0"], ["RATE_PER_MINUTE", "0"], ["RATE_PER_MINUTE", "1.5"], ["LIGHTNING_MAX_SATS", "-5"], ["MIN_SATS", "50001"], ["MIN_SATS", "2100000000000001"], ["INVOICE_MINUTES", "1.5"], ["WEBHOOK_LISTEN", "0.0.0.0:99999"], ["TOR_SOCKS", "tor"]]) {
     assert.throws(() => readConfig({ ...RELAY, [name]: value }), new RegExp(name), `${name}=${value}`);
   }
 });
 
 test("the Worker's caps and rate limits have no defaults, and a bad one closes donations", () => {
-  const limits = { MAX_SATS: "100000", RATE_PER_IP: "5", RATE_GLOBAL: "50", SOCKETS_PER_IP: "4", PRICE_JUMP_MAX: "3", ONCHAIN_FEE_ALLOWANCE: "20000" };
+  const limits = { LIGHTNING_MAX_SATS: "100000", RATE_PER_IP: "5", RATE_GLOBAL: "50", SOCKETS_PER_IP: "4", PRICE_JUMP_MAX: "3", ONCHAIN_FEE_ALLOWANCE: "20000" };
   assert.deepEqual(readLimits(limits), {
-    minSats: 1, maxSats: 100_000, ratePerIp: 5, rateGlobal: 50, socketsPerIp: 4, priceJumpMax: 3, onchainFeeAllowance: 20_000,
+    minSats: 1, maxSats: 2_100_000_000_000_000, lightningMaxSats: 100_000, ratePerIp: 5, noteRatePerIp: 5, rateGlobal: 50, socketsPerIp: 4, priceJumpMax: 3, onchainFeeAllowance: 20_000,
   });
   for (const name of Object.keys(limits)) assert.equal(readLimits({ ...limits, [name]: undefined }), null, name);
-  for (const bad of ["0", "-1", "1.5", "lots", " ", "1e3"]) assert.equal(readLimits({ ...limits, MAX_SATS: bad }), null, bad);
+  for (const bad of ["0", "-1", "1.5", "lots", " ", "1e3"]) assert.equal(readLimits({ ...limits, LIGHTNING_MAX_SATS: bad }), null, bad);
   assert.equal(readLimits({ ...limits, MIN_SATS: "100001" }), null);
+  assert.equal(readLimits({ ...limits, MIN_SATS: "2100000000000001" }), null);
   assert.equal(readLimits({ ...limits, PRICE_JUMP_MAX: "1" }), null, "a factor of 1 would refuse every new price");
   assert.equal(readLimits({ ...limits, ONCHAIN_FEE_ALLOWANCE: "0" }).onchainFeeAllowance, 0, "no room for a fee is allowed");
 });
@@ -93,4 +95,44 @@ test("the Worker's other settings", () => {
   const pile = readSettings({ PILE_START: "0", PILE_EAT_PER_HOUR: "0" });
   assert.deepEqual([pile.pileStart, pile.pileEatPerHour], [0, 0], "zero is allowed for the pile");
   assert.equal(readSettings({ PILE_EAT_PER_HOUR: "-3" }).pileEatPerHour, 60);
+});
+
+test("both ends accept legacy MAX_SATS only when the canonical Lightning threshold is absent", () => {
+  const limits = { RATE_PER_IP: "5", RATE_GLOBAL: "50", SOCKETS_PER_IP: "4", PRICE_JUMP_MAX: "3", ONCHAIN_FEE_ALLOWANCE: "20000" };
+  const readers = [
+    (thresholds) => readLimits({ ...limits, ...thresholds }),
+    (thresholds) => readConfig({ ...RELAY, LIGHTNING_MAX_SATS: undefined, ...thresholds }),
+  ];
+  for (const read of readers) {
+    for (const thresholds of [
+      { LIGHTNING_MAX_SATS: "1000" },
+      { MAX_SATS: "1000" },
+      { LIGHTNING_MAX_SATS: "1000", MAX_SATS: "2000" },
+      { LIGHTNING_MAX_SATS: "1000", MAX_SATS: "invalid" },
+    ]) assert.equal(read(thresholds).lightningMaxSats, 1000);
+    assert.equal(read({ LIGHTNING_MAX_SATS: "1000", MIN_SATS: "1000" }).minSats, 1000);
+  }
+  for (const thresholds of [
+    {},
+    ...["", null, "0", "-1", "1e3", "1.5", "2100000000000001", "9007199254740992"].flatMap((bad) => [
+      { LIGHTNING_MAX_SATS: bad, MAX_SATS: "1000" },
+      { MAX_SATS: bad },
+    ]),
+  ]) {
+    assert.equal(readers[0](thresholds), null);
+    assert.throws(() => readers[1](thresholds), { message: "missing or invalid settings: LIGHTNING_MAX_SATS" });
+  }
+  for (const thresholds of [{ LIGHTNING_MAX_SATS: "1000" }, { MAX_SATS: "1000" }]) {
+    assert.equal(readers[0]({ ...thresholds, MIN_SATS: "1001" }), null);
+    assert.throws(() => readers[1]({ ...thresholds, MIN_SATS: "1001" }), /MIN_SATS/);
+  }
+});
+
+test("note saves can have their own per-IP allowance, with invalid configuration closing donations", () => {
+  const limits = { LIGHTNING_MAX_SATS: "1000", RATE_PER_IP: "5", RATE_GLOBAL: "50", SOCKETS_PER_IP: "4", PRICE_JUMP_MAX: "3", ONCHAIN_FEE_ALLOWANCE: "20000" };
+  assert.equal(readLimits(limits).noteRatePerIp, 5);
+  assert.equal(readLimits({ ...limits, NOTE_RATE_PER_IP: "20" }).noteRatePerIp, 20);
+  for (const bad of ["", null, "0", "-1", "1.5", "1e3", "lots", "9007199254740992"]) {
+    assert.equal(readLimits({ ...limits, NOTE_RATE_PER_IP: bad }), null);
+  }
 });

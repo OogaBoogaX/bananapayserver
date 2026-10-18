@@ -5,6 +5,7 @@
 // passes what survives to the Durable Object. It never calls the relay; the relay dials in.
 
 import { MESSAGE_MAX, sanitize } from "../shared/donation.mjs";
+import { cleanHandle } from "../shared/handle.mjs";
 import { readLimits, readSettings } from "./config.mjs";
 import { relayAuthorized } from "./relay-token.mjs";
 
@@ -36,11 +37,11 @@ export const pageApi = (env) => ({
   fetch: (request) => socket(request, env),
 });
 
-// Who gave it comes from OBL's sign-in, never from the request body. A signed-in donor can
-// still give anonymously.
+// Account identity comes from OBL's sign-in; the display handle is editable by any donor.
+// Older clients can still omit it or give anonymously.
 async function invoice(request, env, donor, visitor) {
   if (!isDonor(donor) || !visitor) return reply({ error: "invalid" }, 400);
-  const body = await readBody(request, ["sats", "message", "anon"], ["sats"]);
+  const body = await readBody(request, ["sats", "handle", "message", "anon"], ["sats"]);
   if (body.error) return reply({ error: body.error }, body.status);
   const limits = readLimits(env);
   if (!limits || !readSettings(env).network) return reply({ error: "closed" }, 503);
@@ -48,18 +49,22 @@ async function invoice(request, env, donor, visitor) {
   if (!Number.isSafeInteger(sats) || typeof anon !== "boolean") return reply({ error: "invalid" }, 400);
   if (sats < limits.minSats || sats > limits.maxSats) return reply({ error: "amount" }, 400);
   const message = cleanMessage(body.value);
-  if (message === null) return reply({ error: "invalid" }, 400);
+  if (message === null || Object.hasOwn(body.value, "handle") && typeof body.value.handle !== "string") return reply({ error: "invalid" }, 400);
   const github = anon || donor === null ? null : { id: donor.id, login: donor.login };
-  return toObject(env, "/invoice", { sats, message, github, client: visitor });
+  const handle = Object.hasOwn(body.value, "handle") ? cleanHandle(body.value.handle) : github?.login || "";
+  return toObject(env, "/invoice", { sats, handle, message, github, client: visitor });
 }
 
 async function note(request, env, visitor) {
   if (!visitor) return reply({ error: "invalid" }, 400);
-  const body = await readBody(request, ["request", "message"], ["request"]);
+  const body = await readBody(request, ["request", "handle", "message"], ["request"]);
   if (body.error) return reply({ error: body.error }, body.status);
-  const message = cleanMessage(body.value);
-  if (!isRequest(body.value.request) || message === null) return reply({ error: "invalid" }, 400);
-  return toObject(env, "/note", { request: body.value.request, message, client: visitor });
+  const value = body.value, message = cleanMessage(value), hasHandle = Object.hasOwn(value, "handle");
+  if (!isRequest(value.request) || message === null || hasHandle && typeof value.handle !== "string") return reply({ error: "invalid" }, 400);
+  const details = { request: value.request, client: visitor };
+  if (!hasHandle || Object.hasOwn(value, "message")) details.message = message;
+  if (hasHandle) details.handle = cleanHandle(value.handle);
+  return toObject(env, "/note", details);
 }
 
 async function onchain(request, env, visitor) {

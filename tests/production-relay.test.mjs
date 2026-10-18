@@ -64,7 +64,7 @@ test("token.sh never puts the token in another program's arguments", () => {
       writeFileSync(join(bin, name), wrapper, { mode: 0o755 });
     }
     const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, REAL_PATH: process.env.PATH, ARGV_LOG: log };
-    for (const start of ["WORKER_URL=wss://example.invalid/relay\nRELAY_TOKEN=\nMAX_SATS=1\n", "MAX_SATS=1"]) {
+    for (const start of ["WORKER_URL=wss://example.invalid/relay\nRELAY_TOKEN=\nLIGHTNING_MAX_SATS=1\n", "LIGHTNING_MAX_SATS=1"]) {
       withToken(start, ({ run, env: read }) => {
         const result = run(env);
         assert.equal(result.status, 0, result.stderr);
@@ -72,7 +72,7 @@ test("token.sh never puts the token in another program's arguments", () => {
         assert.match(token, /^[0-9a-f]{64}$/);
         assert.ok(existsSync(log) && readFileSync(log, "utf8").includes("sed "), "the wrappers ran");
         assert.ok(!readFileSync(log, "utf8").includes(token), "no program saw the token in its arguments");
-        assert.match(read(), /^MAX_SATS=1$/m, "the other settings stay as they were");
+        assert.match(read(), /^LIGHTNING_MAX_SATS=1$/m, "the other settings stay as they were");
         assert.equal(read().match(/^RELAY_TOKEN=/gm).length, 1);
       });
     }
@@ -94,6 +94,7 @@ test("the relay publishes no port, runs read-only, and only joins BTCPay's netwo
   assert.match(yaml, /external: true/);
   const example = readFileSync(dir(".env.example"), "utf8");
   for (const name of new Set([...yaml.matchAll(/\$\{([A-Z_]+)/g)].map((m) => m[1]))) {
-    assert.match(example, new RegExp(`^${name}=`, "m"), `.env.example lists ${name}`);
+    const prefix = name === "MAX_SATS" ? "# " : ""; // Only the legacy fallback is commented out.
+    assert.match(example, new RegExp(`^${prefix}${name}=`, "m"), `.env.example lists ${name}`);
   }
 });

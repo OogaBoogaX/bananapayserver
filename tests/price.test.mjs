@@ -40,6 +40,17 @@ test("the REST API's price is used, and the socket isn't opened", async () => {
   assert.deepEqual(s.asked, [PRICE_URL]);
 });
 
+test("receipt lookups prefer the socket and fall back to REST without keeping the socket open", async () => {
+  const live = service({ rest: { price: "120000" }, socket: [priceMessage(90_000)] });
+  assert.deepEqual(await fetchPrice(live, { socketFirst: true }), { cents: 9_000_000, from: "socket" });
+  assert.deepEqual(live.asked, [PRICE_SOCKET]);
+  assert.equal(live.sockets[0].closed, true);
+  const fallback = service({ socket: [] });
+  assert.deepEqual(await fetchPrice(fallback, { socketFirst: true, timeoutMs: 20 }), { cents: 8_462_608, from: "rest" });
+  assert.deepEqual(fallback.asked, [PRICE_SOCKET, PRICE_URL]);
+  assert.equal(fallback.sockets[0].closed, true);
+});
+
 test("when the REST API fails or stays quiet, the socket's first price is used, and the socket is closed at once", async () => {
   const down = service({ rest: null, socket: [priceMessage(70_000), priceMessage(90_000)] });
   assert.deepEqual(await fetchPrice(down), { cents: 7_000_000, from: "socket" });

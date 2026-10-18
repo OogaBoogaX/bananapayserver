@@ -3,7 +3,7 @@
 // against a pinned snapshot of OBL's file; change both together or neither.
 
 export const HANDLE_MAX = 39;
-export const MESSAGE_MAX = 80;
+export const MESSAGE_MAX = 280;
 
 export const sanitize = (text, max) =>
   String(text || "").replace(/[^\w .,!?'@#:-]/g, "").trim().slice(0, max);
