@@ -46,7 +46,7 @@ export function createWebhookServer({ secret, storeId, onPayment }) {
         return;
       }
       if (EVENTS.includes(event?.type) && event.storeId === storeId && typeof event.invoiceId === "string") {
-        onPayment(event.invoiceId);
+        onPayment(event.invoiceId, event.type);
       }
     });
   });

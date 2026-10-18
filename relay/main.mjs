@@ -33,7 +33,8 @@ line.on("up", () => relay.flush());
 const server = createWebhookServer({
   secret: config.webhookSecret,
   storeId: config.btcpay.storeId,
-  onPayment: (invoiceId) => relay.check(invoiceId),
+  // A payment received or settled may come before BTCPay updates the invoice's status.
+  onPayment: (invoiceId, type) => relay.check(invoiceId, { arrived: type !== "InvoiceSettled" }),
 });
 server.listen(config.listen.port, config.listen.host, () => log(`webhook: listening on port ${config.listen.port}`));
 
