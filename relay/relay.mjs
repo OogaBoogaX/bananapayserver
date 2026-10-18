@@ -214,7 +214,8 @@ export class Relay {
     const announced = this.seenPayments.get(invoiceId) ?? new Set();
     const fresh = payments.filter((payment) => !announced.has(payment.id));
     const sats = payments.reduce((sum, payment) => sum + (btcToSats(payment.value) ?? 0), 0);
-    const left = btcToSats(onchain?.due);
+    // BTCPay's due goes negative once an invoice is overpaid: nothing is left to pay then.
+    const left = /^-\d+(\.\d+)?$/.test(String(onchain?.due)) ? 0 : btcToSats(onchain?.due);
     const confirming = payments.some((payment) => payment.status === "Processing");
     if (!fresh.length || !sats || left === null || (left === 0 && !confirming)) return;
     if (!this.line.send({ type: "seen", invoice: invoiceId, sats, left })) return;

@@ -167,7 +167,7 @@ missed. After that:
   hasn't yet settled, before the donation itself, which follows once BTCPay settles the
   invoice. `id` is the invoice id the donation will carry, `sats` is everything the invoice
   has received on-chain so far, `due` is the invoice's amount, and `left` is what BTCPay still
-  wants on-chain, `0` once it's paid in full. After a short payment, `left` can be more than
+  wants on-chain, `0` once it's paid in full or overpaid. After a short payment, `left` can be more than
   `due − sats`: a store can add a network fee for a second payment, so `left` is the amount
   to ask the donor for. It names nobody and counts nothing. It's sent once per payment, as it
   happens, and is neither kept nor replayed; after the relay restarts, one may come again,

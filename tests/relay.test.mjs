@@ -483,6 +483,23 @@ test("a payment the webhook reports is looked at even while BTCPay still shows t
   assert.equal(relay.arrived.size, 0);
 });
 
+test("an overpaid invoice is seen with nothing left, though BTCPay's due goes negative", async () => {
+  const { relay, line, btcpay } = setup();
+  btcpay.invoices.set(INVOICE, { ...btcpay.invoices.get(INVOICE), status: "Processing", additionalStatus: "PaidOver" });
+  btcpay.payments = { "BTC-LN": [], "BTC-CHAIN": [{ id: "pay1", value: "0.00001500", status: "Processing" }] };
+  btcpay.dues["BTC-CHAIN"] = "-0.00000500";
+  await relay.check(INVOICE, { arrived: true });
+  assert.deepEqual(line.sent, [{ type: "seen", invoice: INVOICE, sats: 1500, left: 0 }]);
+
+  // A due BTCPay writes some other way still sends nothing, rather than a guess.
+  const odd = setup();
+  odd.btcpay.invoices.set(INVOICE, { ...odd.btcpay.invoices.get(INVOICE), status: "Processing" });
+  odd.btcpay.payments = { "BTC-LN": [], "BTC-CHAIN": [{ id: "pay1", value: "0.00001000", status: "Processing" }] };
+  odd.btcpay.dues["BTC-CHAIN"] = "-lots";
+  await odd.relay.check(INVOICE, { arrived: true });
+  assert.deepEqual(odd.line.sent, []);
+});
+
 test("a short payment is announced even once confirmed, but a full one that confirmed before the relay looked isn't", async () => {
   const short = setup();
   short.btcpay.invoices.set(INVOICE, { ...short.btcpay.invoices.get(INVOICE), status: "New", additionalStatus: "PaidPartial" });
