@@ -4,7 +4,8 @@
 // they are and where the call came from beside the page's own request. This checks each call and
 // passes what survives to the Durable Object. It never calls the relay; the relay dials in.
 
-import { HANDLE_MAX, MESSAGE_MAX, sanitize } from "../shared/donation.mjs";
+import { MESSAGE_MAX, sanitize } from "../shared/donation.mjs";
+import { cleanHandle } from "../shared/handle.mjs";
 import { readLimits, readSettings } from "./config.mjs";
 import { relayAuthorized } from "./relay-token.mjs";
 
@@ -111,7 +112,6 @@ const isRequest = (value) => typeof value === "string" && REQUEST.test(value);
 
 const visitorOf = (visitor) => (typeof visitor === "string" && visitor.length > 0 ? visitor.slice(0, VISITOR_MAX) : null);
 
-const cleanHandle = (handle) => sanitize(handle, HANDLE_MAX).replace(/^@+/, "").trim() || "anon";
 // The message, cleaned with OBL's rules, or null when it isn't text.
 const cleanMessage = ({ message = "" }) => (typeof message === "string" ? sanitize(message, MESSAGE_MAX) : null);
 

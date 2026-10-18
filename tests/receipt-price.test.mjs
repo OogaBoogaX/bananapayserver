@@ -178,7 +178,7 @@ for (const [schema, settling, priced, method] of [
     }
     assert.equal(await object.paid({ ...paid, method }), "recorded");
     assert.equal(await object.paid({ ...paid, method }), "duplicate");
-    assert.deepEqual(row({ env }), { sats: 1000, ...original, received_at: null, price_stale: 0, pricing: "invoice" });
+    assert.deepEqual(row({ env }), { sats: 1000, ...original, received_at: null, price_stale: null, pricing: "invoice" });
     assert.equal(platform.fetched.length, 0, "legacy settlement never looks up a new price");
   });
 }

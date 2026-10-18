@@ -9,6 +9,10 @@ const LOOKBACK_SECONDS = 24 * 60 * 60;
 
 export class Relay {
   constructor({ btcpay, line, config, now = Date.now, log = console.log }) {
+    if (!Number.isSafeInteger(config.lightningMaxSats) || config.lightningMaxSats < 1 ||
+        config.lightningMaxSats > MAX_MONEY || config.lightningMaxSats < config.minSats) {
+      throw new Error("missing or invalid settings: LIGHTNING_MAX_SATS");
+    }
     Object.assign(this, { btcpay, line, config, now, log });
     this.open = new Map(); // invoice id → sats: made here, not yet settled or expired
     this.unacked = new Map(); // invoice id → { sats, method }: settled, until the object acknowledges
@@ -43,9 +47,9 @@ export class Relay {
 
   // Validate Bitcoin amounts independently; the configured threshold applies only to Lightning.
   async invoice({ request, sats, onchainOnly = false }) {
-    const { minSats, maxSats, invoiceMinutes, methods } = this.config;
+    const { minSats, lightningMaxSats, invoiceMinutes, methods } = this.config;
     if (!Number.isSafeInteger(sats) || sats < minSats || sats > MAX_MONEY) return this.line.send({ type: "invoice", request, error: "cap" });
-    const chainOnly = onchainOnly || sats > (this.config.lightningMaxSats ?? maxSats);
+    const chainOnly = onchainOnly || sats > lightningMaxSats;
     try {
       const created = await this.btcpay.createInvoice({
         sats,
@@ -176,7 +180,8 @@ export class Relay {
     const announced = this.seenPayments.get(invoiceId) ?? new Set();
     const fresh = payments.filter((payment) => payment.status === "Processing" && !announced.has(payment.id));
     const sats = payments.reduce((sum, payment) => sum + (btcToSats(payment.value) ?? 0), 0);
-    const left = btcToSats(onchain?.due);
+    // BTCPay's due goes negative once an invoice is overpaid: nothing is left to pay then.
+    const left = /^-\d+(\.\d+)?$/.test(String(onchain?.due)) ? 0 : btcToSats(onchain?.due);
     if (!fresh.length || !sats || left === null) return;
     if (!this.line.send({ type: "seen", invoice: invoiceId, sats, left })) return;
     for (const payment of fresh) announced.add(payment.id);

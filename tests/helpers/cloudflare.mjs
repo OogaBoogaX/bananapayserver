@@ -181,7 +181,7 @@ export function fakePlatform({ start = Date.UTC(2026, 9, 1, 12), prices = {} } =
 }
 
 export const ENV = {
-  MAX_SATS: "100000",
+  LIGHTNING_MAX_SATS: "100000",
   RATE_PER_IP: "5",
   RATE_GLOBAL: "50",
   SOCKETS_PER_IP: "5",

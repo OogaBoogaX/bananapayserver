@@ -5,7 +5,8 @@
 // acting on it.
 
 import { invoiceMatches } from "../shared/bolt11.mjs";
-import { donationEvent, HANDLE_MAX, MESSAGE_MAX, sanitize } from "../shared/donation.mjs";
+import { donationEvent, MESSAGE_MAX, sanitize } from "../shared/donation.mjs";
+import { cleanHandle } from "../shared/handle.mjs";
 import { parseUp } from "../shared/protocol.mjs";
 import { readLimits, readSettings } from "./config.mjs";
 import { relayAuthorized } from "./relay-token.mjs";
@@ -91,6 +92,12 @@ const MIGRATIONS = [
   ALTER TABLE pending ADD COLUMN price_stale INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE pending ADD COLUMN pricing TEXT NOT NULL DEFAULT 'receipt';
   UPDATE pending SET price_frozen = 1, pricing = 'invoice' WHERE invoice IS NOT NULL;`,
+  // Legacy quotes did not record whether their price was stale. Keep that unknown without
+  // changing any frozen receipt price or its recorded freshness.
+  `ALTER TABLE pending RENAME COLUMN price_stale TO previous_price_stale;
+  ALTER TABLE pending ADD COLUMN price_stale INTEGER;
+  UPDATE pending SET price_stale = CASE WHEN pricing = 'invoice' THEN NULL ELSE previous_price_stale END;
+  ALTER TABLE pending DROP COLUMN previous_price_stale;`,
 ];
 
 export class DonationsObject {
@@ -166,9 +173,10 @@ export class DonationsObject {
     const onchainOnly = sats > limits.lightningMaxSats;
     const command = { type: "invoice", request, sats };
     if (onchainOnly) command.onchainOnly = true;
+    const display = handle === undefined ? github?.login : handle;
     this.sql.exec(
       "INSERT INTO pending (request, sats, handle, message, github_id, created) VALUES (?, ?, ?, ?, ?, ?)",
-      request, sats, sanitize(handle === undefined ? github?.login : handle, HANDLE_MAX), sanitize(message, MESSAGE_MAX), github?.id ?? null, this.platform.now(),
+      request, sats, display ? cleanHandle(display) : "", sanitize(message, MESSAGE_MAX), github?.id ?? null, this.platform.now(),
     );
     // The price is looked up while the relay makes the invoice, so it costs the donor no time.
     const [reply, price] = await Promise.all([
@@ -217,7 +225,7 @@ export class DonationsObject {
     if (!this.allow("note", client, limits)) return busy();
     const updated = this.sql.exec(
       "UPDATE pending SET handle = coalesce(?, handle), message = coalesce(?, message) WHERE request = ? AND settling = 0 RETURNING request",
-      handle === undefined ? null : sanitize(handle, HANDLE_MAX).replace(/^@+/, "").trim() || "anon",
+      handle === undefined ? null : cleanHandle(handle),
       message === undefined ? null : sanitize(message, MESSAGE_MAX), request,
     ).toArray();
     return updated.length ? new Response(null, { status: 204 }) : json({ error: "unknown" }, 404);
@@ -386,7 +394,7 @@ export class DonationsObject {
     if (left === 0) row = await this.freezePrice(invoice);
     if (!row) return;
     const message = { type: "seen", id: invoice, sats, due: row.sats, left };
-    if (row.price_frozen) message.pricing = {
+    if (row.price_frozen && row.pricing === "receipt") message.pricing = {
       receivedAt: row.received_at,
       rate: row.price_cents === null ? null : { ...rateOf(row.price_cents, row.price_at), stale: !!row.price_stale },
       bananas: bananasOf(row.milli),
@@ -402,9 +410,13 @@ export class DonationsObject {
     if (this.receiving.has(invoice)) return this.receiving.get(invoice);
     this.sql.exec("UPDATE pending SET received_at = coalesce(received_at, ?) WHERE invoice = ?", this.platform.now(), invoice);
     const pending = (async () => {
-      // A quote lookup begun before receipt must not decide the receipt's price.
-      if (this.refreshing) await this.refreshing;
-      const price = await this.price(true);
+      // Receipts neither join a quote nor inherit its retry delay. Each invoice must try
+      // its own lookup before freezing a fallback; quotes remain free to use fast REST.
+      const limits = readLimits(this.env);
+      if (!limits) throw new Error("receipt pricing requires valid limits");
+      const fresh = await this.lookupPrice(limits, true);
+      const last = this.sql.exec("SELECT cents, at FROM price").toArray()[0];
+      const price = fresh ?? (last ? { ...last, stale: true } : null);
       this.sql.exec(
         "UPDATE pending SET price_cents = ?, price_at = ?, milli = ?, price_stale = ?, price_frozen = 1 WHERE invoice = ? AND price_frozen = 0",
         price?.cents ?? null, price?.at ?? null, price ? milliBananas(row.sats, price.cents) : null,
@@ -492,8 +504,8 @@ export class DonationsObject {
   // answer, the last price it gave, marked stale so the page can say so. With no price at all,
   // a donation still goes through; it just has no bananas until someone works them out from
   // its sats.
-  async price(socketFirst = false) {
-    const fresh = await this.refreshPrice({ socketFirst });
+  async price() {
+    const fresh = await this.refreshPrice();
     const last = this.sql.exec("SELECT cents, at FROM price").toArray()[0];
     return last ? { cents: last.cents, at: last.at, stale: !fresh } : null;
   }
@@ -504,45 +516,50 @@ export class DonationsObject {
   // last divided by it, within a day of it, is taken for a fault at the service rather than the
   // market: banana counts are kept for good, so a wrong price would stay on the pile and the
   // board. With a limit missing, donations are closed and nothing says which price to believe.
-  refreshPrice({ socketFirst = false } = {}) {
+  refreshPrice() {
     if (this.refreshing) return this.refreshing;
     const limits = readLimits(this.env);
     if (!limits) return Promise.resolve(false);
     const [failed] = this.sql.exec("SELECT value FROM meta WHERE key = 'price_failed'").toArray();
     if (failed && this.platform.now() - failed.value < PRICE_RETRY_MS) return Promise.resolve(false);
-    this.refreshing = fetchPrice(this.platform, { socketFirst })
-      .then((price) => {
-        const [last] = this.sql.exec("SELECT cents, at FROM price").toArray();
-        const jumped = price && last && this.platform.now() - last.at < DAY &&
-          (price.cents > last.cents * limits.priceJumpMax || price.cents * limits.priceJumpMax < last.cents);
-        if (price === null || jumped) {
-          const now = this.platform.now();
-          this.sql.exec(
-            "INSERT INTO meta (key, value) VALUES ('price_failed', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-            now,
-          );
-          this.sql.exec("UPDATE price SET failed = ? WHERE id = 1", now);
-          const fallback = last ? `the last price, from ${new Date(last.at).toISOString()}, marked stale` : "no price";
-          const why = jumped
-            ? `gave $${price.cents / 100}, too far from the last price, $${last.cents / 100}`
-            : "answered neither by REST nor by socket";
-          console.error(`price: 2140data's service ${why}; invoices get ${fallback}`);
-          return false;
-        }
-        if (price.from === "socket" && !socketFirst) console.warn("price: 2140data's REST API didn't answer; its socket did");
-        if (price.from === "rest" && socketFirst) console.warn("price: 2140data's socket didn't answer; its REST API did");
-        this.sql.exec("DELETE FROM meta WHERE key = 'price_failed'");
-        this.sql.exec(
-          "INSERT INTO price (id, cents, at, failed) VALUES (1, ?, ?, NULL) " +
-          "ON CONFLICT (id) DO UPDATE SET cents = excluded.cents, at = excluded.at, failed = NULL",
-          price.cents, this.platform.now(),
-        );
-        return true;
-      })
+    this.refreshing = this.lookupPrice(limits).then(Boolean)
       .finally(() => {
         this.refreshing = null;
       });
     return this.refreshing;
+  }
+
+  // Quotes and receipts use the same jump guard and cache, but never wait on each other.
+  // Return this lookup's accepted snapshot, so a concurrent quote cannot replace a receipt.
+  async lookupPrice(limits, socketFirst = false) {
+    const price = await fetchPrice(this.platform, { socketFirst });
+    const [last] = this.sql.exec("SELECT cents, at FROM price").toArray();
+    const jumped = price && last && this.platform.now() - last.at < DAY &&
+      (price.cents > last.cents * limits.priceJumpMax || price.cents * limits.priceJumpMax < last.cents);
+    if (price === null || jumped) {
+      const now = this.platform.now();
+      this.sql.exec(
+        "INSERT INTO meta (key, value) VALUES ('price_failed', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        now,
+      );
+      this.sql.exec("UPDATE price SET failed = ? WHERE id = 1", now);
+      const fallback = last ? `the last price, from ${new Date(last.at).toISOString()}, marked stale` : "no price";
+      const why = jumped
+        ? `gave $${price.cents / 100}, too far from the last price, $${last.cents / 100}`
+        : "answered neither by REST nor by socket";
+      console.error(`price: 2140data's service ${why}; invoices get ${fallback}`);
+      return null;
+    }
+    if (price.from === "socket" && !socketFirst) console.warn("price: 2140data's REST API didn't answer; its socket did");
+    if (price.from === "rest" && socketFirst) console.warn("price: 2140data's socket didn't answer; its REST API did");
+    this.sql.exec("DELETE FROM meta WHERE key = 'price_failed'");
+    const at = this.platform.now();
+    this.sql.exec(
+      "INSERT INTO price (id, cents, at, failed) VALUES (1, ?, ?, NULL) " +
+      "ON CONFLICT (id) DO UPDATE SET cents = excluded.cents, at = excluded.at, failed = NULL",
+      price.cents, at,
+    );
+    return { cents: price.cents, at, stale: false };
   }
 
   // The board's figures from D1, kept up to date there with each donation recorded: every
@@ -732,7 +749,7 @@ export class DonationsObject {
   // so they hold when the object sleeps, under the visitor's group rather than their address,
   // and go when the minute ends. A visitor shares a count only with the rare other in their
   // group.
-  allow(kind, visitor, { ratePerIp, rateGlobal }) {
+  allow(kind, visitor, { ratePerIp, noteRatePerIp, rateGlobal }) {
     const minute = Math.floor(this.platform.now() / 60_000);
     if (this.minute !== minute) {
       this.minute = minute;
@@ -744,7 +761,8 @@ export class DonationsObject {
       key, minute,
     );
     const key = `${kind} ${visitorGroup(visitor, 64)}`;
-    if (counted(key) >= ratePerIp || (kind === "work" && counted("total") >= rateGlobal)) return false;
+    const limit = kind === "note" ? noteRatePerIp : ratePerIp;
+    if (counted(key) >= limit || (kind === "work" && counted("total") >= rateGlobal)) return false;
     add(key);
     if (kind === "work") add("total");
     return true;

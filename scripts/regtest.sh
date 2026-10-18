@@ -139,13 +139,13 @@ BTCPAY_URL=http://localhost:14142
 BTCPAY_STORE_ID=$store
 BTCPAY_API_KEY=$relay_key
 BTCPAY_WEBHOOK_SECRET=$webhook_secret
-MAX_SATS=100000
+LIGHTNING_MAX_SATS=100000
 RATE_PER_MINUTE=120
 WEBHOOK_LISTEN=127.0.0.1:8080
 EOF
   cat >"$ROOT/.dev.vars" <<EOF
 # Written by scripts/regtest.sh for the local regtest stack. Never commit this file.
-MAX_SATS=100000
+LIGHTNING_MAX_SATS=100000
 RATE_PER_IP=20
 RATE_GLOBAL=120
 SOCKETS_PER_IP=20

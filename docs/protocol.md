@@ -106,11 +106,13 @@ The server independently samples 2140data's socket, then REST on failure, and ke
 jump guard and last-price fallback. It never trusts a price from the page.
 
 `rate.at` is the server's price observation time in milliseconds; `rate.stale` identifies a
-fallback. D1 stores `received_at` separately from `price_at`, along with `price_cents`,
+fallback. It does not measure delivery delay: a relay outage before the first notice means
+sampling on reconnect, without reconstructing the price at BTCPay's payment timestamp.
+D1 stores backend detection time as `received_at` separately from `price_at`, along with `price_cents`,
 `price_stale`, `pricing` and `milli`. A missing price freezes a null price and zero credited
 bananas, without blocking payment. Once stored, a receipt is never repriced by retries,
-restarts or service recovery. Apply `0006_receipt_pricing.sql` before deploying. Historical
-rows and totals keep their recorded invoice prices.
+restarts or service recovery. Apply all migrations through 0007 before deploying. Historical
+rows and totals keep their recorded invoice prices; legacy price freshness is unknown (NULL).
 
 `lightning` is `available`, `limit` (above the configured Lightning threshold), or
 `unavailable`. The last two have `invoice.bolt11: null` and still support `/donations/onchain`.
@@ -129,7 +131,9 @@ Updates optional `handle` and/or `message` before settlement starts. Omitted fie
 preserved; legacy calls with neither clear the message. Text uses the same sanitization as
 invoice creation. The invoice, its payment code/address, sats, expiry, rate and authenticated
 account identity stay fixed. Answers 204, or 404 once settlement has started or the request
-is unknown. Nothing edits an already recorded donation.
+is unknown, or 429 if the note autosave budget is exhausted. A failed save leaves the last
+saved text unchanged; the client must show the failure and retry before settlement. Nothing
+edits an already recorded donation.
 
 ### `POST /donations/onchain`
 

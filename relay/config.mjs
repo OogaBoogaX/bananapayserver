@@ -2,6 +2,7 @@
 // the error names the settings, never their values. See docs/configuration.md.
 
 import { MAX_SATS as MAX_MONEY } from "../shared/protocol.mjs";
+import { readLightningMaxSats } from "../shared/config.mjs";
 
 const HOST_PORT = /^([A-Za-z0-9.-]{1,253}):(\d{1,5})$/;
 const TOKEN = /^[A-Za-z0-9_-]{32,128}$/;
@@ -40,9 +41,9 @@ export function readConfig(env) {
   const socks = env.DIRECT === "yes" ? null : hostPort("TOR_SOCKS");
   const minSats = count("MIN_SATS", 1);
   const maxSats = MAX_MONEY;
-  const lightningMaxSats = env.LIGHTNING_MAX_SATS === undefined ? count("MAX_SATS") : count("LIGHTNING_MAX_SATS");
-  if (lightningMaxSats > maxSats) problems.push("LIGHTNING_MAX_SATS");
-  if (minSats && maxSats && minSats > maxSats) problems.push("MIN_SATS");
+  const lightningMaxSats = readLightningMaxSats(env);
+  if (!lightningMaxSats) problems.push("LIGHTNING_MAX_SATS");
+  if (minSats && lightningMaxSats && minSats > lightningMaxSats) problems.push("MIN_SATS");
   const ratePerMinute = count("RATE_PER_MINUTE");
 
   const config = {

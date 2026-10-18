@@ -17,8 +17,11 @@ overall cap; it does not remove request rate limits, fee checks or amount valida
 
 ## Consequences
 
-Upgrade the compatible site first and coordinate Worker and relay upgrades. Old relays still
-apply their old cap and reject `onchainOnly` requests. After both are upgraded, existing
+Upgrade the compatible site first, stop the relay, apply the D1 migrations and deploy the
+Worker, then upgrade and restart the matching relay with its state preserved. Follow the
+ordered rollout in [configuration.md](../configuration.md); neither mixed-version pairing is
+safe, including a new relay's Lightning-failure fallback against an old Worker. Old relays
+still apply their old cap and reject `onchainOnly` requests. After both are upgraded, existing
 `MAX_SATS` settings retain the Lightning threshold but no longer cap on-chain donations.
 Prefer explicit `LIGHTNING_MAX_SATS` for new configuration. This changes payment policy and
 requires two-maintainer review including the code owner. No deployment, credential, listener

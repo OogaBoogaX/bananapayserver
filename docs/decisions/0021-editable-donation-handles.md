@@ -30,4 +30,5 @@ account ownership and sign-in still rely exclusively on the authenticated bindin
 The relay sees neither handle nor message. Handle changes keep the same invoice under
 [0022](0022-edit-details-in-place.md). Migration 0005 backfills the public name totals from
 existing donation records, preserving all amounts; legacy unnamed donations stay outside the
-rankings. The old account totals remain stored.
+rankings. The old account totals remain stored. Migration 0007 stops their old update trigger:
+typed display names must never replace authenticated account logins in that historical table.
