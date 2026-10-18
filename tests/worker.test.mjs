@@ -118,7 +118,7 @@ test("the relay's own cap reaches the page as an amount error", async () => {
 });
 
 test("a missing or inconsistent limit closes donations", async () => {
-  for (const overrides of [{ MAX_SATS: undefined }, { RATE_PER_IP: "" }, { MIN_SATS: "2100000000000001" }, { NETWORK: undefined }]) {
+  for (const overrides of [{ LIGHTNING_MAX_SATS: undefined }, { RATE_PER_IP: "" }, { MIN_SATS: "100001" }, { MIN_SATS: "2100000000000001" }, { NETWORK: undefined }]) {
     const w = await world(overrides);
     await w.connectRelay();
     const response = await w.post("/donations/invoice", { sats: 50 });

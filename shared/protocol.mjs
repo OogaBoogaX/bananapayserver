@@ -24,11 +24,12 @@ const isInvoice = (v) =>
   isTime(v.expires);
 
 // Down: from the Durable Object to the relay.
-const DOWN = {
-  invoice: { request: isRequest, sats: isSats },
-  onchain: { request: isRequest, invoice: isInvoiceId },
-  ack: { invoice: isInvoiceId, result: isOneOf(["recorded", "duplicate", "unknown", "rejected"]) },
-};
+const DOWN = [
+  ["invoice", { request: isRequest, sats: isSats }],
+  ["invoice", { request: isRequest, sats: isSats, onchainOnly: (v) => v === true }],
+  ["onchain", { request: isRequest, invoice: isInvoiceId }],
+  ["ack", { invoice: isInvoiceId, result: isOneOf(["recorded", "duplicate", "unknown", "rejected"]) }],
+];
 
 // Up: from the relay to the Durable Object. A reply carries either its result or an error.
 const UP = [
@@ -63,10 +64,8 @@ function parse(text) {
 
 export function parseDown(text) {
   const message = parse(text);
-  if (!message || typeof message.type !== "string" || !Object.hasOwn(DOWN, message.type)) return null;
-  if (message.type === "invoice" && message.onchainOnly === true &&
-      hasKeys(message, ["type", "request", "sats", "onchainOnly"]) && isRequest(message.request) && isSats(message.sats)) return message;
-  return matches(message, message.type, DOWN[message.type]) ? message : null;
+  if (!message) return null;
+  return DOWN.some(([type, fields]) => matches(message, type, fields)) ? message : null;
 }
 
 export function parseUp(text) {

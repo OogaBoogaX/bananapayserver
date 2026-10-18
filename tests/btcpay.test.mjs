@@ -112,7 +112,7 @@ test("a malformed Lightning reply falls back to on-chain without its response bo
   const relay = new Relay({
     btcpay,
     line: { send: (message) => { sent.push(message); return true; } },
-    config: { minSats: 1, maxSats: 50_000, invoiceMinutes: 15, ratePerMinute: 60, methods: { lightning: "BTC-LN", onchain: "BTC-CHAIN" } },
+    config: { minSats: 1, lightningMaxSats: 50_000, invoiceMinutes: 15, ratePerMinute: 60, methods: { lightning: "BTC-LN", onchain: "BTC-CHAIN" } },
     now: () => 1_790_000_000_000,
     log: (message) => logs.push(message),
   });

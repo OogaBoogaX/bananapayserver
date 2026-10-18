@@ -12,6 +12,10 @@ export const INVOICE_DEADLINE_MS = 8_000;
 
 export class Relay {
   constructor({ btcpay, line, config, now = Date.now, log = console.log, setTimer = setTimeout, clearTimer = clearTimeout }) {
+    if (!Number.isSafeInteger(config.lightningMaxSats) || config.lightningMaxSats < 1 ||
+        config.lightningMaxSats > MAX_MONEY || config.lightningMaxSats < config.minSats) {
+      throw new Error("missing or invalid settings: LIGHTNING_MAX_SATS");
+    }
     Object.assign(this, { btcpay, line, config, now, log, setTimer, clearTimer });
     this.open = new Map(); // invoice id → sats: made here, not yet settled or expired
     this.unacked = new Map(); // invoice id → { sats, method }: settled, until the object acknowledges
@@ -47,9 +51,9 @@ export class Relay {
 
   // Validate Bitcoin amounts independently; the configured threshold applies only to Lightning.
   async invoice({ request, sats, onchainOnly = false }) {
-    const { minSats, maxSats, invoiceMinutes, methods } = this.config;
+    const { minSats, lightningMaxSats, invoiceMinutes, methods } = this.config;
     if (!Number.isSafeInteger(sats) || sats < minSats || sats > MAX_MONEY) return this.line.send({ type: "invoice", request, error: "cap" });
-    const chainOnly = onchainOnly || sats > (this.config.lightningMaxSats ?? maxSats);
+    const chainOnly = onchainOnly || sats > lightningMaxSats;
     const asked = this.now();
     try {
       const created = await this.btcpay.createInvoice({

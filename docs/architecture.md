@@ -75,7 +75,7 @@ Nothing in that table can spend from a node, and nothing in it can reach one.
 ## Donors don't wait
 
 **The time from picking an amount to seeing the QR is what the invoice path optimizes.** A
-donor at the cave shouldn't be left waiting, for the QR or for the thanks after paying.
+donor at the cave shouldn't wait on unrelated work, for the QR or for the thanks after paying.
 Several choices in the design are there for it:
 
 - The relay's line is open before anyone asks, so no request waits for a connection.
@@ -84,13 +84,19 @@ Several choices in the design are there for it:
 - The page can ask for an invoice as soon as the donor picks an amount; the message follows
   before the QR shows.
 - Bitcoin's price is looked up while the relay makes the invoice, so pricing the bananas adds
-  no wait unless the price service is slower than the relay.
+  no wait unless the quote service is slower than the relay. Quotes never join receipt lookups.
 - BTCPay makes the Lightning invoice first, and an on-chain address only if the donor
   switches.
 - The object holds the page's request open and answers it as soon as the invoice arrives.
 - If the relay isn't connected, the page hears at once that donations are closed. If the relay
   doesn't answer in time, the wait ends there.
 - BTCPay's webhook and the object's pushes show a payment as it settles, not at the next poll.
+  A receipt-priced donation first freezes its own price: socket then REST, each bounded by
+  the price source timeout (currently two seconds). Slow sources can therefore add up to four
+  seconds of source waits before the thanks and acknowledgement, plus storage/runtime work.
+  This is deliberate: the final donation, pile and rankings must agree on one durable value
+  before the relay can discard its notice. It never waits for another donor's quote. An
+  already-priced full on-chain detection or legacy invoice adds no settlement lookup.
 
 **Speed never buys a way in.** Nothing opens on a node to make an invoice faster, and no part
 holds a node credential to skip a step. The relay's line over Tor is where speed and privacy
