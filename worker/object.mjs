@@ -119,7 +119,6 @@ export class DonationsObject {
     this.boardAsked = 0;
     this.boardShown = 0;
     this.recentEntries = null;
-    this.recentBar = null;
     this.recentLoading = null;
     this.tallyFigures = null;
     this.tallyAsked = 0;
@@ -287,7 +286,7 @@ export class DonationsObject {
       server.send(JSON.stringify(tally));
       if (this.sentRate() === null) this.markRateSent(tally.rate);
     }
-    const recent = await this.recent(limits);
+    const recent = await this.recent();
     if (recent) server.send(JSON.stringify(recent));
     const after = url.searchParams.get("after");
     if (after && INVOICE_ID.test(after)) await this.replay(server, after);
@@ -313,20 +312,16 @@ export class DonationsObject {
     }
   }
 
-  // The latest eligible donations, cached across page connects. A payment refreshes the list;
-  // concurrent connects share one read, and changing the bar invalidates the cached threshold.
-  async recent(limits, { refresh = false } = {}) {
+  // The latest donations, every amount, cached across page connects. A payment refreshes the
+  // list, and concurrent connects share one read.
+  async recent({ refresh = false } = {}) {
     if (this.recentLoading) await this.recentLoading;
-    if (this.recentBar !== limits.messageMinSats) {
-      this.recentBar = limits.messageMinSats;
-      this.recentEntries = null;
-    }
     if (refresh || !this.recentEntries) {
       const loading = (async () => {
         try {
           const { results } = await this.env.DB.prepare(
-            "SELECT seq, id, sats, handle, message, at, milli, verified FROM donations WHERE sats >= ? ORDER BY seq DESC LIMIT ?",
-          ).bind(limits.messageMinSats, RECENT_SIZE).all();
+            "SELECT seq, id, sats, handle, message, at, milli, verified FROM donations ORDER BY seq DESC LIMIT ?",
+          ).bind(RECENT_SIZE).all();
           this.recentEntries = results.map(recentEntry);
         } catch (error) {
           this.recentEntries = null;
@@ -425,7 +420,7 @@ export class DonationsObject {
     if (pile !== false) {
       this.broadcast(donationMessage(recorded));
       if (pile) this.broadcast(pile);
-      if (recorded.sats >= limits.messageMinSats) await this.recent(limits, { refresh: true });
+      await this.recent({ refresh: true });
       if (row.handle) {
         const board = await this.board({ refresh: true });
         if (board) this.broadcast(board);

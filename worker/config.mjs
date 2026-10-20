@@ -27,8 +27,8 @@ export function readLimits(env) {
   const onchainFeeAllowance = wholeNumber(env.ONCHAIN_FEE_ALLOWANCE);
   const requestedMinSats = env.MIN_SATS === undefined ? 69 : positiveInt(env.MIN_SATS);
   const minSats = requestedMinSats !== null && requestedMinSats >= 69 ? requestedMinSats : null;
-  // The fewest sats a donation needs to carry a message, and to be listed among the recent ones,
-  // so a run of tiny donations can neither speak nor flood the list; 0 lets every donation carry one.
+  // The fewest sats a donation needs to carry a message, so a run of tiny donations cannot speak;
+  // 0 lets every donation carry one. The recent list shows every amount.
   const messageMinSats = env.MESSAGE_MIN_SATS === undefined ? 1_000 : wholeNumber(env.MESSAGE_MIN_SATS);
   if (!ratePerIp || !noteRatePerIp || !rateGlobal || !socketsPerIp || !minSats || messageMinSats === null) return null;
   if (!lightningMaxSats || minSats > lightningMaxSats) return null;

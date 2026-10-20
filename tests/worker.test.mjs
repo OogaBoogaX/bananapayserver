@@ -332,7 +332,7 @@ test("if recording fails, the payment isn't acknowledged and stays pending", asy
   assert.equal(JSON.parse(relay.sent.at(-1)).result, "recorded");
 });
 
-test("a message rides only a donation of at least the message bar, and only those are listed among the recent", async () => {
+test("a message rides only a donation of at least the message bar, and the recent list shows every amount", async () => {
   const w = await world(), relay = await w.connectRelay(), page = await w.connectPage();
   const refused = await w.post("/donations/invoice", { sats: 69, handle: "quietest", message: "not yet" });
   assert.equal(refused.status, 400, "a message under the bar is refused before the relay sees it");
@@ -364,7 +364,7 @@ test("a message rides only a donation of at least the message bar, and only thos
   const donations = page.messages().filter((m) => m.type === "donation");
   assert.deepEqual(donations.map((m) => [m.donation.sats, m.donation.message]), [[69, ""], [999, ""], [1000, "big enough"]]);
   const joined = await w.connectPage();
-  assert.deepEqual(joined.messages().find((m) => m.type === "recent").entries.map((e) => e.id), [INVOICE], "the small one is not listed");
+  assert.deepEqual(joined.messages().find((m) => m.type === "recent").entries.map((e) => [e.sats, e.message]), [[1000, "big enough"], [999, ""], [69, ""]], "every amount is listed, the small ones without a message");
 });
 
 test("a frozen receipt waits for valid limits instead of losing its message", async () => {
@@ -403,12 +403,12 @@ test("a page that reconnects gets what it missed, and no more than the cap", asy
   assert.equal(invalid.status, 400);
 });
 
-test("recent donations are read once across page connects and refreshed when payment or policy changes", async () => {
+test("recent donations are read once across page connects and refreshed by a payment", async () => {
   const w = await world(), relay = await w.connectRelay();
   const prepare = w.env.DB.prepare;
   let reads = 0;
   w.env.DB.prepare = (query) => {
-    if (query.includes("FROM donations WHERE sats >= ?")) reads++;
+    if (query.includes("FROM donations ORDER BY seq DESC")) reads++;
     return prepare.call(w.env.DB, query);
   };
   const pages = await Promise.all([w.connectPage(undefined, "visitor-a"), w.connectPage(undefined, "visitor-b")]);
@@ -420,10 +420,11 @@ test("recent donations are read once across page connects and refreshed when pay
   const next = await w.connectPage(undefined, "visitor-c");
   assert.equal(reads, 2, "the next page uses the cached result");
   assert.deepEqual(next.messages().find((m) => m.type === "recent").entries.map((entry) => entry.id), [INVOICE]);
-  w.env.MESSAGE_MIN_SATS = "2000";
-  const raised = await w.connectPage(undefined, "visitor-d");
-  assert.equal(reads, 3, "a new bar reloads the eligible rows");
-  assert.deepEqual(raised.messages().find((m) => m.type === "recent").entries, []);
+  await w.invoice(relay, { sats: 69, handle: "tiny" }, () => ({ id: "Tiny00001", bolt11: bolt11For(69), expires: EXPIRES }));
+  await w.relaySays(relay, { type: "paid", invoice: "Tiny00001", sats: 69, method: "lightning" });
+  const after = await w.connectPage(undefined, "visitor-d");
+  assert.equal(reads, 3, "a tiny payment refreshes the cache too");
+  assert.deepEqual(after.messages().find((m) => m.type === "recent").entries.map((entry) => entry.id), ["Tiny00001", INVOICE], "and is listed");
   w.env.DB.prepare = prepare;
 });
 

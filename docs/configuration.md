@@ -28,7 +28,7 @@ regtest.
 | `MAX_SATS` | legacy alias | Lightning threshold when `LIGHTNING_MAX_SATS` is absent; no longer an on-chain cap |
 | `LIGHTNING_MAX_SATS` | limit, required unless legacy alias is set | Largest Lightning donation, in sats. Above this, donations remain available on-chain. Advertised to kiosks |
 | `MIN_SATS` | optional | The smallest; 69 when unset. Values below 69 are invalid and close donations |
-| `MESSAGE_MIN_SATS` | optional | The fewest sats a donation needs to carry a message, and to be listed among the recent ones; 1,000 when unset, 0 lets every donation carry one. Advertised to kiosks as `messageMinSats` |
+| `MESSAGE_MIN_SATS` | optional | The fewest sats a donation needs to carry a message; the recent list shows every amount. 1,000 when unset, 0 lets every donation carry one. Advertised to kiosks as `messageMinSats` |
 | `RATE_PER_IP` | limit, required | Per visitor and per minute: invoice requests and on-chain switches together, and separately each of notes and page sockets. An IPv6 visitor counts by its /64. Counts are kept for the minute under a 16-bit hash of the address, never the address, so a visitor shares theirs with the rare other in the same group |
 | `NOTE_RATE_PER_IP` | optional limit | Separate per-visitor note autosave budget per minute. When absent, uses `RATE_PER_IP`; an explicitly empty or invalid value closes donations. Configure this for the site's typing debounce without raising the invoice or page-socket budget |
 | `SOCKETS_PER_IP` | limit, required | Page sockets one visitor may hold open at once. An IPv6 visitor counts by its /48. Visitors are counted in 65,536 groups by a hash of the address, so a visitor shares the limit with the few others in their group, and no address is ever kept |

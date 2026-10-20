@@ -176,8 +176,8 @@ missed. After that:
   closes, so the page can say donations are closed before anyone tries. `network` is the
   network this deployment takes payments on, so a page can label test donations. It also has
   `limits: { minSats, maxSats, lightningMaxSats, messageMinSats }`, the public payment policy. `messageMinSats` is the fewest sats a donation
-  needs to carry a message, and to be listed among the recent ones: new nonempty messages below it are refused at creation and by
-  `note`, and settlement strips one held by an older pending invoice, so tiny donations can neither speak nor flood the list. `maxSats` is the fixed Bitcoin supply bound, not an application
+  needs to carry a message: new nonempty messages below it are refused at creation and by
+  `note`, and settlement strips one held by an older pending invoice, so tiny donations cannot speak. `maxSats` is the fixed Bitcoin supply bound, not an application
   cap. Kiosks warn about on-chain-only amounts before Continue and validate Bitcoin amounts. Legacy
   clients may ignore these extra fields.
 - `{ "type": "donation", "donation": { "id", "sats", "handle", "message", "at" }, "bananas": { "exact", "rounded" }, "seq": 12, "verified": true }`
@@ -191,8 +191,8 @@ missed. After that:
 - A signed-in donor's login is the one OBL stored at sign-in. After a GitHub rename,
   the new login cannot earn a check until they sign in to OBL again.
 - `{ "type": "recent", "entries": [{ "seq": 12, "id": "invoice id", "sats": 1000, "handle": "ooga-dev", "message": "for the cave", "at": 1790000000000, "bananas": 1, "verified": true }] }`
-  after the tally when a page connects, with up to ten newest donations of at least
-  `messageMinSats` in descending `seq` order. `bananas` is each donation's recorded exact amount, zero when it had no price. Old
+  after the tally when a page connects, with up to ten newest donations of any amount in
+  descending `seq` order. `bananas` is each donation's recorded exact amount, zero when it had no price. Old
   donations without recorded GitHub login matches have `verified: false`. On reconnect, the
   usual `after` replay follows this snapshot; the page deduplicates matching invoice ids.
   Recent entries are compact list rows with a numeric banana amount; live and replayed
