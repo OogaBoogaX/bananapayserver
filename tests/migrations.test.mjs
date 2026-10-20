@@ -28,6 +28,8 @@ test("D1 retires account totals and corrects unknown legacy freshness without ch
 
     db.exec(migration("0007_legacy_metadata.sql"));
     assert.deepEqual(donations(), before.map(row => ({ ...row, price_stale: row.pricing === "invoice" ? null : row.price_stale })));
+    db.exec(migration("0008_verified_donations.sql"));
+    assert.ok(donations().every(row => row.verified === 0), "old GitHub IDs alone do not prove their displayed names");
     insert.run("TypedHandle", "someone-else", 4242, 9_000_000, 1000, 100, 900, 1000, 0, "receipt");
     insert.run("NewAccount", "typed-team", 4343, 9_000_000, 1000, 100, 900, 1000, 0, "receipt");
     insert.run("TypedHandle", "someone-else", 4242, 9_000_000, 1000, 100, 900, 1000, 0, "receipt");
@@ -80,10 +82,10 @@ test("schema 6 upgrade preserves all frozen snapshots through restart, detection
   const ctx = schemaSix(), sql = ctx.storage.sql, platform = fakePlatform();
   const env = { ...ENV, DB: fakeD1() };
   const pending = () => rows(sql.exec("SELECT * FROM pending ORDER BY invoice").toArray());
-  const expected = pending().map(row => ({ ...row, price_stale: row.pricing === "invoice" ? null : row.price_stale }));
+  const expected = pending().map(row => ({ ...row, price_stale: row.pricing === "invoice" ? null : row.price_stale, github_login: null }));
   new DonationsObject(ctx, env, platform);
   assert.deepEqual(pending(), expected);
-  assert.equal(sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 7);
+  assert.equal(sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 8);
   assert.equal(sql.exec("PRAGMA table_info(pending)").toArray().find(column => column.name === "price_stale").notnull, 0);
   const object = new DonationsObject(ctx, env, platform);
   assert.deepEqual(pending(), expected, "restart does not repeat or alter the migration");
@@ -119,6 +121,6 @@ test("a failed schema 7 upgrade rolls back its column changes and can be retried
   assert.deepEqual(rows(sql.exec("SELECT * FROM pending ORDER BY invoice").toArray()), before);
   sql.exec = exec;
   new DonationsObject(ctx, env, platform);
-  assert.equal(sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 7);
-  assert.deepEqual(rows(sql.exec("SELECT * FROM pending ORDER BY invoice").toArray()), before.map(row => ({ ...row, price_stale: row.pricing === "invoice" ? null : row.price_stale })));
+  assert.equal(sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 8);
+  assert.deepEqual(rows(sql.exec("SELECT * FROM pending ORDER BY invoice").toArray()), before.map(row => ({ ...row, price_stale: row.pricing === "invoice" ? null : row.price_stale, github_login: null })));
 });

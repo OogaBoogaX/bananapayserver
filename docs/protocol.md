@@ -111,7 +111,7 @@ sampling on reconnect, without reconstructing the price at BTCPay's payment time
 D1 stores backend detection time as `received_at` separately from `price_at`, along with `price_cents`,
 `price_stale`, `pricing` and `milli`. A missing price freezes a null price and zero credited
 bananas, without blocking payment. Once stored, a receipt is never repriced by retries,
-restarts or service recovery. Apply all migrations through 0007 before deploying. Historical
+restarts or service recovery. Apply all migrations through 0008 before deploying. Historical
 rows and totals keep their recorded invoice prices; legacy price freshness is unknown (NULL).
 
 `lightning` is `available`, `limit` (above the configured Lightning threshold), or
@@ -163,10 +163,19 @@ missed. After that:
   `limits: { minSats, maxSats, lightningMaxSats }`, the public payment policy. `maxSats` is the fixed Bitcoin supply bound, not an application
   cap. Kiosks warn about on-chain-only amounts before Continue and validate Bitcoin amounts. Legacy
   clients may ignore these extra fields.
-- `{ "type": "donation", "donation": { "id", "sats", "handle", "message", "at" }, "bananas": { "exact", "rounded" } }`
+- `{ "type": "donation", "donation": { "id", "sats", "handle", "message", "at" }, "bananas": { "exact", "rounded" }, "seq": 12, "verified": true }`
   for each payment. `donation` is OBL's contract exactly, with the invoice id as `id`, the
   chosen display handle (or `""` from an older anonymous client), and `at` in milliseconds.
   Handles run to 39 characters and messages to 280. The donor's page recognizes its own invoice id.
+  `seq` is the D1 donation order. `verified` is true only when the donor was signed in with
+  GitHub and the final display handle matched that account's login, ignoring case. Changing
+  the handle before payment can remove the match. A typed matching name without sign-in
+  never earns it.
+- `{ "type": "recent", "entries": [{ "seq": 12, "id": "invoice id", "sats": 1000, "handle": "ooga-dev", "message": "for the cave", "at": 1790000000000, "bananas": 1, "verified": true }] }`
+  after the tally when a page connects, with up to ten newest donations in descending `seq`
+  order. `bananas` is each donation's recorded exact amount, zero when it had no price. Old
+  donations without recorded GitHub login matches have `verified: false`. On reconnect, the
+  usual `after` replay follows this snapshot; the page deduplicates matching invoice ids.
 - `{ "type": "seen", "id", "sats", "due", "left" }` when BTCPay sees an on-chain payment it
   hasn't yet settled, before the donation itself, which follows once BTCPay settles the
   invoice. `id` is the invoice id the donation will carry, `sats` is everything the invoice

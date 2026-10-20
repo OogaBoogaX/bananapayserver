@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DonationsObject, PAGE_SOCKETS_MAX, REPLAY_MAX, visitorGroup, visitorKey } from "../worker/object.mjs";
+import { DonationsObject, PAGE_SOCKETS_MAX, RECENT_SIZE, REPLAY_MAX, visitorGroup, visitorKey } from "../worker/object.mjs";
 import { until } from "./helpers/cloudflare.mjs";
 import { ADDRESS, BOLT11, INVOICE, bolt11For } from "./helpers/values.mjs";
 import { call, donor, EXPIRES, TOKEN, upgrade, world } from "./helpers/world.mjs";
@@ -41,7 +41,7 @@ test("a payment is recorded once, acknowledged, and pushed to every page", async
   assert.deepEqual(JSON.parse(relay.sent.at(-1)), { type: "ack", invoice: INVOICE, result: "recorded" });
   const donation = { id: INVOICE, sats: 1000, handle: "", message: "bforb the cave", at: w.platform.now() };
   for (const page of pages) {
-    assert.deepEqual(page.messages().filter((m) => m.type === "donation"), [{ type: "donation", donation, bananas: { exact: 1, rounded: 1 } }]);
+    assert.deepEqual(page.messages().filter((m) => m.type === "donation"), [{ type: "donation", donation, bananas: { exact: 1, rounded: 1 }, seq: 1, verified: false }]);
   }
   assert.deepEqual(w.env.DB.db.prepare("SELECT id, sats, handle, message, at FROM donations").all().map((row) => ({ ...row })), [donation]);
   assert.equal(w.env.DB.db.prepare("SELECT method FROM donations").get().method, "lightning", "how it was paid is recorded too");
@@ -67,6 +67,7 @@ test("the request can update display details on the same invoice before settleme
   const [{ donation }] = page.messages().filter((m) => m.type === "donation");
   assert.equal(donation.handle, "someone-else");
   assert.equal(donation.message, "ihii");
+  assert.equal(page.messages().find((m) => m.type === "donation").verified, false, "changing the name removes the GitHub match");
   assert.equal((await w.post("/donations/note", { request: asked.request, message: "too late" })).status, 404);
   const unknown = await w.post("/donations/note", { request: "f".repeat(32), message: "x" });
   assert.equal(unknown.status, 404);
@@ -338,11 +339,32 @@ test("a page that reconnects gets what it missed, and no more than the cap", asy
   const replayed = page.messages().filter((m) => m.type === "donation").map((m) => m.donation.id);
   assert.equal(replayed.length, REPLAY_MAX);
   assert.equal(replayed[0], "Donation0003");
+  const recent = page.messages().find((m) => m.type === "recent").entries;
+  assert.equal(recent.length, RECENT_SIZE);
+  assert.deepEqual(recent.map((entry) => entry.id), Array.from({ length: RECENT_SIZE }, (_, i) => `Donation${String(REPLAY_MAX + 5 - i).padStart(4, "0")}`));
+  assert.ok(recent.every((entry) => entry.verified === false && entry.bananas === 0));
   const fresh = await w.connectPage("UnknownId1");
   assert.deepEqual(fresh.messages().filter((m) => m.type === "donation"), []);
   assert.deepEqual(fresh.messages()[0], { type: "status", open: false, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000 } });
   const invalid = await w.page.fetch(upgrade("/donations/socket?after=../x", { "X-Client": "visitor-p" }));
   assert.equal(invalid.status, 400);
+});
+
+test("a recent donation gets a GitHub check only for the signed-in donor's matching final name", async () => {
+  const w = await world(), relay = await w.connectRelay(), page = await w.connectPage();
+  await w.invoice(relay, { sats: 1000, handle: "Ooga-Dev", message: "for the cave" }, undefined, { donor: donor("ooga-dev", 42) });
+  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+  const live = page.messages().find((m) => m.type === "donation");
+  assert.equal(live.verified, true);
+  assert.equal(live.donation.handle, "Ooga-Dev");
+  const joined = await w.connectPage();
+  assert.deepEqual(joined.messages().find((m) => m.type === "recent").entries, [{
+    seq: 1, id: INVOICE, sats: 1000, handle: "Ooga-Dev", message: "for the cave", at: w.platform.now(), bananas: 1, verified: true,
+  }]);
+  const guest = await world(), guestRelay = await guest.connectRelay(), guestPage = await guest.connectPage();
+  await guest.invoice(guestRelay, { sats: 1000, handle: "ooga-dev" });
+  await guest.relaySays(guestRelay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+  assert.equal(guestPage.messages().find((m) => m.type === "donation").verified, false, "a matching typed name is not proof of sign-in");
 });
 
 test("a donor who switches gets an on-chain address for the same invoice", async () => {

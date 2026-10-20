@@ -18,6 +18,9 @@ export const REPLAY_MAX = 50;
 // How many donation handles each leaderboard shows.
 export const BOARD_SIZE = 20;
 
+// The newest donations sent to a page when it joins.
+export const RECENT_SIZE = 10;
+
 // After the price service fails to answer, how long invoices use the last price before the
 // object asks it again, so no donor waits on a service that's down.
 export const PRICE_RETRY_MS = 60_000;
@@ -98,6 +101,7 @@ const MIGRATIONS = [
   ALTER TABLE pending ADD COLUMN price_stale INTEGER;
   UPDATE pending SET price_stale = CASE WHEN pricing = 'invoice' THEN NULL ELSE previous_price_stale END;
   ALTER TABLE pending DROP COLUMN previous_price_stale;`,
+  `ALTER TABLE pending ADD COLUMN github_login TEXT;`,
 ];
 
 export class DonationsObject {
@@ -175,8 +179,8 @@ export class DonationsObject {
     if (onchainOnly) command.onchainOnly = true;
     const display = handle === undefined ? github?.login : handle;
     this.sql.exec(
-      "INSERT INTO pending (request, sats, handle, message, github_id, created) VALUES (?, ?, ?, ?, ?, ?)",
-      request, sats, display ? cleanHandle(display) : "", sanitize(message, MESSAGE_MAX), github?.id ?? null, this.platform.now(),
+      "INSERT INTO pending (request, sats, handle, message, github_id, github_login, created) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      request, sats, display ? cleanHandle(display) : "", sanitize(message, MESSAGE_MAX), github?.id ?? null, github?.login ?? null, this.platform.now(),
     );
     // The price is looked up while the relay makes the invoice, so it costs the donor no time.
     const [reply, price] = await Promise.all([
@@ -272,6 +276,8 @@ export class DonationsObject {
       server.send(JSON.stringify(tally));
       if (this.sentRate() === null) this.markRateSent(tally.rate);
     }
+    const recent = await this.recent();
+    if (recent) server.send(JSON.stringify(recent));
     const after = url.searchParams.get("after");
     if (after && INVOICE_ID.test(after)) await this.replay(server, after);
     // A page never waits for a price. One older than five minutes is refreshed once the page
@@ -287,12 +293,26 @@ export class DonationsObject {
   async replay(ws, after) {
     try {
       const { results } = await this.env.DB.prepare(
-        "SELECT id, sats, handle, message, at, milli FROM donations " +
+        "SELECT seq, id, sats, handle, message, at, milli, verified FROM donations " +
         "WHERE seq > (SELECT seq FROM donations WHERE id = ?) ORDER BY seq LIMIT ?",
       ).bind(after, REPLAY_MAX).all();
       for (const row of results) ws.send(JSON.stringify(donationMessage(row)));
     } catch (error) {
       console.error("replay failed:", error.message);
+    }
+  }
+
+  // Every new page sees the latest recorded donations, including their messages and the
+  // account-name match fixed when each invoice settled. Older records have no such proof.
+  async recent() {
+    try {
+      const { results } = await this.env.DB.prepare(
+        "SELECT seq, id, sats, handle, message, at, milli, verified FROM donations ORDER BY seq DESC LIMIT ?",
+      ).bind(RECENT_SIZE).all();
+      return { type: "recent", entries: results.map(recentEntry) };
+    } catch (error) {
+      console.error("reading recent donations failed:", error.message);
+      return null;
     }
   }
 
@@ -359,17 +379,18 @@ export class DonationsObject {
       const known = await this.env.DB.prepare("SELECT 1 FROM donations WHERE id = ?").bind(invoice).first();
       return known ? "duplicate" : "unknown";
     }
+    const verified = row.github_id !== null && row.github_login && row.handle.toLowerCase() === row.github_login.toLowerCase() ? 1 : 0;
     const inserted = await this.env.DB.prepare(
-      "INSERT INTO donations (id, sats, handle, message, at, method, github_id, price_cents, price_at, banana_cents, milli, received_at, price_stale, pricing) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
-      "ON CONFLICT (id) DO NOTHING RETURNING id, sats, handle, message, at, milli",
+      "INSERT INTO donations (id, sats, handle, message, at, method, github_id, price_cents, price_at, banana_cents, milli, received_at, price_stale, pricing, verified) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+      "ON CONFLICT (id) DO NOTHING RETURNING seq, id, sats, handle, message, at, milli, verified",
     ).bind(
       invoice, sats, row.handle, row.message, this.platform.now(), method, row.github_id,
       row.price_cents, row.price_at, row.price_cents === null ? null : BANANA_CENTS, row.milli,
-      row.received_at, row.price_stale, row.pricing,
+      row.received_at, row.price_stale, row.pricing, verified,
     ).first();
     const recorded = inserted ?? await this.env.DB.prepare(
-      "SELECT id, sats, handle, message, at, milli FROM donations WHERE id = ?",
+      "SELECT seq, id, sats, handle, message, at, milli, verified FROM donations WHERE id = ?",
     ).bind(invoice).first();
     if (!recorded) throw new Error("a donation that was neither inserted nor found");
     const pile = this.finish(recorded);
@@ -811,5 +832,8 @@ const busy = () => json({ error: "busy" }, 429);
 // tally goes out again only when this changes.
 const rateKey = (rate) => (rate ? `${rate.usdPerBtc} ${rate.stale}` : "none");
 
-// OBL's donation event, unchanged, with what it counted for in bananas alongside.
-const donationMessage = (row) => ({ type: "donation", donation: donationEvent(row), bananas: bananasOf(row.milli ?? null) });
+// OBL's donation event stays unchanged; sequence and account-name proof belong to its envelope.
+const donationMessage = (row) => ({ type: "donation", donation: donationEvent(row), bananas: bananasOf(row.milli ?? null),
+  seq: row.seq, verified: row.verified === 1 });
+const recentEntry = (row) => ({ ...donationEvent(row), bananas: bananasOf(row.milli ?? null)?.exact ?? 0,
+  seq: row.seq, verified: row.verified === 1 });
