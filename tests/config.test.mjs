@@ -68,8 +68,8 @@ test("numbers must be whole and in order", () => {
   for (const [name, value] of [["LIGHTNING_MAX_SATS", "1e5"], ["LIGHTNING_MAX_SATS", "0"], ["RATE_PER_MINUTE", "0"], ["RATE_PER_MINUTE", "1.5"], ["LIGHTNING_MAX_SATS", "-5"], ["MIN_SATS", "50001"], ["MIN_SATS", "2100000000000001"], ["INVOICE_MINUTES", "1.5"], ["WEBHOOK_LISTEN", "0.0.0.0:99999"], ["TOR_SOCKS", "tor"]]) {
     assert.throws(() => readConfig({ ...RELAY, [name]: value }), new RegExp(name), `${name}=${value}`);
   }
-  assert.throws(() => readConfig({ ...RELAY, MIN_SATS: "1" }), /MIN_SATS/);
-  assert.throws(() => readConfig({ ...RELAY, MIN_SATS: "10", LIGHTNING_MAX_SATS: "50" }), { message: "missing or invalid settings: MIN_SATS" });
+  assert.equal(readConfig({ ...RELAY, MIN_SATS: "1" }).minSats, 1);
+  assert.equal(readConfig({ ...RELAY, MIN_SATS: "10", LIGHTNING_MAX_SATS: "50" }).minSats, 10);
 });
 
 test("the Worker's caps and rate limits have no defaults, and a bad one closes donations", () => {
@@ -83,8 +83,8 @@ test("the Worker's caps and rate limits have no defaults, and a bad one closes d
   for (const name of Object.keys(limits)) assert.equal(readLimits({ ...limits, [name]: undefined }), null, name);
   for (const bad of ["0", "-1", "1.5", "lots", " ", "1e3"]) assert.equal(readLimits({ ...limits, LIGHTNING_MAX_SATS: bad }), null, bad);
   assert.equal(readLimits({ ...limits, MIN_SATS: "100001" }), null);
-  assert.equal(readLimits({ ...limits, MIN_SATS: "1" }), null);
-  assert.equal(readLimits({ ...limits, MIN_SATS: "10", LIGHTNING_MAX_SATS: "50" }), null);
+  assert.equal(readLimits({ ...limits, MIN_SATS: "1" }).minSats, 1);
+  assert.equal(readLimits({ ...limits, MIN_SATS: "10", LIGHTNING_MAX_SATS: "50" }).minSats, 10);
   assert.equal(readLimits({ ...limits, MIN_SATS: "2100000000000001" }), null);
   assert.equal(readLimits({ ...limits, PRICE_JUMP_MAX: "1" }), null, "a factor of 1 would refuse every new price");
   assert.equal(readLimits({ ...limits, ONCHAIN_FEE_ALLOWANCE: "0" }).onchainFeeAllowance, 0, "no room for a fee is allowed");

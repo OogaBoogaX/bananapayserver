@@ -40,7 +40,6 @@ export function readConfig(env) {
   // machine's address.
   const socks = env.DIRECT === "yes" ? null : hostPort("TOR_SOCKS");
   const minSats = count("MIN_SATS", 69);
-  if (minSats && minSats < 69) problems.push("MIN_SATS");
   const maxSats = MAX_MONEY;
   const lightningMaxSats = readLightningMaxSats(env);
   if (!lightningMaxSats) problems.push("LIGHTNING_MAX_SATS");
