@@ -334,15 +334,27 @@ test("if recording fails, the payment isn't acknowledged and stays pending", asy
 
 test("a message rides only a donation of at least the message bar, and only those are listed among the recent", async () => {
   const w = await world(), relay = await w.connectRelay(), page = await w.connectPage();
-  const minimum = await w.invoice(relay, { sats: 69, handle: "quietest", message: "not yet" }, () => ({ id: "Minimum69", bolt11: bolt11For(69), expires: EXPIRES }));
+  const refused = await w.post("/donations/invoice", { sats: 69, handle: "quietest", message: "not yet" });
+  assert.equal(refused.status, 400, "a message under the bar is refused before the relay sees it");
+  assert.deepEqual(await refused.json(), { error: "message" });
+  assert.equal(relay.sent.length, 0);
+  const bypass = await w.object.invoice({ sats: 69, handle: "quietest", message: "not yet", client: "visitor-a" });
+  assert.equal(bypass.status, 400, "the object enforces the bar even without the front door");
+  assert.deepEqual(await bypass.json(), { error: "message" });
+  const minimum = await w.invoice(relay, { sats: 69, handle: "quietest" }, () => ({ id: "Minimum69", bolt11: bolt11For(69), expires: EXPIRES }));
   assert.equal(minimum.response.status, 200, "69 sats is accepted");
   assert.equal(w.ctx.storage.sql.exec("SELECT message FROM pending WHERE request = ?", minimum.asked.request).one().message, "");
   await w.relaySays(relay, { type: "paid", invoice: "Minimum69", sats: 69, method: "lightning" });
-  const small = await w.invoice(relay, { sats: 999, handle: "quiet", message: "too small to say" }, () => ({ id: "Small0001", bolt11: bolt11For(999), expires: EXPIRES }));
+  const small = await w.invoice(relay, { sats: 999, handle: "quiet" }, () => ({ id: "Small0001", bolt11: bolt11For(999), expires: EXPIRES }));
   const stored = () => w.ctx.storage.sql.exec("SELECT message FROM pending WHERE request = ?", small.asked.request).one().message;
-  assert.equal(stored(), "", "the message is dropped at creation");
-  assert.equal((await w.post("/donations/note", { request: small.asked.request, message: "still too small" })).status, 204);
-  assert.equal(stored(), "", "and a note cannot add one");
+  assert.equal(stored(), "");
+  const refusedNote = await w.post("/donations/note", { request: small.asked.request, message: "still too small", handle: "Changed" });
+  assert.equal(refusedNote.status, 400);
+  assert.deepEqual(await refusedNote.json(), { error: "message" });
+  assert.equal(stored(), "", "a refused note changes nothing");
+  assert.equal(w.ctx.storage.sql.exec("SELECT handle FROM pending WHERE request = ?", small.asked.request).one().handle, "quiet");
+  const bypassNote = w.object.note({ request: small.asked.request, message: "still too small", client: "visitor-a" });
+  assert.equal(bypassNote.status, 400, "the object also refuses a bypassed note");
   w.ctx.storage.sql.exec("UPDATE pending SET message = ? WHERE request = ?", "saved before the bar", small.asked.request);
   assert.equal(stored(), "saved before the bar", "a pending invoice from before the bar can still hold a message");
   await w.relaySays(relay, { type: "paid", invoice: "Small0001", sats: 999, method: "lightning" });
@@ -353,6 +365,23 @@ test("a message rides only a donation of at least the message bar, and only thos
   assert.deepEqual(donations.map((m) => [m.donation.sats, m.donation.message]), [[69, ""], [999, ""], [1000, "big enough"]]);
   const joined = await w.connectPage();
   assert.deepEqual(joined.messages().find((m) => m.type === "recent").entries.map((e) => e.id), [INVOICE], "the small one is not listed");
+});
+
+test("a frozen receipt waits for valid limits instead of losing its message", async () => {
+  const w = await world(), relay = await w.connectRelay(), page = await w.connectPage();
+  const { asked } = await w.invoice(relay, { sats: 1000, message: "keep this" });
+  await w.relaySays(relay, { type: "seen", invoice: INVOICE, sats: 1000, left: 0 });
+  assert.equal(w.ctx.storage.sql.exec("SELECT price_frozen FROM pending WHERE request = ?", asked.request).one().price_frozen, 1);
+  w.env.MESSAGE_MIN_SATS = "invalid";
+  const before = relay.sent.length;
+  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+  assert.equal(relay.sent.length, before, "no acknowledgement while limits are invalid");
+  assert.equal(w.env.DB.db.prepare("SELECT COUNT(*) AS count FROM donations").get().count, 0);
+  assert.equal(w.ctx.storage.sql.exec("SELECT message FROM pending WHERE request = ?", asked.request).one().message, "keep this");
+  w.env.MESSAGE_MIN_SATS = "1000";
+  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+  assert.equal(JSON.parse(relay.sent.at(-1)).result, "recorded");
+  assert.equal(page.messages().find((m) => m.type === "donation").donation.message, "keep this");
 });
 
 test("a page that reconnects gets what it missed, and no more than the cap", async () => {
@@ -374,9 +403,35 @@ test("a page that reconnects gets what it missed, and no more than the cap", asy
   assert.equal(invalid.status, 400);
 });
 
+test("recent donations are read once across page connects and refreshed when payment or policy changes", async () => {
+  const w = await world(), relay = await w.connectRelay();
+  const prepare = w.env.DB.prepare;
+  let reads = 0;
+  w.env.DB.prepare = (query) => {
+    if (query.includes("FROM donations WHERE sats >= ?")) reads++;
+    return prepare.call(w.env.DB, query);
+  };
+  const pages = await Promise.all([w.connectPage(undefined, "visitor-a"), w.connectPage(undefined, "visitor-b")]);
+  assert.equal(reads, 1, "simultaneous page connects share the cold read");
+  assert.deepEqual(pages[0].messages().find((m) => m.type === "recent").entries, []);
+  await w.invoice(relay, { sats: 1000, handle: "fresh" });
+  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+  assert.equal(reads, 2, "a payment refreshes the cache once");
+  const next = await w.connectPage(undefined, "visitor-c");
+  assert.equal(reads, 2, "the next page uses the cached result");
+  assert.deepEqual(next.messages().find((m) => m.type === "recent").entries.map((entry) => entry.id), [INVOICE]);
+  w.env.MESSAGE_MIN_SATS = "2000";
+  const raised = await w.connectPage(undefined, "visitor-d");
+  assert.equal(reads, 3, "a new bar reloads the eligible rows");
+  assert.deepEqual(raised.messages().find((m) => m.type === "recent").entries, []);
+  w.env.DB.prepare = prepare;
+});
+
 test("a recent donation gets a GitHub check only for the signed-in donor's matching final name", async () => {
   const w = await world(), relay = await w.connectRelay(), page = await w.connectPage();
-  await w.invoice(relay, { sats: 1000, handle: "Ooga-Dev", message: "for the cave" }, undefined, { donor: donor("ooga-dev", 42) });
+  const { asked } = await w.invoice(relay, { sats: 1000, handle: "Ooga-Dev", message: "for the cave" }, undefined, { donor: donor("ooga-dev", 42) });
+  assert.equal((await w.post("/donations/note", { request: asked.request, handle: "other-name" })).status, 204);
+  assert.equal((await w.post("/donations/note", { request: asked.request, handle: "Ooga-Dev" })).status, 204);
   await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
   const live = page.messages().find((m) => m.type === "donation");
   assert.equal(live.verified, true);

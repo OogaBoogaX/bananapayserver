@@ -118,6 +118,9 @@ export class DonationsObject {
     this.boardSatsEntries = null;
     this.boardAsked = 0;
     this.boardShown = 0;
+    this.recentEntries = null;
+    this.recentBar = null;
+    this.recentLoading = null;
     this.tallyFigures = null;
     this.tallyAsked = 0;
     this.tallyShown = 0;
@@ -168,6 +171,7 @@ export class DonationsObject {
     const { network, invoiceTimeoutMs } = readSettings(this.env);
     if (!limits || !network) return closed();
     if (!Number.isSafeInteger(sats) || sats < limits.minSats || sats > limits.maxSats) return json({ error: "amount" }, 400);
+    if (sats < limits.messageMinSats && sanitize(message, MESSAGE_MAX)) return json({ error: "message" }, 400);
     if (!this.allow("work", client, limits)) return busy();
     const line = this.line();
     if (!line) return closed();
@@ -178,10 +182,9 @@ export class DonationsObject {
     const command = { type: "invoice", request, sats };
     if (onchainOnly) command.onchainOnly = true;
     const display = handle === undefined ? github?.login : handle;
-    // A message rides only a donation of at least the message bar.
     this.sql.exec(
       "INSERT INTO pending (request, sats, handle, message, github_id, github_login, created) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      request, sats, display ? cleanHandle(display) : "", sats >= limits.messageMinSats ? sanitize(message, MESSAGE_MAX) : "", github?.id ?? null, github?.login ?? null, this.platform.now(),
+      request, sats, display ? cleanHandle(display) : "", sanitize(message, MESSAGE_MAX), github?.id ?? null, github?.login ?? null, this.platform.now(),
     );
     // The price is looked up while the relay makes the invoice, so it costs the donor no time.
     const [reply, price] = await Promise.all([
@@ -224,16 +227,21 @@ export class DonationsObject {
 
   // The request capability may update display text until settlement starts. Account identity,
   // invoice, amount and rate stay fixed. A handle-only update preserves the existing message, and a
-  // donation under the message bar keeps none whatever is sent.
+  // donation under the message bar refuses a new nonempty message.
   note({ request, handle, message, client }) {
     const limits = readLimits(this.env);
     if (!limits) return closed();
     if (!this.allow("note", client, limits)) return busy();
+    const clean = message === undefined ? undefined : sanitize(message, MESSAGE_MAX);
+    if (clean) {
+      const [row] = this.sql.exec("SELECT sats FROM pending WHERE request = ? AND settling = 0", request).toArray();
+      if (!row) return json({ error: "unknown" }, 404);
+      if (row.sats < limits.messageMinSats) return json({ error: "message" }, 400);
+    }
     const updated = this.sql.exec(
-      "UPDATE pending SET handle = coalesce(?, handle), message = CASE WHEN sats >= ? THEN coalesce(?, message) ELSE '' END " +
+      "UPDATE pending SET handle = coalesce(?, handle), message = coalesce(?, message) " +
       "WHERE request = ? AND settling = 0 RETURNING request",
-      handle === undefined ? null : cleanHandle(handle), limits.messageMinSats,
-      message === undefined ? null : sanitize(message, MESSAGE_MAX), request,
+      handle === undefined ? null : cleanHandle(handle), clean === undefined ? null : clean, request,
     ).toArray();
     return updated.length ? new Response(null, { status: 204 }) : json({ error: "unknown" }, 404);
   }
@@ -305,19 +313,31 @@ export class DonationsObject {
     }
   }
 
-  // Every new page sees the latest recorded donations of at least the message bar (so tiny ones
-  // cannot flood the list), including their messages and the account-name match fixed when each
-  // invoice settled. Older records have no such proof.
-  async recent(limits) {
-    try {
-      const { results } = await this.env.DB.prepare(
-        "SELECT seq, id, sats, handle, message, at, milli, verified FROM donations WHERE sats >= ? ORDER BY seq DESC LIMIT ?",
-      ).bind(limits.messageMinSats, RECENT_SIZE).all();
-      return { type: "recent", entries: results.map(recentEntry) };
-    } catch (error) {
-      console.error("reading recent donations failed:", error.message);
-      return null;
+  // The latest eligible donations, cached across page connects. A payment refreshes the list;
+  // concurrent connects share one read, and changing the bar invalidates the cached threshold.
+  async recent(limits, { refresh = false } = {}) {
+    if (this.recentLoading) await this.recentLoading;
+    if (this.recentBar !== limits.messageMinSats) {
+      this.recentBar = limits.messageMinSats;
+      this.recentEntries = null;
     }
+    if (refresh || !this.recentEntries) {
+      const loading = (async () => {
+        try {
+          const { results } = await this.env.DB.prepare(
+            "SELECT seq, id, sats, handle, message, at, milli, verified FROM donations WHERE sats >= ? ORDER BY seq DESC LIMIT ?",
+          ).bind(limits.messageMinSats, RECENT_SIZE).all();
+          this.recentEntries = results.map(recentEntry);
+        } catch (error) {
+          this.recentEntries = null;
+          console.error("reading recent donations failed:", error.message);
+        }
+      })();
+      this.recentLoading = loading;
+      await loading;
+      if (this.recentLoading === loading) this.recentLoading = null;
+    }
+    return this.recentEntries ? { type: "recent", entries: this.recentEntries } : null;
   }
 
   // The newest line wins: a relay that redials replaces a line that may be half dead.
@@ -384,7 +404,8 @@ export class DonationsObject {
       return known ? "duplicate" : "unknown";
     }
     const limits = readLimits(this.env);
-    const message = limits && row.sats >= limits.messageMinSats ? row.message : "";
+    if (!limits) throw new Error("settlement requires valid limits");
+    const message = row.sats >= limits.messageMinSats ? row.message : "";
     const verified = row.github_id !== null && row.github_login && row.handle.toLowerCase() === row.github_login.toLowerCase() ? 1 : 0;
     const inserted = await this.env.DB.prepare(
       "INSERT INTO donations (id, sats, handle, message, at, method, github_id, price_cents, price_at, banana_cents, milli, received_at, price_stale, pricing, verified) " +
@@ -404,6 +425,7 @@ export class DonationsObject {
     if (pile !== false) {
       this.broadcast(donationMessage(recorded));
       if (pile) this.broadcast(pile);
+      if (recorded.sats >= limits.messageMinSats) await this.recent(limits, { refresh: true });
       if (row.handle) {
         const board = await this.board({ refresh: true });
         if (board) this.broadcast(board);

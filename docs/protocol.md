@@ -20,6 +20,7 @@ per request. An error is `{ "error": "<name>" }`:
 |---|---|---|
 | 400 | `invalid` | The request is malformed |
 | 400 | `amount` | The amount is outside the Worker's limits or above the node's own cap |
+| 400 | `message` | A nonempty message needs a donation at or above `messageMinSats` |
 | 404 | `unknown` | No such request |
 | 410 | `expired` | The invoice has expired |
 | 413 | `too large` | The body is over 1 KiB |
@@ -79,6 +80,9 @@ from the display handle. Without `handle`, older clients retain the signed-in lo
 empty anonymous name; `anon: true` still suppresses account identity for those clients.
 The handle and message can be updated using `/donations/note` before settlement starts,
 without replacing the invoice or its rate.
+An invoice or note carrying a nonempty message below `messageMinSats` is refused with
+400 `{ "error": "message" }`; a client must not claim that text was saved. A donation
+without a message remains available from the configured minimum.
 
 ```json
 {
@@ -113,6 +117,8 @@ D1 stores backend detection time as `received_at` separately from `price_at`, al
 bananas, without blocking payment. Once stored, a receipt is never repriced by retries,
 restarts or service recovery. Apply all migrations through 0008 before deploying. Historical
 rows and totals keep their recorded invoice prices; legacy price freshness is unknown (NULL).
+If the Worker runs before 0008, settlement inserts fail and the relay cannot receive an
+acknowledgement; it retries those notices after the migration is applied.
 
 `lightning` is `available`, `limit` (above the configured Lightning threshold), or
 `unavailable` (BTCPay couldn't make Lightning in time, for example while LND is down or
@@ -130,7 +136,7 @@ Legacy `MAX_SATS` supplies the Lightning threshold only when `LIGHTNING_MAX_SATS
 
 Updates optional `handle` and/or `message` before settlement starts. Omitted fields are
 preserved; legacy calls with neither clear the message. A donation under `messageMinSats`
-keeps no message whatever is sent. Text uses the same sanitization as
+refuses a nonempty message with 400 `{ "error": "message" }`. Text uses the same sanitization as
 invoice creation. The invoice, its payment code/address, sats, expiry, rate and authenticated
 account identity stay fixed. Answers 204, or 404 once settlement has started or the request
 is unknown, or 429 if the note autosave budget is exhausted. A failed save leaves the last
@@ -162,8 +168,8 @@ missed. After that:
   closes, so the page can say donations are closed before anyone tries. `network` is the
   network this deployment takes payments on, so a page can label test donations. It also has
   `limits: { minSats, maxSats, lightningMaxSats, messageMinSats }`, the public payment policy. `messageMinSats` is the fewest sats a donation
-  needs to carry a message, and to be listed among the recent ones: below it the message is dropped at creation, by
-  `note`, and at settlement for older pending invoices, so tiny donations can neither speak nor flood the list. `maxSats` is the fixed Bitcoin supply bound, not an application
+  needs to carry a message, and to be listed among the recent ones: new nonempty messages below it are refused at creation and by
+  `note`, and settlement strips one held by an older pending invoice, so tiny donations can neither speak nor flood the list. `maxSats` is the fixed Bitcoin supply bound, not an application
   cap. Kiosks warn about on-chain-only amounts before Continue and validate Bitcoin amounts. Legacy
   clients may ignore these extra fields.
 - `{ "type": "donation", "donation": { "id", "sats", "handle", "message", "at" }, "bananas": { "exact", "rounded" }, "seq": 12, "verified": true }`
@@ -174,11 +180,15 @@ missed. After that:
   GitHub and the final display handle matched that account's login, ignoring case. Changing
   the handle before payment can remove the match. A typed matching name without sign-in
   never earns it.
+- A signed-in donor's login is the one OBL stored at sign-in. After a GitHub rename,
+  the new login cannot earn a check until they sign in to OBL again.
 - `{ "type": "recent", "entries": [{ "seq": 12, "id": "invoice id", "sats": 1000, "handle": "ooga-dev", "message": "for the cave", "at": 1790000000000, "bananas": 1, "verified": true }] }`
   after the tally when a page connects, with up to ten newest donations of at least
   `messageMinSats` in descending `seq` order. `bananas` is each donation's recorded exact amount, zero when it had no price. Old
   donations without recorded GitHub login matches have `verified: false`. On reconnect, the
   usual `after` replay follows this snapshot; the page deduplicates matching invoice ids.
+  Recent entries are compact list rows with a numeric banana amount; live and replayed
+  `donation` messages retain the separate OBL event and banana estimate envelope.
 - `{ "type": "seen", "id", "sats", "due", "left" }` when BTCPay sees an on-chain payment it
   hasn't yet settled, before the donation itself, which follows once BTCPay settles the
   invoice. `id` is the invoice id the donation will carry, `sats` is everything the invoice
