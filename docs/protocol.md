@@ -129,7 +129,8 @@ Legacy `MAX_SATS` supplies the Lightning threshold only when `LIGHTNING_MAX_SATS
 ```
 
 Updates optional `handle` and/or `message` before settlement starts. Omitted fields are
-preserved; legacy calls with neither clear the message. Text uses the same sanitization as
+preserved; legacy calls with neither clear the message. A donation under `messageMinSats`
+keeps no message whatever is sent. Text uses the same sanitization as
 invoice creation. The invoice, its payment code/address, sats, expiry, rate and authenticated
 account identity stay fixed. Answers 204, or 404 once settlement has started or the request
 is unknown, or 429 if the note autosave budget is exhausted. A failed save leaves the last
@@ -160,7 +161,9 @@ missed. After that:
 - `{ "type": "status", "open": true, "network": "signet" }` whenever the relay's line opens or
   closes, so the page can say donations are closed before anyone tries. `network` is the
   network this deployment takes payments on, so a page can label test donations. It also has
-  `limits: { minSats, maxSats, lightningMaxSats }`, the public payment policy. `maxSats` is the fixed Bitcoin supply bound, not an application
+  `limits: { minSats, maxSats, lightningMaxSats, messageMinSats }`, the public payment policy. `messageMinSats` is the fewest sats a donation
+  needs to carry a message, and to be listed among the recent ones: below it the message is dropped at creation and by
+  `note`, so tiny donations can neither speak nor flood the list. `maxSats` is the fixed Bitcoin supply bound, not an application
   cap. Kiosks warn about on-chain-only amounts before Continue and validate Bitcoin amounts. Legacy
   clients may ignore these extra fields.
 - `{ "type": "donation", "donation": { "id", "sats", "handle", "message", "at" }, "bananas": { "exact", "rounded" }, "seq": 12, "verified": true }`
@@ -172,8 +175,8 @@ missed. After that:
   the handle before payment can remove the match. A typed matching name without sign-in
   never earns it.
 - `{ "type": "recent", "entries": [{ "seq": 12, "id": "invoice id", "sats": 1000, "handle": "ooga-dev", "message": "for the cave", "at": 1790000000000, "bananas": 1, "verified": true }] }`
-  after the tally when a page connects, with up to ten newest donations in descending `seq`
-  order. `bananas` is each donation's recorded exact amount, zero when it had no price. Old
+  after the tally when a page connects, with up to ten newest donations of at least
+  `messageMinSats` in descending `seq` order. `bananas` is each donation's recorded exact amount, zero when it had no price. Old
   donations without recorded GitHub login matches have `verified: false`. On reconnect, the
   usual `after` replay follows this snapshot; the page deduplicates matching invoice ids.
 - `{ "type": "seen", "id", "sats", "due", "left" }` when BTCPay sees an on-chain payment it

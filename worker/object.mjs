@@ -178,9 +178,10 @@ export class DonationsObject {
     const command = { type: "invoice", request, sats };
     if (onchainOnly) command.onchainOnly = true;
     const display = handle === undefined ? github?.login : handle;
+    // A message rides only a donation of at least the message bar.
     this.sql.exec(
       "INSERT INTO pending (request, sats, handle, message, github_id, github_login, created) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      request, sats, display ? cleanHandle(display) : "", sanitize(message, MESSAGE_MAX), github?.id ?? null, github?.login ?? null, this.platform.now(),
+      request, sats, display ? cleanHandle(display) : "", sats >= limits.messageMinSats ? sanitize(message, MESSAGE_MAX) : "", github?.id ?? null, github?.login ?? null, this.platform.now(),
     );
     // The price is looked up while the relay makes the invoice, so it costs the donor no time.
     const [reply, price] = await Promise.all([
@@ -222,14 +223,16 @@ export class DonationsObject {
   }
 
   // The request capability may update display text until settlement starts. Account identity,
-  // invoice, amount and rate stay fixed. A handle-only update preserves the existing message.
+  // invoice, amount and rate stay fixed. A handle-only update preserves the existing message, and a
+  // donation under the message bar keeps none whatever is sent.
   note({ request, handle, message, client }) {
     const limits = readLimits(this.env);
     if (!limits) return closed();
     if (!this.allow("note", client, limits)) return busy();
     const updated = this.sql.exec(
-      "UPDATE pending SET handle = coalesce(?, handle), message = coalesce(?, message) WHERE request = ? AND settling = 0 RETURNING request",
-      handle === undefined ? null : cleanHandle(handle),
+      "UPDATE pending SET handle = coalesce(?, handle), message = CASE WHEN sats >= ? THEN coalesce(?, message) ELSE '' END " +
+      "WHERE request = ? AND settling = 0 RETURNING request",
+      handle === undefined ? null : cleanHandle(handle), limits.messageMinSats,
       message === undefined ? null : sanitize(message, MESSAGE_MAX), request,
     ).toArray();
     return updated.length ? new Response(null, { status: 204 }) : json({ error: "unknown" }, 404);
@@ -276,7 +279,7 @@ export class DonationsObject {
       server.send(JSON.stringify(tally));
       if (this.sentRate() === null) this.markRateSent(tally.rate);
     }
-    const recent = await this.recent();
+    const recent = await this.recent(limits);
     if (recent) server.send(JSON.stringify(recent));
     const after = url.searchParams.get("after");
     if (after && INVOICE_ID.test(after)) await this.replay(server, after);
@@ -302,13 +305,14 @@ export class DonationsObject {
     }
   }
 
-  // Every new page sees the latest recorded donations, including their messages and the
-  // account-name match fixed when each invoice settled. Older records have no such proof.
-  async recent() {
+  // Every new page sees the latest recorded donations of at least the message bar (so tiny ones
+  // cannot flood the list), including their messages and the account-name match fixed when each
+  // invoice settled. Older records have no such proof.
+  async recent(limits) {
     try {
       const { results } = await this.env.DB.prepare(
-        "SELECT seq, id, sats, handle, message, at, milli, verified FROM donations ORDER BY seq DESC LIMIT ?",
-      ).bind(RECENT_SIZE).all();
+        "SELECT seq, id, sats, handle, message, at, milli, verified FROM donations WHERE sats >= ? ORDER BY seq DESC LIMIT ?",
+      ).bind(limits.messageMinSats, RECENT_SIZE).all();
       return { type: "recent", entries: results.map(recentEntry) };
     } catch (error) {
       console.error("reading recent donations failed:", error.message);
@@ -722,7 +726,7 @@ export class DonationsObject {
   statusMessage(open) {
     const limits = readLimits(this.env);
     return { type: "status", open, network: readSettings(this.env).network,
-      limits: limits ? { minSats: limits.minSats, maxSats: limits.maxSats, lightningMaxSats: limits.lightningMaxSats } : null };
+      limits: limits ? { minSats: limits.minSats, maxSats: limits.maxSats, lightningMaxSats: limits.lightningMaxSats, messageMinSats: limits.messageMinSats } : null };
   }
 
   line(excluding = null) {

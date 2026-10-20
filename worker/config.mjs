@@ -26,10 +26,13 @@ export function readLimits(env) {
   const priceJumpMax = positiveInt(env.PRICE_JUMP_MAX);
   const onchainFeeAllowance = wholeNumber(env.ONCHAIN_FEE_ALLOWANCE);
   const minSats = env.MIN_SATS === undefined ? 1 : positiveInt(env.MIN_SATS);
-  if (!ratePerIp || !noteRatePerIp || !rateGlobal || !socketsPerIp || !minSats) return null;
+  // The fewest sats a donation needs to carry a message, and to be listed among the recent ones,
+  // so a run of tiny donations can neither speak nor flood the list; 0 lets every donation carry one.
+  const messageMinSats = env.MESSAGE_MIN_SATS === undefined ? 1_000 : wholeNumber(env.MESSAGE_MIN_SATS);
+  if (!ratePerIp || !noteRatePerIp || !rateGlobal || !socketsPerIp || !minSats || messageMinSats === null) return null;
   if (!lightningMaxSats || minSats > lightningMaxSats) return null;
   if (!priceJumpMax || priceJumpMax < 2 || onchainFeeAllowance === null) return null;
-  return { minSats, maxSats, lightningMaxSats, ratePerIp, noteRatePerIp, rateGlobal, socketsPerIp, priceJumpMax, onchainFeeAllowance };
+  return { minSats, maxSats, lightningMaxSats, messageMinSats, ratePerIp, noteRatePerIp, rateGlobal, socketsPerIp, priceJumpMax, onchainFeeAllowance };
 }
 
 // Settings that are not limits. A missing or unknown network also closes donations.

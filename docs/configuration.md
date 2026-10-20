@@ -26,6 +26,7 @@ regtest.
 | `MAX_SATS` | legacy alias | Lightning threshold when `LIGHTNING_MAX_SATS` is absent; no longer an on-chain cap |
 | `LIGHTNING_MAX_SATS` | limit, required unless legacy alias is set | Largest Lightning donation, in sats. Above this, donations remain available on-chain. Advertised to kiosks |
 | `MIN_SATS` | optional | The smallest; 1 when unset, the smallest invoice there is |
+| `MESSAGE_MIN_SATS` | optional | The fewest sats a donation needs to carry a message, and to be listed among the recent ones; 1,000 when unset, 0 lets every donation carry one. Advertised to kiosks as `messageMinSats` |
 | `RATE_PER_IP` | limit, required | Per visitor and per minute: invoice requests and on-chain switches together, and separately each of notes and page sockets. An IPv6 visitor counts by its /64. Counts are kept for the minute under a 16-bit hash of the address, never the address, so a visitor shares theirs with the rare other in the same group |
 | `NOTE_RATE_PER_IP` | optional limit | Separate per-visitor note autosave budget per minute. When absent, uses `RATE_PER_IP`; an explicitly empty or invalid value closes donations. Configure this for the site's typing debounce without raising the invoice or page-socket budget |
 | `SOCKETS_PER_IP` | limit, required | Page sockets one visitor may hold open at once. An IPv6 visitor counts by its /48. Visitors are counted in 65,536 groups by a hash of the address, so a visitor shares the limit with the few others in their group, and no address is ever kept |
@@ -53,7 +54,7 @@ Lightning-failure fallback:
 1. Deploy the compatible site, which understands null BOLT11 invoices and receipt estimates.
 2. Let current invoice requests finish, then stop the relay. Keep its state and the Worker's
    pending invoices. Once its line closes, new invoice requests immediately report closed.
-3. With the relay stopped, apply all D1 migrations through 0007 and deploy the compatible
+3. With the relay stopped, apply all D1 migrations through 0008 and deploy the compatible
    Worker. Migrations 0005 and 0006 already applied in an environment must not be rewritten.
    Keep the minimum at or below both Lightning thresholds and the Worker's threshold at or
    below the relay's. Set the canonical `LIGHTNING_MAX_SATS` in both deployments; the alias
