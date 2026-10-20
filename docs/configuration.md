@@ -108,7 +108,7 @@ them.
 | `BTCPAY_STORE_ID` | required | The one store the key can use |
 | `BTCPAY_API_KEY` | secret | A key that can only create and view invoices on that store |
 | `BTCPAY_WEBHOOK_SECRET` | secret | The webhook's secret, as set in BTCPay |
-| `MAX_SATS` | legacy alias | Lightning threshold when `LIGHTNING_MAX_SATS` is absent; no longer an on-chain cap |
+| `MAX_SATS` | legacy alias | Lightning threshold when `LIGHTNING_MAX_SATS` is absent; no longer an on-chain cap. The Compose files always pass `LIGHTNING_MAX_SATS`, so a relay run with them never falls back to it |
 | `LIGHTNING_MAX_SATS` | limit, required unless legacy alias is set | The relay's independently enforced Lightning threshold. Above this, create only the on-chain method and never activate Lightning |
 | `RATE_PER_MINUTE` | limit, required | How many invoices and on-chain addresses the relay makes in a minute, whatever the Worker asks. At least the Worker's `RATE_GLOBAL`, so it only ever stops a Worker gone wrong |
 | `MIN_SATS` | optional | 1 when unset |

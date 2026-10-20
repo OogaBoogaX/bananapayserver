@@ -72,8 +72,8 @@ The machine's operator sets it up, by hand, from `rock` only
      ```
 
    - **`LIGHTNING_MAX_SATS` and `RATE_PER_MINUTE`:** the team's production values. The
-     Lightning threshold does not cap on-chain donations. Existing `.env` files may keep
-     `MAX_SATS`; Compose uses it only when `LIGHTNING_MAX_SATS` is absent. An explicitly
+     Lightning threshold does not cap on-chain donations. An `.env` from before the threshold
+     had this name needs `LIGHTNING_MAX_SATS` added: Compose no longer reads `MAX_SATS`. An
      empty or invalid `LIGHTNING_MAX_SATS` stops the relay. `RATE_PER_MINUTE` is at least
      twice the Worker's `RATE_GLOBAL`.
 
@@ -101,7 +101,15 @@ The machine's operator sets it up, by hand, from `rock` only
    production has been deployed from `rock`; see [`cloudflare.md`](cloudflare.md#production).
    The token stays in `.env` on this machine.
 
-5. **Build and start:**
+5. **Build and start.** First check what Compose will hand the relay for its threshold,
+   with each digit shown as 9:
+
+   ```bash
+   docker compose -p obl-relay config | grep LIGHTNING_MAX_SATS | sed -E 's/[0-9]/9/g'
+   ```
+
+   It should show a plain number, `"999999"` or the like. Anything else, such as a stray `}`,
+   means this Compose misreads the file, and the relay would refuse to start. Then:
 
    ```bash
    docker compose -p obl-relay up -d --build
@@ -128,7 +136,8 @@ The machine's operator sets it up, by hand, from `rock` only
 - **Logs:** `docker compose -p obl-relay logs --tail 50 relay`.
 - **After a reboot or a crash:** Docker starts the relay again by itself.
 - **After a BTCPay update:** check again that BTCPay can't read LND's data folder.
-- **Update:** `git pull` on `rock`, then `docker compose -p obl-relay up -d --build`.
+- **Update:** `git pull` on `rock`, the threshold check from step 5, then
+  `docker compose -p obl-relay up -d --build`.
 - **Stop:** `docker compose -p obl-relay stop`. Donations close until it's back.
 - **Secrets:** `.env` holds the relay's token, BTCPay's key and the webhook's secret. It stays
   readable by its owner only, and is never copied off this machine.

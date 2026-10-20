@@ -69,9 +69,10 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
      nowhere else, from `openssl rand -hex 24`.
    - **`WORKER_URL`:** `wss://bananapayserver-staging.<account subdomain>.workers.dev/relay`.
    - **`RELAY_LIGHTNING_MAX_SATS`:** the team's Lightning threshold for staging, passed as
-     `LIGHTNING_MAX_SATS` to the relay. It does not cap on-chain donations. Existing `.env`
-     files may keep `RELAY_MAX_SATS`; Compose uses it only when `RELAY_LIGHTNING_MAX_SATS`
-     is absent. An explicitly empty or invalid `RELAY_LIGHTNING_MAX_SATS` stops the relay.
+     `LIGHTNING_MAX_SATS` to the relay. It does not cap on-chain donations. An `.env` from
+     before the threshold had this name needs `RELAY_LIGHTNING_MAX_SATS` added: Compose no
+     longer reads `RELAY_MAX_SATS`. An empty or invalid `RELAY_LIGHTNING_MAX_SATS` stops the
+     relay.
    - **`RELAY_RATE_PER_MINUTE`:** the team's limit on invoices and on-chain addresses a
      minute, at least staging's `RATE_GLOBAL`.
 
