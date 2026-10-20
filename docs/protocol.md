@@ -120,6 +120,14 @@ rows and totals keep their recorded invoice prices; legacy price freshness is un
 If the Worker runs before 0008, settlement inserts fail and the relay cannot receive an
 acknowledgement; it retries those notices after the migration is applied.
 
+Deploy the page before this Worker. A page older than OBL #242 sends whatever message the
+donor typed at any amount, so against this Worker a tip under `messageMinSats` with a
+message is refused with 400 `message` at creation and in `note`, which that page shows as a
+problem it cannot explain. The page from #242 on blanks such messages itself, falls back to
+a 1,000-sat bar when `status` names none, and shows an empty recent list and no check until
+this Worker answers, so it runs correctly against either Worker. The order is therefore: the
+page, then migration 0008, then this Worker.
+
 `lightning` is `available`, `limit` (above the configured Lightning threshold), or
 `unavailable` (BTCPay couldn't make Lightning in time, for example while LND is down or
 slow). The last two have `invoice.bolt11: null` and still support `/donations/onchain`.

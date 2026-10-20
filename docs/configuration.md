@@ -4,7 +4,8 @@ Every setting the Worker and the relay read. The Lightning threshold and request
 required: one that is missing or malformed keeps donations closed on the Worker and stops
 the relay. Limits and secrets are set in each deployment and never committed. The 69-sat
 minimum and 1,000-sat message bar are the defaults requested for this release; their
-deployment settings can raise the minimum or change the message bar.
+deployment settings can raise the minimum or change the message bar. Deploy OBL's page
+before a Worker that refuses sub-bar messages; [`protocol.md`](protocol.md) says why.
 
 ## The Worker
 
