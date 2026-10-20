@@ -23,7 +23,7 @@ test("the relay reads a complete configuration, with Tor and the defaults", () =
   assert.equal(config.workerUrl.href, "wss://api.example.org/relay");
   assert.deepEqual(config.socks, { host: "tor", port: 9050 });
   assert.deepEqual(config.listen, { host: "0.0.0.0", port: 8080 });
-  assert.equal(config.minSats, 1);
+  assert.equal(config.minSats, 69);
   assert.equal(config.maxSats, 2_100_000_000_000_000);
   assert.equal(config.lightningMaxSats, 50_000);
   assert.equal(config.ratePerMinute, 60);
@@ -68,12 +68,13 @@ test("numbers must be whole and in order", () => {
   for (const [name, value] of [["LIGHTNING_MAX_SATS", "1e5"], ["LIGHTNING_MAX_SATS", "0"], ["RATE_PER_MINUTE", "0"], ["RATE_PER_MINUTE", "1.5"], ["LIGHTNING_MAX_SATS", "-5"], ["MIN_SATS", "50001"], ["MIN_SATS", "2100000000000001"], ["INVOICE_MINUTES", "1.5"], ["WEBHOOK_LISTEN", "0.0.0.0:99999"], ["TOR_SOCKS", "tor"]]) {
     assert.throws(() => readConfig({ ...RELAY, [name]: value }), new RegExp(name), `${name}=${value}`);
   }
+  assert.equal(readConfig({ ...RELAY, MIN_SATS: "1" }).minSats, 69);
 });
 
 test("the Worker's caps and rate limits have no defaults, and a bad one closes donations", () => {
   const limits = { LIGHTNING_MAX_SATS: "100000", RATE_PER_IP: "5", RATE_GLOBAL: "50", SOCKETS_PER_IP: "4", PRICE_JUMP_MAX: "3", ONCHAIN_FEE_ALLOWANCE: "20000" };
   assert.deepEqual(readLimits(limits), {
-    minSats: 1, maxSats: 2_100_000_000_000_000, lightningMaxSats: 100_000, messageMinSats: 1_000, ratePerIp: 5, noteRatePerIp: 5, rateGlobal: 50, socketsPerIp: 4, priceJumpMax: 3, onchainFeeAllowance: 20_000,
+    minSats: 69, maxSats: 2_100_000_000_000_000, lightningMaxSats: 100_000, messageMinSats: 1_000, ratePerIp: 5, noteRatePerIp: 5, rateGlobal: 50, socketsPerIp: 4, priceJumpMax: 3, onchainFeeAllowance: 20_000,
   });
   assert.equal(readLimits({ ...limits, MESSAGE_MIN_SATS: "0" }).messageMinSats, 0, "0 lets every donation carry a message");
   assert.equal(readLimits({ ...limits, MESSAGE_MIN_SATS: "2500" }).messageMinSats, 2500);
@@ -81,6 +82,7 @@ test("the Worker's caps and rate limits have no defaults, and a bad one closes d
   for (const name of Object.keys(limits)) assert.equal(readLimits({ ...limits, [name]: undefined }), null, name);
   for (const bad of ["0", "-1", "1.5", "lots", " ", "1e3"]) assert.equal(readLimits({ ...limits, LIGHTNING_MAX_SATS: bad }), null, bad);
   assert.equal(readLimits({ ...limits, MIN_SATS: "100001" }), null);
+  assert.equal(readLimits({ ...limits, MIN_SATS: "1" }).minSats, 69);
   assert.equal(readLimits({ ...limits, MIN_SATS: "2100000000000001" }), null);
   assert.equal(readLimits({ ...limits, PRICE_JUMP_MAX: "1" }), null, "a factor of 1 would refuse every new price");
   assert.equal(readLimits({ ...limits, ONCHAIN_FEE_ALLOWANCE: "0" }).onchainFeeAllowance, 0, "no room for a fee is allowed");

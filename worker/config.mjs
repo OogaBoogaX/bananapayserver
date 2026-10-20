@@ -25,7 +25,8 @@ export function readLimits(env) {
   // for a fault; and how many sats an on-chain amount may exceed its invoice by.
   const priceJumpMax = positiveInt(env.PRICE_JUMP_MAX);
   const onchainFeeAllowance = wholeNumber(env.ONCHAIN_FEE_ALLOWANCE);
-  const minSats = env.MIN_SATS === undefined ? 1 : positiveInt(env.MIN_SATS);
+  const requestedMinSats = env.MIN_SATS === undefined ? 69 : positiveInt(env.MIN_SATS);
+  const minSats = requestedMinSats === null ? null : Math.max(69, requestedMinSats);
   // The fewest sats a donation needs to carry a message, and to be listed among the recent ones,
   // so a run of tiny donations can neither speak nor flood the list; 0 lets every donation carry one.
   const messageMinSats = env.MESSAGE_MIN_SATS === undefined ? 1_000 : wholeNumber(env.MESSAGE_MIN_SATS);

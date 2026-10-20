@@ -12,7 +12,7 @@ test("a donation above Lightning's threshold gets an on-chain invoice, address a
   const w = await world({ LIGHTNING_MAX_SATS: "999" });
   const socket = await w.connectRelay();
   const page = await w.connectPage();
-  assert.deepEqual(page.messages()[0].limits, { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 999, messageMinSats: 1000 });
+  assert.deepEqual(page.messages()[0].limits, { minSats: 69, maxSats: 2100000000000000, lightningMaxSats: 999, messageMinSats: 1000 });
   const calls = [], replies = [];
   const node = new Relay({
     config: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 2000, invoiceMinutes: 15, ratePerMinute: 10,

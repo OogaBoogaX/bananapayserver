@@ -39,7 +39,7 @@ export function readConfig(env) {
   // Tor unless someone explicitly says otherwise, so a missing setting never exposes the
   // machine's address.
   const socks = env.DIRECT === "yes" ? null : hostPort("TOR_SOCKS");
-  const minSats = count("MIN_SATS", 1);
+  const minSats = Math.max(69, count("MIN_SATS", 69));
   const maxSats = MAX_MONEY;
   const lightningMaxSats = readLightningMaxSats(env);
   if (!lightningMaxSats) problems.push("LIGHTNING_MAX_SATS");

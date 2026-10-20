@@ -383,13 +383,15 @@ export class DonationsObject {
       const known = await this.env.DB.prepare("SELECT 1 FROM donations WHERE id = ?").bind(invoice).first();
       return known ? "duplicate" : "unknown";
     }
+    const limits = readLimits(this.env);
+    const message = limits && row.sats >= limits.messageMinSats ? row.message : "";
     const verified = row.github_id !== null && row.github_login && row.handle.toLowerCase() === row.github_login.toLowerCase() ? 1 : 0;
     const inserted = await this.env.DB.prepare(
       "INSERT INTO donations (id, sats, handle, message, at, method, github_id, price_cents, price_at, banana_cents, milli, received_at, price_stale, pricing, verified) " +
       "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
       "ON CONFLICT (id) DO NOTHING RETURNING seq, id, sats, handle, message, at, milli, verified",
     ).bind(
-      invoice, sats, row.handle, row.message, this.platform.now(), method, row.github_id,
+      invoice, sats, row.handle, message, this.platform.now(), method, row.github_id,
       row.price_cents, row.price_at, row.price_cents === null ? null : BANANA_CENTS, row.milli,
       row.received_at, row.price_stale, row.pricing, verified,
     ).first();

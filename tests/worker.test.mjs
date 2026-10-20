@@ -92,13 +92,13 @@ test("when the line drops, waiting pages hear at once and every page sees donati
   const w = await world({ INVOICE_TIMEOUT_MS: "60000" });
   const relay = await w.connectRelay();
   const page = await w.connectPage();
-  assert.deepEqual(page.messages()[0], { type: "status", open: true, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000, messageMinSats: 1000 } });
+  assert.deepEqual(page.messages()[0], { type: "status", open: true, network: "regtest", limits: { minSats: 69, maxSats: 2100000000000000, lightningMaxSats: 100000, messageMinSats: 1000 } });
   const pending = w.post("/donations/invoice", { sats: 1000 });
   await until(() => relay.sent.length === 1);
   relay.close(1006, "");
   await w.object.webSocketClose(relay, 1006, "", false);
   assert.equal((await pending).status, 503);
-  assert.deepEqual(page.messages().at(-1), { type: "status", open: false, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000, messageMinSats: 1000 } });
+  assert.deepEqual(page.messages().at(-1), { type: "status", open: false, network: "regtest", limits: { minSats: 69, maxSats: 2100000000000000, lightningMaxSats: 100000, messageMinSats: 1000 } });
 });
 
 test("an invoice for the wrong amount or network never reaches the donor", async () => {
@@ -131,6 +131,7 @@ test("the Worker checks amounts and bodies before anything reaches the object", 
   const w = await world();
   const cases = [
     [{ sats: 0 }, 400, "amount"],
+    [{ sats: 68 }, 400, "amount"],
     [{ sats: 2_100_000_000_000_001 }, 400, "amount"],
     [{ sats: "1000" }, 400, "invalid"],
     [{ sats: 10.5 }, 400, "invalid"],
@@ -265,7 +266,7 @@ test("a relay that redials replaces its old line", async () => {
   assert.equal(w.object.line(), second);
   const page = await w.connectPage();
   await w.object.webSocketClose(first, 4000, "replaced", true);
-  assert.deepEqual(page.messages().filter((m) => m.type === "status"), [{ type: "status", open: true, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000, messageMinSats: 1000 } }], "the old line closing doesn't close donations");
+  assert.deepEqual(page.messages().filter((m) => m.type === "status"), [{ type: "status", open: true, network: "regtest", limits: { minSats: 69, maxSats: 2100000000000000, lightningMaxSats: 100000, messageMinSats: 1000 } }], "the old line closing doesn't close donations");
 });
 
 test("rate limits apply per visitor and overall, per minute", async () => {
@@ -333,16 +334,23 @@ test("if recording fails, the payment isn't acknowledged and stays pending", asy
 
 test("a message rides only a donation of at least the message bar, and only those are listed among the recent", async () => {
   const w = await world(), relay = await w.connectRelay(), page = await w.connectPage();
+  const minimum = await w.invoice(relay, { sats: 69, handle: "quietest", message: "not yet" }, () => ({ id: "Minimum69", bolt11: bolt11For(69), expires: EXPIRES }));
+  assert.equal(minimum.response.status, 200, "69 sats is accepted");
+  assert.equal(w.ctx.storage.sql.exec("SELECT message FROM pending WHERE request = ?", minimum.asked.request).one().message, "");
+  await w.relaySays(relay, { type: "paid", invoice: "Minimum69", sats: 69, method: "lightning" });
   const small = await w.invoice(relay, { sats: 999, handle: "quiet", message: "too small to say" }, () => ({ id: "Small0001", bolt11: bolt11For(999), expires: EXPIRES }));
   const stored = () => w.ctx.storage.sql.exec("SELECT message FROM pending WHERE request = ?", small.asked.request).one().message;
   assert.equal(stored(), "", "the message is dropped at creation");
   assert.equal((await w.post("/donations/note", { request: small.asked.request, message: "still too small" })).status, 204);
   assert.equal(stored(), "", "and a note cannot add one");
+  w.ctx.storage.sql.exec("UPDATE pending SET message = ? WHERE request = ?", "saved before the bar", small.asked.request);
+  assert.equal(stored(), "saved before the bar", "a pending invoice from before the bar can still hold a message");
   await w.relaySays(relay, { type: "paid", invoice: "Small0001", sats: 999, method: "lightning" });
+  assert.equal(w.env.DB.db.prepare("SELECT message FROM donations WHERE id = ?").get("Small0001").message, "", "settlement removes the legacy message in D1");
   await w.invoice(relay, { sats: 1000, handle: "loud", message: "big enough" });
   await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
   const donations = page.messages().filter((m) => m.type === "donation");
-  assert.deepEqual(donations.map((m) => [m.donation.sats, m.donation.message]), [[999, ""], [1000, "big enough"]]);
+  assert.deepEqual(donations.map((m) => [m.donation.sats, m.donation.message]), [[69, ""], [999, ""], [1000, "big enough"]]);
   const joined = await w.connectPage();
   assert.deepEqual(joined.messages().find((m) => m.type === "recent").entries.map((e) => e.id), [INVOICE], "the small one is not listed");
 });
@@ -361,7 +369,7 @@ test("a page that reconnects gets what it missed, and no more than the cap", asy
   assert.ok(recent.every((entry) => entry.verified === false && entry.bananas === 0));
   const fresh = await w.connectPage("UnknownId1");
   assert.deepEqual(fresh.messages().filter((m) => m.type === "donation"), []);
-  assert.deepEqual(fresh.messages()[0], { type: "status", open: false, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000, messageMinSats: 1000 } });
+  assert.deepEqual(fresh.messages()[0], { type: "status", open: false, network: "regtest", limits: { minSats: 69, maxSats: 2100000000000000, lightningMaxSats: 100000, messageMinSats: 1000 } });
   const invalid = await w.page.fetch(upgrade("/donations/socket?after=../x", { "X-Client": "visitor-p" }));
   assert.equal(invalid.status, 400);
 });
@@ -557,7 +565,7 @@ test("donations close even when the closing line still reads as open", async () 
   const relay = await w.connectRelay();
   const page = await w.connectPage();
   await w.object.webSocketClose(relay, 1006, "", false);
-  assert.deepEqual(page.messages().at(-1), { type: "status", open: false, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000, messageMinSats: 1000 } });
+  assert.deepEqual(page.messages().at(-1), { type: "status", open: false, network: "regtest", limits: { minSats: 69, maxSats: 2100000000000000, lightningMaxSats: 100000, messageMinSats: 1000 } });
 });
 
 test("a chunked body is cut off at the cap without being read whole", async () => {

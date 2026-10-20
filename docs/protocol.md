@@ -162,8 +162,8 @@ missed. After that:
   closes, so the page can say donations are closed before anyone tries. `network` is the
   network this deployment takes payments on, so a page can label test donations. It also has
   `limits: { minSats, maxSats, lightningMaxSats, messageMinSats }`, the public payment policy. `messageMinSats` is the fewest sats a donation
-  needs to carry a message, and to be listed among the recent ones: below it the message is dropped at creation and by
-  `note`, so tiny donations can neither speak nor flood the list. `maxSats` is the fixed Bitcoin supply bound, not an application
+  needs to carry a message, and to be listed among the recent ones: below it the message is dropped at creation, by
+  `note`, and at settlement for older pending invoices, so tiny donations can neither speak nor flood the list. `maxSats` is the fixed Bitcoin supply bound, not an application
   cap. Kiosks warn about on-chain-only amounts before Continue and validate Bitcoin amounts. Legacy
   clients may ignore these extra fields.
 - `{ "type": "donation", "donation": { "id", "sats", "handle", "message", "at" }, "bananas": { "exact", "rounded" }, "seq": 12, "verified": true }`
