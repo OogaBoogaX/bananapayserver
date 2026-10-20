@@ -139,6 +139,10 @@ The machine's operator sets it up, by hand, from `rock` only
 - **Update:** `git pull` on `rock`, the threshold check from step 5, then
   `docker compose -p obl-relay up -d --build`.
 - **Stop:** `docker compose -p obl-relay stop`. Donations close until it's back.
+- **Donors get "closed" while pages say donations are open:** the line may have broken in one
+  direction, so invoice requests never reach the relay, and its log shows no `invoice:` line
+  for them. `docker compose -p obl-relay restart relay` gives it a fresh line. Decision
+  [0027](decisions/0027-line-heartbeat.md) proposes making this heal by itself.
 - **Secrets:** `.env` holds the relay's token, BTCPay's key and the webhook's secret. It stays
   readable by its owner only, and is never copied off this machine.
 
