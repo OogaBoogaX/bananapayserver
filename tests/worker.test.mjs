@@ -428,6 +428,90 @@ test("recent donations are read once across page connects and refreshed by a pay
   w.env.DB.prepare = prepare;
 });
 
+test("overlapping recent reads keep the newest snapshot and a failed refresh keeps the last good one", async () => {
+  const w = await world();
+  const insert = w.env.DB.db.prepare("INSERT INTO donations (id, sats, handle, message, at, method) VALUES (?, 1000, '', '', 1, 'lightning')");
+  insert.run("Recent0001");
+  assert.deepEqual((await w.object.recent()).entries.map((entry) => entry.id), ["Recent0001"]);
+  const prepare = w.env.DB.prepare;
+  const held = [];
+  w.env.DB.prepare = (query) => {
+    if (!query.includes("FROM donations ORDER BY seq DESC")) return prepare(query);
+    return { bind: (...args) => ({ all: () => {
+      const snapshot = prepare(query).bind(...args).all();
+      let release;
+      const waiting = new Promise((resolve) => { release = () => snapshot.then(resolve); });
+      held.push(release);
+      return waiting;
+    } }) };
+  };
+  const older = w.object.recent({ refresh: true });
+  insert.run("Recent0002");
+  const newer = w.object.recent({ refresh: true });
+  assert.equal(held.length, 2, "both refreshes read without waiting for each other");
+  held[1]();
+  assert.deepEqual((await newer).entries.map((entry) => entry.id), ["Recent0002", "Recent0001"]);
+  held[0]();
+  assert.deepEqual((await older).entries.map((entry) => entry.id), ["Recent0002", "Recent0001"], "the older read cannot replace the newer snapshot");
+  w.env.DB.prepare = (query) => query.includes("FROM donations ORDER BY seq DESC")
+    ? { bind: () => ({ all: async () => { throw new Error("synthetic D1 outage"); } }) }
+    : prepare(query);
+  const log = console.error;
+  try {
+    console.error = () => {};
+    assert.deepEqual((await w.object.recent({ refresh: true })).entries.map((entry) => entry.id), ["Recent0002", "Recent0001"]);
+  } finally {
+    console.error = log;
+    w.env.DB.prepare = prepare;
+  }
+});
+
+test("a paid notice starts the recent, board and tally reads together before acknowledgement", async () => {
+  const w = await world(), relay = await w.connectRelay();
+  await w.invoice(relay, { sats: 1000, handle: "reader" });
+  const prepare = w.env.DB.prepare;
+  let release, started = 0;
+  const waiting = new Promise((resolve) => { release = resolve; });
+  w.env.DB.prepare = (query) => {
+    if (!query.includes("FROM donations ORDER BY seq DESC") && !query.includes("FROM handle_totals") &&
+        !query.includes("FROM tally WHERE") && !query.includes("FROM tally_hours")) return prepare(query);
+    const wrap = (statement) => {
+      const held = (method) => async () => {
+        const result = await statement[method]();
+        started++;
+        await waiting;
+        return result;
+      };
+      return { bind: (...args) => wrap(statement.bind(...args)), all: held("all"), first: held("first") };
+    };
+    return wrap(prepare(query));
+  };
+  const payment = w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+  try {
+    await until(() => started === 5);
+    assert.equal(relay.messages().filter((m) => m.type === "ack").length, 0);
+  } finally {
+    release();
+  }
+  await payment;
+  w.env.DB.prepare = prepare;
+  assert.equal(JSON.parse(relay.sent.at(-1)).result, "recorded");
+});
+
+test("recent and replayed historical messages follow the current message bar", async () => {
+  const w = await world();
+  const insert = w.env.DB.db.prepare("INSERT INTO donations (id, sats, handle, message, at, method) VALUES (?, ?, '', ?, 1, 'lightning')");
+  insert.run("History001", 500, "older message");
+  insert.run("History002", 1500, "newer message");
+  const first = await w.connectPage("History001");
+  assert.deepEqual(first.messages().find((m) => m.type === "recent").entries.map((e) => e.message), ["newer message", ""]);
+  assert.deepEqual(first.messages().filter((m) => m.type === "donation").map((m) => m.donation.message), ["newer message"]);
+  w.env.MESSAGE_MIN_SATS = "2000";
+  const raised = await w.connectPage("History001");
+  assert.deepEqual(raised.messages().find((m) => m.type === "recent").entries.map((e) => e.message), ["", ""], "cached rows obey the new bar");
+  assert.deepEqual(raised.messages().filter((m) => m.type === "donation").map((m) => m.donation.message), [""], "replay obeys the new bar");
+});
+
 test("a recent donation gets a GitHub check only for the signed-in donor's matching final name", async () => {
   const w = await world(), relay = await w.connectRelay(), page = await w.connectPage();
   const { asked } = await w.invoice(relay, { sats: 1000, handle: "Ooga-Dev", message: "for the cave" }, undefined, { donor: donor("ooga-dev", 42) });

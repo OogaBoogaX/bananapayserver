@@ -2,8 +2,8 @@
 
 Every setting the Worker and the relay read. The Lightning threshold and request rates are
 required: one that is missing or malformed keeps donations closed on the Worker and stops
-the relay. Limits and secrets are set in each deployment and never committed. The 69-sat
-minimum and 1,000-sat message bar are the defaults requested for this release; their
+the relay. Deployment-specific limits and secrets are set in each deployment and never
+committed. The shared public defaults are a 69-sat minimum and 1,000-sat message bar;
 deployment settings can change either value. Deploy OBL's page
 before a Worker that refuses sub-bar messages; [`protocol.md`](protocol.md) says why.
 
@@ -58,8 +58,9 @@ Lightning-failure fallback:
    pending invoices. Once its line closes, new invoice requests immediately report closed.
 3. With the relay stopped, apply all D1 migrations through 0008 and deploy the compatible
    Worker. Migrations 0005 and 0006 already applied in an environment must not be rewritten.
-   Keep the minimum at or below both Lightning thresholds and the Worker's threshold at or
-   below the relay's. Set the canonical `LIGHTNING_MAX_SATS` in both deployments; the alias
+   Set the same `MIN_SATS` in the Worker and relay (or leave both unset to use 69), keep it at
+   or below both Lightning thresholds, and keep the Worker's threshold at or below the relay's.
+   Set the canonical `LIGHTNING_MAX_SATS` in both deployments; the alias
    remains available for an existing deployment only when the canonical name is absent.
 4. Upgrade and start the matching relay, retaining its state. Verify its authenticated line
    reconnects and check invoice creation below and above the threshold with synthetic or test
@@ -114,7 +115,7 @@ them.
 | `MAX_SATS` | legacy alias | Lightning threshold when `LIGHTNING_MAX_SATS` is absent; no longer an on-chain cap |
 | `LIGHTNING_MAX_SATS` | limit, required unless legacy alias is set | The relay's independently enforced Lightning threshold. Above this, create only the on-chain method and never activate Lightning |
 | `RATE_PER_MINUTE` | limit, required | How many invoices and on-chain addresses the relay makes in a minute, whatever the Worker asks. At least the Worker's `RATE_GLOBAL`, so it only ever stops a Worker gone wrong |
-| `MIN_SATS` | optional | 69 when unset. Any positive whole sat amount is valid up to the Lightning threshold |
+| `MIN_SATS` | optional | 69 when unset. Any positive whole sat amount is valid up to the Lightning threshold; match the Worker's value |
 | `WEBHOOK_LISTEN` | optional | Where the webhook listener binds inside the container; `0.0.0.0:8080` when unset. Never publish this port, and never run the relay with host networking, where this would listen on the machine itself |
 | `INVOICE_MINUTES` | optional | How long an invoice stays payable; 15 when unset |
 | `INVOICE_DEADLINE_MS` | optional | How long after an invoice ask the relay aims to answer, in milliseconds; 8000 when unset. Lightning gets whatever time making the invoice left, and if it isn't ready by then, the invoice goes back on-chain only. Keep it under the Worker's `INVOICE_TIMEOUT_MS` (10000 when unset), with room for the answer to cross Tor |

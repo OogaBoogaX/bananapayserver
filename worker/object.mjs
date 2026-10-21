@@ -120,6 +120,8 @@ export class DonationsObject {
     this.boardShown = 0;
     this.recentEntries = null;
     this.recentLoading = null;
+    this.recentAsked = 0;
+    this.recentShown = 0;
     this.tallyFigures = null;
     this.tallyAsked = 0;
     this.tallyShown = 0;
@@ -286,10 +288,10 @@ export class DonationsObject {
       server.send(JSON.stringify(tally));
       if (this.sentRate() === null) this.markRateSent(tally.rate);
     }
-    const recent = await this.recent();
+    const recent = await this.recent({ messageMinSats: limits.messageMinSats });
     if (recent) server.send(JSON.stringify(recent));
     const after = url.searchParams.get("after");
-    if (after && INVOICE_ID.test(after)) await this.replay(server, after);
+    if (after && INVOICE_ID.test(after)) await this.replay(server, after, limits.messageMinSats);
     // A page never waits for a price. One older than five minutes is refreshed once the page
     // has what's known, and the alarm keeps it fresh while pages stay.
     this.ctx.waitUntil(this.freshenRate());
@@ -300,31 +302,34 @@ export class DonationsObject {
   // A page that reconnects names the last donation it saw and gets anything newer. A donation
   // recorded while the replay is on its way can reach the page twice; pages ignore an id they
   // have already played.
-  async replay(ws, after) {
+  async replay(ws, after, messageMinSats) {
     try {
       const { results } = await this.env.DB.prepare(
         "SELECT seq, id, sats, handle, message, at, milli, verified FROM donations " +
         "WHERE seq > (SELECT seq FROM donations WHERE id = ?) ORDER BY seq LIMIT ?",
       ).bind(after, REPLAY_MAX).all();
-      for (const row of results) ws.send(JSON.stringify(donationMessage(row)));
+      for (const row of results) ws.send(JSON.stringify(donationMessage(atMessageBar(row, messageMinSats))));
     } catch (error) {
       console.error("replay failed:", error.message);
     }
   }
 
-  // The latest donations, every amount, cached across page connects. A payment refreshes the
-  // list, and concurrent connects share one read.
-  async recent({ refresh = false } = {}) {
-    if (this.recentLoading) await this.recentLoading;
-    if (refresh || !this.recentEntries) {
+  // The latest donations, every amount, cached across page connects. Concurrent cold connects
+  // share a read; refreshes may overlap, so only a newer successful read replaces the cache.
+  async recent({ refresh = false, messageMinSats = 0 } = {}) {
+    if (!refresh && this.recentLoading) await this.recentLoading;
+    else if (refresh || !this.recentEntries) {
+      const asked = ++this.recentAsked;
       const loading = (async () => {
         try {
           const { results } = await this.env.DB.prepare(
             "SELECT seq, id, sats, handle, message, at, milli, verified FROM donations ORDER BY seq DESC LIMIT ?",
           ).bind(RECENT_SIZE).all();
-          this.recentEntries = results.map(recentEntry);
+          if (asked > this.recentShown) {
+            this.recentShown = asked;
+            this.recentEntries = results.map(recentEntry);
+          }
         } catch (error) {
-          this.recentEntries = null;
           console.error("reading recent donations failed:", error.message);
         }
       })();
@@ -332,7 +337,8 @@ export class DonationsObject {
       await loading;
       if (this.recentLoading === loading) this.recentLoading = null;
     }
-    return this.recentEntries ? { type: "recent", entries: this.recentEntries } : null;
+    return this.recentEntries ? { type: "recent", entries: messageMinSats
+      ? this.recentEntries.map((entry) => atMessageBar(entry, messageMinSats)) : this.recentEntries } : null;
   }
 
   // The newest line wins: a relay that redials replaces a line that may be half dead.
@@ -420,12 +426,11 @@ export class DonationsObject {
     if (pile !== false) {
       this.broadcast(donationMessage(recorded));
       if (pile) this.broadcast(pile);
-      await this.recent({ refresh: true });
-      if (row.handle) {
-        const board = await this.board({ refresh: true });
-        if (board) this.broadcast(board);
-      }
-      await this.pushTally({ refresh: true });
+      await Promise.all([
+        this.recent({ refresh: true }),
+        row.handle && this.board({ refresh: true }).then((board) => { if (board) this.broadcast(board); }),
+        this.pushTally({ refresh: true }),
+      ]);
     }
     return inserted ? "recorded" : "duplicate";
   }
@@ -860,3 +865,4 @@ const donationMessage = (row) => ({ type: "donation", donation: donationEvent(ro
   seq: row.seq, verified: row.verified === 1 });
 const recentEntry = (row) => ({ ...donationEvent(row), bananas: bananasOf(row.milli ?? null)?.exact ?? 0,
   seq: row.seq, verified: row.verified === 1 });
+const atMessageBar = (row, messageMinSats) => row.sats < messageMinSats && row.message ? { ...row, message: "" } : row;

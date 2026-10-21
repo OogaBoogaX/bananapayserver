@@ -196,7 +196,9 @@ missed. After that:
   donations without recorded GitHub login matches have `verified: false`. On reconnect, the
   usual `after` replay follows this snapshot; the page deduplicates matching invoice ids.
   Recent entries are compact list rows with a numeric banana amount; live and replayed
-  `donation` messages retain the separate OBL event and banana estimate envelope.
+  `donation` messages retain the separate OBL event and banana estimate envelope. Recent and
+  replayed rows recorded under an older, lower message bar have their message blanked when
+  sent if their sats fall below the currently advertised `messageMinSats`.
 - `{ "type": "seen", "id", "sats", "due", "left" }` when BTCPay sees an on-chain payment it
   hasn't yet settled, before the donation itself, which follows once BTCPay settles the
   invoice. `id` is the invoice id the donation will carry, `sats` is everything the invoice

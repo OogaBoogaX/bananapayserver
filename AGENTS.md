@@ -55,10 +55,10 @@ boundary, or the people on either side of it.
   `.env` contents, and no real node pubkeys, channel points or IP addresses — not in code,
   tests, fixtures, examples or commit messages. Fixtures use values that are obviously
   synthetic. Nothing may embed absolute paths, user names or machine names.
-- **Limits are configuration.** The per-donation cap and every other limit live in a
-  deployment's configuration and are never committed, and neither is anything that says what
-  a node holds or who runs it. Describe what a node needs in general terms, never one
-  machine's specifics.
+- **Limits are configuration.** `MIN_SATS` and `MESSAGE_MIN_SATS` have shared public defaults
+  (69 and 1,000) that deployments may override. Deployment-specific limits and secrets are
+  never committed, nor is anything that says what a node holds or who runs it. Describe what
+  a node needs in general terms, never one machine's specifics.
 - **Never test against real funds.** Fixtures, simulators, regtest and signet only.
 - Smallest change that works. No refactors, reformatting or renames the task does not require.
 

@@ -1,5 +1,6 @@
-// The Worker's settings. Deployment limits have no defaults: a missing or malformed limit
-// closes donations. Bitcoin's supply bound is fixed by the protocol. See docs/configuration.md.
+// The Worker's settings. Required deployment limits have no defaults: a missing or malformed
+// one closes donations. MIN_SATS and MESSAGE_MIN_SATS have overridable public defaults.
+// Bitcoin's supply bound is fixed by the protocol. See docs/configuration.md.
 
 import { isNetwork } from "../shared/bolt11.mjs";
 import { readLightningMaxSats } from "../shared/config.mjs";
