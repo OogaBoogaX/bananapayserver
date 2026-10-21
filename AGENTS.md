@@ -57,8 +57,9 @@ boundary, or the people on either side of it.
   synthetic. Nothing may embed absolute paths, user names or machine names.
 - **Limits are configuration.** The per-donation cap and every other limit live in a
   deployment's configuration and are never committed, and neither is anything that says what
-  a node holds or who runs it. Describe what a node needs in general terms, never one
-  machine's specifics.
+  a node holds or who runs it. The only exceptions are the team's public defaults for
+  `MIN_SATS` (69) and `MESSAGE_MIN_SATS` (1,000), which any deployment can override. Describe
+  what a node needs in general terms, never one machine's specifics.
 - **Never test against real funds.** Fixtures, simulators, regtest and signet only.
 - Smallest change that works. No refactors, reformatting or renames the task does not require.
 
@@ -127,8 +128,8 @@ the tool. A footer line is the conventional form:
 
 1. Tests covering your change pass, and you have said which ones.
 2. No new dependency without a written justification, a pinned version and a hash.
-3. No secrets, key material, node addresses, limits, absolute paths or machine names anywhere
-   in the diff.
+3. No secrets, key material, node addresses, limits other than the two public defaults above,
+   absolute paths or machine names anywhere in the diff.
 4. Nothing new listens on a node's machine, and nothing here can reach one.
 5. No part holds a credential it did not hold before.
 6. Donations and node feeds are still apart, and no node's data meets another's.

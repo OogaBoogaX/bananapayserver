@@ -1,5 +1,6 @@
-// The Worker's settings. Deployment limits have no defaults: a missing or malformed limit
-// closes donations. Bitcoin's supply bound is fixed by the protocol. See docs/configuration.md.
+// The Worker's settings. Required deployment limits have no defaults: a missing or malformed
+// one closes donations. MIN_SATS and MESSAGE_MIN_SATS have overridable public defaults.
+// Bitcoin's supply bound is fixed by the protocol. See docs/configuration.md.
 
 import { isNetwork } from "../shared/bolt11.mjs";
 import { readLightningMaxSats } from "../shared/config.mjs";
@@ -25,11 +26,14 @@ export function readLimits(env) {
   // for a fault; and how many sats an on-chain amount may exceed its invoice by.
   const priceJumpMax = positiveInt(env.PRICE_JUMP_MAX);
   const onchainFeeAllowance = wholeNumber(env.ONCHAIN_FEE_ALLOWANCE);
-  const minSats = env.MIN_SATS === undefined ? 1 : positiveInt(env.MIN_SATS);
-  if (!ratePerIp || !noteRatePerIp || !rateGlobal || !socketsPerIp || !minSats) return null;
+  const minSats = env.MIN_SATS === undefined ? 69 : positiveInt(env.MIN_SATS);
+  // The fewest sats a donation needs to carry a message, so a run of tiny donations cannot speak;
+  // 0 lets every donation carry one. The recent list shows every amount.
+  const messageMinSats = env.MESSAGE_MIN_SATS === undefined ? 1_000 : wholeNumber(env.MESSAGE_MIN_SATS);
+  if (!ratePerIp || !noteRatePerIp || !rateGlobal || !socketsPerIp || !minSats || messageMinSats === null) return null;
   if (!lightningMaxSats || minSats > lightningMaxSats) return null;
   if (!priceJumpMax || priceJumpMax < 2 || onchainFeeAllowance === null) return null;
-  return { minSats, maxSats, lightningMaxSats, ratePerIp, noteRatePerIp, rateGlobal, socketsPerIp, priceJumpMax, onchainFeeAllowance };
+  return { minSats, maxSats, lightningMaxSats, messageMinSats, ratePerIp, noteRatePerIp, rateGlobal, socketsPerIp, priceJumpMax, onchainFeeAllowance };
 }
 
 // Settings that are not limits. A missing or unknown network also closes donations.

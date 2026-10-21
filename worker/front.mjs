@@ -50,6 +50,7 @@ async function invoice(request, env, donor, visitor) {
   if (sats < limits.minSats || sats > limits.maxSats) return reply({ error: "amount" }, 400);
   const message = cleanMessage(body.value);
   if (message === null || Object.hasOwn(body.value, "handle") && typeof body.value.handle !== "string") return reply({ error: "invalid" }, 400);
+  if (message && sats < limits.messageMinSats) return reply({ error: "message" }, 400);
   const github = anon || donor === null ? null : { id: donor.id, login: donor.login };
   const handle = Object.hasOwn(body.value, "handle") ? cleanHandle(body.value.handle) : github?.login || "";
   return toObject(env, "/invoice", { sats, handle, message, github, client: visitor });

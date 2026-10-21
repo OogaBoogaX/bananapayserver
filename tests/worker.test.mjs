@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DonationsObject, PAGE_SOCKETS_MAX, REPLAY_MAX, visitorGroup, visitorKey } from "../worker/object.mjs";
+import { DonationsObject, PAGE_SOCKETS_MAX, RECENT_SIZE, REPLAY_MAX, visitorGroup, visitorKey } from "../worker/object.mjs";
 import { until } from "./helpers/cloudflare.mjs";
 import { ADDRESS, BOLT11, INVOICE, bolt11For } from "./helpers/values.mjs";
 import { call, donor, EXPIRES, TOKEN, upgrade, world } from "./helpers/world.mjs";
@@ -41,7 +41,7 @@ test("a payment is recorded once, acknowledged, and pushed to every page", async
   assert.deepEqual(JSON.parse(relay.sent.at(-1)), { type: "ack", invoice: INVOICE, result: "recorded" });
   const donation = { id: INVOICE, sats: 1000, handle: "", message: "bforb the cave", at: w.platform.now() };
   for (const page of pages) {
-    assert.deepEqual(page.messages().filter((m) => m.type === "donation"), [{ type: "donation", donation, bananas: { exact: 1, rounded: 1 } }]);
+    assert.deepEqual(page.messages().filter((m) => m.type === "donation"), [{ type: "donation", donation, bananas: { exact: 1, rounded: 1 }, seq: 1, verified: false }]);
   }
   assert.deepEqual(w.env.DB.db.prepare("SELECT id, sats, handle, message, at FROM donations").all().map((row) => ({ ...row })), [donation]);
   assert.equal(w.env.DB.db.prepare("SELECT method FROM donations").get().method, "lightning", "how it was paid is recorded too");
@@ -67,6 +67,7 @@ test("the request can update display details on the same invoice before settleme
   const [{ donation }] = page.messages().filter((m) => m.type === "donation");
   assert.equal(donation.handle, "someone-else");
   assert.equal(donation.message, "ihii");
+  assert.equal(page.messages().find((m) => m.type === "donation").verified, false, "changing the name removes the GitHub match");
   assert.equal((await w.post("/donations/note", { request: asked.request, message: "too late" })).status, 404);
   const unknown = await w.post("/donations/note", { request: "f".repeat(32), message: "x" });
   assert.equal(unknown.status, 404);
@@ -91,13 +92,13 @@ test("when the line drops, waiting pages hear at once and every page sees donati
   const w = await world({ INVOICE_TIMEOUT_MS: "60000" });
   const relay = await w.connectRelay();
   const page = await w.connectPage();
-  assert.deepEqual(page.messages()[0], { type: "status", open: true, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000 } });
+  assert.deepEqual(page.messages()[0], { type: "status", open: true, network: "regtest", limits: { minSats: 69, maxSats: 2100000000000000, lightningMaxSats: 100000, messageMinSats: 1000 } });
   const pending = w.post("/donations/invoice", { sats: 1000 });
   await until(() => relay.sent.length === 1);
   relay.close(1006, "");
   await w.object.webSocketClose(relay, 1006, "", false);
   assert.equal((await pending).status, 503);
-  assert.deepEqual(page.messages().at(-1), { type: "status", open: false, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000 } });
+  assert.deepEqual(page.messages().at(-1), { type: "status", open: false, network: "regtest", limits: { minSats: 69, maxSats: 2100000000000000, lightningMaxSats: 100000, messageMinSats: 1000 } });
 });
 
 test("an invoice for the wrong amount or network never reaches the donor", async () => {
@@ -130,6 +131,7 @@ test("the Worker checks amounts and bodies before anything reaches the object", 
   const w = await world();
   const cases = [
     [{ sats: 0 }, 400, "amount"],
+    [{ sats: 68 }, 400, "amount"],
     [{ sats: 2_100_000_000_000_001 }, 400, "amount"],
     [{ sats: "1000" }, 400, "invalid"],
     [{ sats: 10.5 }, 400, "invalid"],
@@ -264,7 +266,7 @@ test("a relay that redials replaces its old line", async () => {
   assert.equal(w.object.line(), second);
   const page = await w.connectPage();
   await w.object.webSocketClose(first, 4000, "replaced", true);
-  assert.deepEqual(page.messages().filter((m) => m.type === "status"), [{ type: "status", open: true, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000 } }], "the old line closing doesn't close donations");
+  assert.deepEqual(page.messages().filter((m) => m.type === "status"), [{ type: "status", open: true, network: "regtest", limits: { minSats: 69, maxSats: 2100000000000000, lightningMaxSats: 100000, messageMinSats: 1000 } }], "the old line closing doesn't close donations");
 });
 
 test("rate limits apply per visitor and overall, per minute", async () => {
@@ -330,19 +332,203 @@ test("if recording fails, the payment isn't acknowledged and stays pending", asy
   assert.equal(JSON.parse(relay.sent.at(-1)).result, "recorded");
 });
 
+test("a message rides only a donation of at least the message bar, and the recent list shows every amount", async () => {
+  const w = await world(), relay = await w.connectRelay(), page = await w.connectPage();
+  const refused = await w.post("/donations/invoice", { sats: 69, handle: "quietest", message: "not yet" });
+  assert.equal(refused.status, 400, "a message under the bar is refused before the relay sees it");
+  assert.deepEqual(await refused.json(), { error: "message" });
+  assert.equal(relay.sent.length, 0);
+  const bypass = await w.object.invoice({ sats: 69, handle: "quietest", message: "not yet", client: "visitor-a" });
+  assert.equal(bypass.status, 400, "the object enforces the bar even without the front door");
+  assert.deepEqual(await bypass.json(), { error: "message" });
+  const minimum = await w.invoice(relay, { sats: 69, handle: "quietest" }, () => ({ id: "Minimum69", bolt11: bolt11For(69), expires: EXPIRES }));
+  assert.equal(minimum.response.status, 200, "69 sats is accepted");
+  assert.equal(w.ctx.storage.sql.exec("SELECT message FROM pending WHERE request = ?", minimum.asked.request).one().message, "");
+  await w.relaySays(relay, { type: "paid", invoice: "Minimum69", sats: 69, method: "lightning" });
+  const small = await w.invoice(relay, { sats: 999, handle: "quiet" }, () => ({ id: "Small0001", bolt11: bolt11For(999), expires: EXPIRES }));
+  const stored = () => w.ctx.storage.sql.exec("SELECT message FROM pending WHERE request = ?", small.asked.request).one().message;
+  assert.equal(stored(), "");
+  const refusedNote = await w.post("/donations/note", { request: small.asked.request, message: "still too small", handle: "Changed" });
+  assert.equal(refusedNote.status, 400);
+  assert.deepEqual(await refusedNote.json(), { error: "message" });
+  assert.equal(stored(), "", "a refused note changes nothing");
+  assert.equal(w.ctx.storage.sql.exec("SELECT handle FROM pending WHERE request = ?", small.asked.request).one().handle, "quiet");
+  const bypassNote = w.object.note({ request: small.asked.request, message: "still too small", client: "visitor-a" });
+  assert.equal(bypassNote.status, 400, "the object also refuses a bypassed note");
+  w.ctx.storage.sql.exec("UPDATE pending SET message = ? WHERE request = ?", "saved before the bar", small.asked.request);
+  assert.equal(stored(), "saved before the bar", "a pending invoice from before the bar can still hold a message");
+  await w.relaySays(relay, { type: "paid", invoice: "Small0001", sats: 999, method: "lightning" });
+  assert.equal(w.env.DB.db.prepare("SELECT message FROM donations WHERE id = ?").get("Small0001").message, "", "settlement removes the legacy message in D1");
+  await w.invoice(relay, { sats: 1000, handle: "loud", message: "big enough" });
+  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+  const donations = page.messages().filter((m) => m.type === "donation");
+  assert.deepEqual(donations.map((m) => [m.donation.sats, m.donation.message]), [[69, ""], [999, ""], [1000, "big enough"]]);
+  const joined = await w.connectPage();
+  assert.deepEqual(joined.messages().find((m) => m.type === "recent").entries.map((e) => [e.sats, e.message]), [[1000, "big enough"], [999, ""], [69, ""]], "every amount is listed, the small ones without a message");
+});
+
+test("a frozen receipt waits for valid limits instead of losing its message", async () => {
+  const w = await world(), relay = await w.connectRelay(), page = await w.connectPage();
+  const { asked } = await w.invoice(relay, { sats: 1000, message: "keep this" });
+  await w.relaySays(relay, { type: "seen", invoice: INVOICE, sats: 1000, left: 0 });
+  assert.equal(w.ctx.storage.sql.exec("SELECT price_frozen FROM pending WHERE request = ?", asked.request).one().price_frozen, 1);
+  w.env.MESSAGE_MIN_SATS = "invalid";
+  const before = relay.sent.length;
+  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+  assert.equal(relay.sent.length, before, "no acknowledgement while limits are invalid");
+  assert.equal(w.env.DB.db.prepare("SELECT COUNT(*) AS count FROM donations").get().count, 0);
+  assert.equal(w.ctx.storage.sql.exec("SELECT message FROM pending WHERE request = ?", asked.request).one().message, "keep this");
+  w.env.MESSAGE_MIN_SATS = "1000";
+  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+  assert.equal(JSON.parse(relay.sent.at(-1)).result, "recorded");
+  assert.equal(page.messages().find((m) => m.type === "donation").donation.message, "keep this");
+});
+
 test("a page that reconnects gets what it missed, and no more than the cap", async () => {
   const w = await world();
   const insert = w.env.DB.db.prepare("INSERT INTO donations (id, sats, handle, message, at, method) VALUES (?, ?, '', '', ?, 'lightning')");
-  for (let i = 1; i <= REPLAY_MAX + 5; i++) insert.run(`Donation${String(i).padStart(4, "0")}`, i, i);
+  for (let i = 1; i <= REPLAY_MAX + 5; i++) insert.run(`Donation${String(i).padStart(4, "0")}`, 1000 + i, i);
   const page = await w.connectPage("Donation0002");
   const replayed = page.messages().filter((m) => m.type === "donation").map((m) => m.donation.id);
   assert.equal(replayed.length, REPLAY_MAX);
   assert.equal(replayed[0], "Donation0003");
+  const recent = page.messages().find((m) => m.type === "recent").entries;
+  assert.equal(recent.length, RECENT_SIZE);
+  assert.deepEqual(recent.map((entry) => entry.id), Array.from({ length: RECENT_SIZE }, (_, i) => `Donation${String(REPLAY_MAX + 5 - i).padStart(4, "0")}`));
+  assert.ok(recent.every((entry) => entry.verified === false && entry.bananas === 0));
   const fresh = await w.connectPage("UnknownId1");
   assert.deepEqual(fresh.messages().filter((m) => m.type === "donation"), []);
-  assert.deepEqual(fresh.messages()[0], { type: "status", open: false, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000 } });
+  assert.deepEqual(fresh.messages()[0], { type: "status", open: false, network: "regtest", limits: { minSats: 69, maxSats: 2100000000000000, lightningMaxSats: 100000, messageMinSats: 1000 } });
   const invalid = await w.page.fetch(upgrade("/donations/socket?after=../x", { "X-Client": "visitor-p" }));
   assert.equal(invalid.status, 400);
+});
+
+test("recent donations are read once across page connects and refreshed by a payment", async () => {
+  const w = await world(), relay = await w.connectRelay();
+  const prepare = w.env.DB.prepare;
+  let reads = 0;
+  w.env.DB.prepare = (query) => {
+    if (query.includes("FROM donations ORDER BY seq DESC")) reads++;
+    return prepare.call(w.env.DB, query);
+  };
+  const pages = await Promise.all([w.connectPage(undefined, "visitor-a"), w.connectPage(undefined, "visitor-b")]);
+  assert.equal(reads, 1, "simultaneous page connects share the cold read");
+  assert.deepEqual(pages[0].messages().find((m) => m.type === "recent").entries, []);
+  await w.invoice(relay, { sats: 1000, handle: "fresh" });
+  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+  assert.equal(reads, 2, "a payment refreshes the cache once");
+  const next = await w.connectPage(undefined, "visitor-c");
+  assert.equal(reads, 2, "the next page uses the cached result");
+  assert.deepEqual(next.messages().find((m) => m.type === "recent").entries.map((entry) => entry.id), [INVOICE]);
+  await w.invoice(relay, { sats: 69, handle: "tiny" }, () => ({ id: "Tiny00001", bolt11: bolt11For(69), expires: EXPIRES }));
+  await w.relaySays(relay, { type: "paid", invoice: "Tiny00001", sats: 69, method: "lightning" });
+  const after = await w.connectPage(undefined, "visitor-d");
+  assert.equal(reads, 3, "a tiny payment refreshes the cache too");
+  assert.deepEqual(after.messages().find((m) => m.type === "recent").entries.map((entry) => entry.id), ["Tiny00001", INVOICE], "and is listed");
+  w.env.DB.prepare = prepare;
+});
+
+test("overlapping recent reads keep the newest snapshot and a failed refresh keeps the last good one", async () => {
+  const w = await world();
+  const insert = w.env.DB.db.prepare("INSERT INTO donations (id, sats, handle, message, at, method) VALUES (?, 1000, '', '', 1, 'lightning')");
+  insert.run("Recent0001");
+  assert.deepEqual((await w.object.recent()).entries.map((entry) => entry.id), ["Recent0001"]);
+  const prepare = w.env.DB.prepare;
+  const held = [];
+  w.env.DB.prepare = (query) => {
+    if (!query.includes("FROM donations ORDER BY seq DESC")) return prepare(query);
+    return { bind: (...args) => ({ all: () => {
+      const snapshot = prepare(query).bind(...args).all();
+      let release;
+      const waiting = new Promise((resolve) => { release = () => snapshot.then(resolve); });
+      held.push(release);
+      return waiting;
+    } }) };
+  };
+  const older = w.object.recent({ refresh: true });
+  insert.run("Recent0002");
+  const newer = w.object.recent({ refresh: true });
+  assert.equal(held.length, 2, "both refreshes read without waiting for each other");
+  held[1]();
+  assert.deepEqual((await newer).entries.map((entry) => entry.id), ["Recent0002", "Recent0001"]);
+  held[0]();
+  assert.deepEqual((await older).entries.map((entry) => entry.id), ["Recent0002", "Recent0001"], "the older read cannot replace the newer snapshot");
+  w.env.DB.prepare = (query) => query.includes("FROM donations ORDER BY seq DESC")
+    ? { bind: () => ({ all: async () => { throw new Error("synthetic D1 outage"); } }) }
+    : prepare(query);
+  const log = console.error;
+  try {
+    console.error = () => {};
+    assert.deepEqual((await w.object.recent({ refresh: true })).entries.map((entry) => entry.id), ["Recent0002", "Recent0001"]);
+  } finally {
+    console.error = log;
+    w.env.DB.prepare = prepare;
+  }
+});
+
+test("a paid notice starts the recent, board and tally reads together before acknowledgement", async () => {
+  const w = await world(), relay = await w.connectRelay();
+  await w.invoice(relay, { sats: 1000, handle: "reader" });
+  const prepare = w.env.DB.prepare;
+  let release, started = 0;
+  const waiting = new Promise((resolve) => { release = resolve; });
+  w.env.DB.prepare = (query) => {
+    if (!query.includes("FROM donations ORDER BY seq DESC") && !query.includes("FROM handle_totals") &&
+        !query.includes("FROM tally WHERE") && !query.includes("FROM tally_hours")) return prepare(query);
+    const wrap = (statement) => {
+      const held = (method) => async () => {
+        const result = await statement[method]();
+        started++;
+        await waiting;
+        return result;
+      };
+      return { bind: (...args) => wrap(statement.bind(...args)), all: held("all"), first: held("first") };
+    };
+    return wrap(prepare(query));
+  };
+  const payment = w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+  try {
+    await until(() => started === 5);
+    assert.equal(relay.messages().filter((m) => m.type === "ack").length, 0);
+  } finally {
+    release();
+  }
+  await payment;
+  w.env.DB.prepare = prepare;
+  assert.equal(JSON.parse(relay.sent.at(-1)).result, "recorded");
+});
+
+test("recent and replayed historical messages follow the current message bar", async () => {
+  const w = await world();
+  const insert = w.env.DB.db.prepare("INSERT INTO donations (id, sats, handle, message, at, method) VALUES (?, ?, '', ?, 1, 'lightning')");
+  insert.run("History001", 500, "older message");
+  insert.run("History002", 1500, "newer message");
+  const first = await w.connectPage("History001");
+  assert.deepEqual(first.messages().find((m) => m.type === "recent").entries.map((e) => e.message), ["newer message", ""]);
+  assert.deepEqual(first.messages().filter((m) => m.type === "donation").map((m) => m.donation.message), ["newer message"]);
+  w.env.MESSAGE_MIN_SATS = "2000";
+  const raised = await w.connectPage("History001");
+  assert.deepEqual(raised.messages().find((m) => m.type === "recent").entries.map((e) => e.message), ["", ""], "cached rows obey the new bar");
+  assert.deepEqual(raised.messages().filter((m) => m.type === "donation").map((m) => m.donation.message), [""], "replay obeys the new bar");
+});
+
+test("a recent donation gets a GitHub check only for the signed-in donor's matching final name", async () => {
+  const w = await world(), relay = await w.connectRelay(), page = await w.connectPage();
+  const { asked } = await w.invoice(relay, { sats: 1000, handle: "Ooga-Dev", message: "for the cave" }, undefined, { donor: donor("ooga-dev", 42) });
+  assert.equal((await w.post("/donations/note", { request: asked.request, handle: "other-name" })).status, 204);
+  assert.equal((await w.post("/donations/note", { request: asked.request, handle: "Ooga-Dev" })).status, 204);
+  await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+  const live = page.messages().find((m) => m.type === "donation");
+  assert.equal(live.verified, true);
+  assert.equal(live.donation.handle, "Ooga-Dev");
+  const joined = await w.connectPage();
+  assert.deepEqual(joined.messages().find((m) => m.type === "recent").entries, [{
+    seq: 1, id: INVOICE, sats: 1000, handle: "Ooga-Dev", message: "for the cave", at: w.platform.now(), bananas: 1, verified: true,
+  }]);
+  const guest = await world(), guestRelay = await guest.connectRelay(), guestPage = await guest.connectPage();
+  await guest.invoice(guestRelay, { sats: 1000, handle: "ooga-dev" });
+  await guest.relaySays(guestRelay, { type: "paid", invoice: INVOICE, sats: 1000, method: "lightning" });
+  assert.equal(guestPage.messages().find((m) => m.type === "donation").verified, false, "a matching typed name is not proof of sign-in");
 });
 
 test("a donor who switches gets an on-chain address for the same invoice", async () => {
@@ -519,7 +705,7 @@ test("donations close even when the closing line still reads as open", async () 
   const relay = await w.connectRelay();
   const page = await w.connectPage();
   await w.object.webSocketClose(relay, 1006, "", false);
-  assert.deepEqual(page.messages().at(-1), { type: "status", open: false, network: "regtest", limits: { minSats: 1, maxSats: 2100000000000000, lightningMaxSats: 100000 } });
+  assert.deepEqual(page.messages().at(-1), { type: "status", open: false, network: "regtest", limits: { minSats: 69, maxSats: 2100000000000000, lightningMaxSats: 100000, messageMinSats: 1000 } });
 });
 
 test("a chunked body is cut off at the cap without being read whole", async () => {

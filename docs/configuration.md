@@ -1,9 +1,11 @@
 # Configuration
 
-Every setting the Worker and the relay read. Configured limits cover the Lightning threshold
-and request rates, and they have no defaults: one that is missing or malformed keeps donations closed on
-the Worker and stops the relay. Limits and secrets are set in each deployment and never
-committed. The few settings with defaults are not limits; their defaults are below.
+Every setting the Worker and the relay read. The Lightning threshold and request rates are
+required: one that is missing or malformed keeps donations closed on the Worker and stops
+the relay. Deployment-specific limits and secrets are set in each deployment and never
+committed. The shared public defaults are a 69-sat minimum and 1,000-sat message bar;
+deployment settings can change either value. Deploy OBL's page
+before a Worker that refuses sub-bar messages; [`protocol.md`](protocol.md) says why.
 
 ## The Worker
 
@@ -25,7 +27,8 @@ regtest.
 |---|---|---|
 | `MAX_SATS` | legacy alias | Lightning threshold when `LIGHTNING_MAX_SATS` is absent; no longer an on-chain cap |
 | `LIGHTNING_MAX_SATS` | limit, required unless legacy alias is set | Largest Lightning donation, in sats. Above this, donations remain available on-chain. Advertised to kiosks |
-| `MIN_SATS` | optional | The smallest; 1 when unset, the smallest invoice there is |
+| `MIN_SATS` | optional | The smallest; 69 when unset. Any positive whole sat amount is valid up to the Lightning threshold |
+| `MESSAGE_MIN_SATS` | optional | The fewest sats a donation needs to carry a message; the recent list shows every amount. 1,000 when unset, 0 lets every donation carry one. Advertised to kiosks as `messageMinSats` |
 | `RATE_PER_IP` | limit, required | Per visitor and per minute: invoice requests and on-chain switches together, and separately each of notes and page sockets. An IPv6 visitor counts by its /64. Counts are kept for the minute under a 16-bit hash of the address, never the address, so a visitor shares theirs with the rare other in the same group |
 | `NOTE_RATE_PER_IP` | optional limit | Separate per-visitor note autosave budget per minute. When absent, uses `RATE_PER_IP`; an explicitly empty or invalid value closes donations. Configure this for the site's typing debounce without raising the invoice or page-socket budget |
 | `SOCKETS_PER_IP` | limit, required | Page sockets one visitor may hold open at once. An IPv6 visitor counts by its /48. Visitors are counted in 65,536 groups by a hash of the address, so a visitor shares the limit with the few others in their group, and no address is ever kept |
@@ -53,10 +56,11 @@ Lightning-failure fallback:
 1. Deploy the compatible site, which understands null BOLT11 invoices and receipt estimates.
 2. Let current invoice requests finish, then stop the relay. Keep its state and the Worker's
    pending invoices. Once its line closes, new invoice requests immediately report closed.
-3. With the relay stopped, apply all D1 migrations through 0007 and deploy the compatible
+3. With the relay stopped, apply all D1 migrations through 0008 and deploy the compatible
    Worker. Migrations 0005 and 0006 already applied in an environment must not be rewritten.
-   Keep the minimum at or below both Lightning thresholds and the Worker's threshold at or
-   below the relay's. Set the canonical `LIGHTNING_MAX_SATS` in both deployments; the alias
+   Set the same `MIN_SATS` in the Worker and relay (or leave both unset to use 69), keep it at
+   or below both Lightning thresholds, and keep the Worker's threshold at or below the relay's.
+   Set the canonical `LIGHTNING_MAX_SATS` in both deployments; the alias
    remains available for an existing deployment only when the canonical name is absent.
 4. Upgrade and start the matching relay, retaining its state. Verify its authenticated line
    reconnects and check invoice creation below and above the threshold with synthetic or test
@@ -111,7 +115,7 @@ them.
 | `MAX_SATS` | legacy alias | Lightning threshold when `LIGHTNING_MAX_SATS` is absent; no longer an on-chain cap. The Compose files always pass `LIGHTNING_MAX_SATS`, so a relay run with them never falls back to it |
 | `LIGHTNING_MAX_SATS` | limit, required unless legacy alias is set | The relay's independently enforced Lightning threshold. Above this, create only the on-chain method and never activate Lightning |
 | `RATE_PER_MINUTE` | limit, required | How many invoices and on-chain addresses the relay makes in a minute, whatever the Worker asks. At least the Worker's `RATE_GLOBAL`, so it only ever stops a Worker gone wrong |
-| `MIN_SATS` | optional | 1 when unset |
+| `MIN_SATS` | optional | 69 when unset. Any positive whole sat amount is valid up to the Lightning threshold; match the Worker's value |
 | `WEBHOOK_LISTEN` | optional | Where the webhook listener binds inside the container; `0.0.0.0:8080` when unset. Never publish this port, and never run the relay with host networking, where this would listen on the machine itself |
 | `INVOICE_MINUTES` | optional | How long an invoice stays payable; 15 when unset |
 | `INVOICE_DEADLINE_MS` | optional | How long after an invoice ask the relay aims to answer, in milliseconds; 8000 when unset. Lightning gets whatever time making the invoice left, and if it isn't ready by then, the invoice goes back on-chain only. Keep it under the Worker's `INVOICE_TIMEOUT_MS` (10000 when unset), with room for the answer to cross Tor |
