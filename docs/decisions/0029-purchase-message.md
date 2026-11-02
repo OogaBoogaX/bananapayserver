@@ -14,9 +14,9 @@ category, days, since, items }`, how many of each item sold over the last seven 
 `login` is the buyer's only where the category announces its buyers, as fireworks do;
 otherwise the message names nobody. A category may add fields of its own. Fireworks add
 `launchAt`, a moment on the server's clock, `FIREWORK_LEAD_MS`, 3 seconds by default, after the
-purchase is recorded, or later while an earlier firework still holds its slot; and `slot`,
-which goes round six regions of sky, three neighbouring ones for a show. Both are kept in the
-object's memory. Purchase messages are neither kept nor replayed.
+purchase is recorded, or later while an earlier firework still holds its slot; and `slot`, one
+of six regions of sky, three neighbouring ones for a show: the one its buyer chose, or else the
+next round the sky. The holds and the round are kept in the object's memory. Purchase messages are neither kept nor replayed.
 
 ## Alternatives
 

@@ -44,6 +44,10 @@ test("the stand-in passes purchases on with its test donor, under their own pref
   const mine = await page(env, "/purchases/mine", {}, { headers: DONOR });
   assert.deepEqual(await mine.json(), { items: { firework: { mega: { quantity: 1, sats: 100 } } } });
 
+  const chosen = await buy(w, env, relay, { category: "firework", item: "show", slot: 3 }, { headers: DONOR });
+  assert.equal(chosen.response.status, 200);
+  assert.equal(w.ctx.storage.sql.exec("SELECT options FROM pending").one().options, '{"slot":3}', "a chosen slot goes through as the page sent it");
+
   const nobody = await page(env, "/purchases/buy", { category: "firework", item: "pop" });
   assert.equal(nobody.status, 403, "no donor named is nobody signed in");
   const elsewhere = await page(env, "/purchases/buy", { category: "firework", item: "pop" }, { headers: DONOR, host: "stand-in.example" });
@@ -55,7 +59,7 @@ test("the stand-in passes purchases on with its test donor, under their own pref
   }
   const crossSite = await page(env, "/purchases/buy", { category: "firework", item: "pop" }, { headers: { ...DONOR, "Sec-Fetch-Site": "cross-site" } });
   assert.equal(crossSite.status, 403);
-  assert.equal(relay.sent.filter((text) => JSON.parse(text).type === "invoice").length, 1, "only the first call reached the relay");
+  assert.equal(relay.sent.filter((text) => JSON.parse(text).type === "invoice").length, 2, "only the two purchases reached the relay");
 });
 
 test("the stand-in still passes donations on as before", async () => {

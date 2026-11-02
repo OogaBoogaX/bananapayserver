@@ -5,13 +5,16 @@
 
 import { FIREWORK, FIREWORK_CATEGORY } from "./firework.mjs";
 
-// category → { items: { item: { sats, … } }, buyers, announce, board, counts }:
+// category → { items: { item: { sats, … } }, buyers, announce, board, counts, slots? }:
 // - items, each with its price in sats, and anything else its experience needs;
 // - buyers, who may buy unless the deployment's <CATEGORY>_BUYERS setting says otherwise:
 //   "signed-in", donors signed in on OBL only, or "everyone";
 // - announce, whether every page hears the buyer's login with the purchase;
 // - board, whether signed-in buyers are ranked by the sats they have spent in it;
-// - counts, whether every page hears how many of each item sold in the last seven days.
+// - counts, whether every page hears how many of each item sold in the last seven days;
+// - slots, only for a category whose items fill neighbouring slots, such as fireworks in the
+//   sky's: how many there are. A buyer may then choose the first slot an item fills, and each
+//   item says how many it fills, one unless it says otherwise.
 export const CATALOGUE = {
   [FIREWORK_CATEGORY]: FIREWORK,
 };
@@ -28,6 +31,14 @@ export const NTH_MAX = 999;
 export const BEFORE = ["none", "1", "2-5", "6+"];
 
 export const isNth = (nth) => Number.isSafeInteger(nth) && nth >= 1 && nth <= NTH_MAX;
+
+// Whether a buyer may ask for an item to start at this slot: only in a category with slots, and
+// only where all the item's neighbouring slots fit.
+export const isSlot = (category, item, slot) => {
+  const room = CATALOGUE[category]?.slots;
+  const fills = itemOf(category, item)?.slots ?? 1;
+  return Number.isSafeInteger(room) && Number.isSafeInteger(slot) && slot >= 0 && slot + fills <= room;
+};
 
 // An item on sale, or null.
 export const itemOf = (category, item) =>

@@ -60,7 +60,8 @@ async function bought(w, who, body = {}) {
 }
 
 test("every item in the catalogue fits D1's records and has a whole price", () => {
-  for (const [category, { items, buyers, announce, board, counts }] of Object.entries(CATALOGUE)) {
+  for (const [category, { items, buyers, announce, board, counts, slots }] of Object.entries(CATALOGUE)) {
+    assert.ok(slots === undefined || Number.isSafeInteger(slots) && slots > 0, category);
     assert.match(category, CATEGORY_NAME);
     assert.ok(["signed-in", "everyone"].includes(buyers), category);
     assert.equal(typeof announce, "boolean");
@@ -69,6 +70,7 @@ test("every item in the catalogue fits D1's records and has a whole price", () =
     for (const [item, { sats }] of Object.entries(items)) {
       assert.match(item, ITEM_NAME);
       assert.ok(Number.isSafeInteger(sats) && sats > 0, `${category} ${item}`);
+      if (slots) assert.ok(Number.isSafeInteger(items[item].slots ?? 1) && (items[item].slots ?? 1) <= slots, `${category} ${item} fits its slots`);
     }
   }
   assert.deepEqual(Object.fromEntries(Object.entries(CATALOGUE.firework.items).map(([item, { sats }]) => [item, sats])), PRICES);
@@ -93,8 +95,8 @@ test("a purchase asks the relay for the catalogue's price, the same way a donati
     Object.entries(PRICES).map(([item, sats]) => ({ category: "firework", item, sats, handle: "", message: "", github_id: 4242, github_login: "secret-login" })));
 });
 
-test("the Worker refuses anything not for sale, any other key, a price from the page, or a bad nth or before", async () => {
-  const w = await world();
+test("the Worker refuses anything not for sale, any other key, a price from the page, or a bad slot, nth or before", async () => {
+  const w = await world({ PURCHASE_RATE_PER_IP: "20" });
   const relay = await w.connectRelay();
   const cases = [
     [firework("nuke"), 400, "invalid"],
@@ -111,6 +113,12 @@ test("the Worker refuses anything not for sale, any other key, a price from the 
     [firework("pop", { handle: "ooga", message: "hi" }), 400, "invalid"],
     [firework("pop", { github: { id: 7, login: "forged" } }), 400, "invalid"],
     [firework("pop", { quantity: 2 }), 400, "invalid"],
+    [firework("pop", { slot: 6 }), 400, "invalid"],
+    [firework("pop", { slot: -1 }), 400, "invalid"],
+    [firework("pop", { slot: 1.5 }), 400, "invalid"],
+    [firework("pop", { slot: "1" }), 400, "invalid"],
+    [firework("pop", { slot: null }), 400, "invalid"],
+    [firework("show", { slot: 4 }), 400, "invalid"],
     [firework("pop", { nth: 0 }), 400, "invalid"],
     [firework("pop", { nth: 1000 }), 400, "invalid"],
     [firework("pop", { nth: 1.5 }), 400, "invalid"],
@@ -136,7 +144,8 @@ test("the Worker refuses anything not for sale, any other key, a price from the 
   assert.equal((await w.page.purchase(call("/purchases/buy", firework("pop")), donor(), "")).status, 400, "no visitor");
   assert.equal((await w.page.purchase("{\"category\":\"firework\",\"item\":\"pop\"}", donor(), "visitor-a")).status, 400, "a bare body");
   assert.equal(relay.sent.length, 0, "none of them reached the relay");
-  for (const body of [firework("pop", { nth: 1, before: "none" }), firework("show", { nth: 999, before: "6+" }), firework("bolt", { before: "2-5" }), firework("mega", { nth: 7, before: "1" })]) {
+  for (const body of [firework("pop", { nth: 1, before: "none" }), firework("show", { nth: 999, before: "6+" }), firework("bolt", { before: "2-5" }), firework("mega", { nth: 7, before: "1" }),
+    firework("pop", { slot: 0 }), firework("mega", { slot: 5 }), firework("show", { slot: 3 })]) {
     const { asked, response } = await ask(w, relay, body, { donor: donor() });
     assert.equal(response.status, 200, JSON.stringify(body));
     assert.equal(asked.sats, PRICES[body.item]);
@@ -147,7 +156,7 @@ test("while only signed-in donors may buy, a purchase without one is refused and
   const w = await world();
   const relay = await w.connectRelay();
   const page = await w.connectPage();
-  assert.deepEqual(page.messages()[0].catalogue, { firework: { buyers: "signed-in", prices: PRICES } }, "the stand knows to show Sign in to launch");
+  assert.deepEqual(page.messages()[0].catalogue, { firework: { buyers: "signed-in", prices: PRICES, slots: 6 } }, "the stand knows to show Sign in to launch");
   const refused = await w.post("/purchases/buy", firework("pop"));
   assert.equal(refused.status, 403);
   assert.deepEqual(await refused.json(), { error: "sign-in" });
@@ -162,7 +171,7 @@ test("once everyone may buy, an anonymous purchase and a donation both work, and
   const w = await world({ FIREWORK_BUYERS: "everyone" });
   const relay = await w.connectRelay();
   const page = await w.connectPage();
-  assert.deepEqual(page.messages()[0].catalogue, { firework: { buyers: "everyone", prices: PRICES } });
+  assert.deepEqual(page.messages()[0].catalogue, { firework: { buyers: "everyone", prices: PRICES, slots: 6 } });
   assert.equal((await ask(w, relay, firework("pop", { nth: 1, before: "none" }))).response.status, 200);
   assert.equal((await w.invoice(relay, { sats: 1000 })).response.status, 200);
 });
@@ -207,7 +216,7 @@ test("a paid purchase is recorded apart from donations, announced once to every 
   assert.deepEqual(rows(w, "SELECT * FROM purchases"), [
     { seq: 1, id, sats: 100, at: now, method: "lightning", github_id: 4242, login: "ooga-dev", nth: 2, before: "1" },
   ]);
-  assert.deepEqual(rows(w, "SELECT * FROM purchase_items"), [{ purchase: id, line: 1, category: "firework", item: "mega", quantity: 1, sats: 100 }]);
+  assert.deepEqual(rows(w, "SELECT * FROM purchase_items"), [{ purchase: id, line: 1, category: "firework", item: "mega", quantity: 1, sats: 100, options: null }]);
   assert.deepEqual(rows(w, "SELECT * FROM donations"), [], "no donation is recorded");
   assert.deepEqual(rows(w, "SELECT * FROM handle_totals"), []);
   assert.deepEqual({ ...w.env.DB.db.prepare("SELECT * FROM tally").get() }, tally, "the tally doesn't move");
@@ -239,6 +248,7 @@ test("a new category sells through the same call, record and messages, with noth
     assert.deepEqual(typed(page, "purchaseBoard").map((m) => m.category), ["firework"], "only a category with a board gets one");
     assert.deepEqual(typed(page, "purchaseCounts").map((m) => m.category), ["firework"], "and only one that keeps counts gets them");
     assert.equal((await w.post("/purchases/buy", { category: "costume", item: "banana-suit" })).status, 403, "its own buyers rule");
+    assert.equal((await w.post("/purchases/buy", { category: "costume", item: "banana-suit", slot: 0 }, { donor: donor() })).status, 400, "no slot where the category has none");
     const id = await buy(w, relay, { category: "costume", item: "banana-suit" }, { donor: donor() });
     const now = w.platform.now();
     assert.deepEqual(typed(page, "purchase"), [{ type: "purchase", id, category: "costume", item: "banana-suit", quantity: 1, at: now, login: null }],
@@ -499,6 +509,32 @@ test("every page launches a firework at the lead after settlement, a busy slot w
   const laterPage = await later.connectPage();
   await buy(later, laterRelay, firework("pop"), { donor: donor() });
   assert.equal(typed(laterPage, "purchase")[0].launchAt, later.platform.now() + 5_000);
+});
+
+test("a buyer may choose where a firework bursts: it launches there, waits while it's busy, and leaves the round alone", async () => {
+  const w = await world({ FIREWORK_BUYERS: "everyone", PURCHASE_RATE_PER_IP: "20" });
+  const relay = await w.connectRelay();
+  const page = await w.connectPage();
+  const start = w.platform.now();
+  const launched = async (item, slot) => {
+    const id = await buy(w, relay, firework(item, slot === undefined ? {} : { slot }));
+    const message = typed(page, "purchase").at(-1);
+    assert.equal(message.id, id);
+    return [message.slot, message.launchAt - start];
+  };
+  const { pop, mega } = FIREWORK.items;
+  assert.deepEqual(await launched("pop", 4), [4, LEAD], "the chosen slot, at the lead");
+  assert.deepEqual(await launched("pop"), [0, LEAD], "the round starts where it was");
+  assert.deepEqual(await launched("mega", 4), [4, LEAD + pop.holdMs], "a busy chosen slot waits rather than moves");
+  assert.deepEqual(await launched("show", 3), [3, LEAD + pop.holdMs + mega.holdMs], "a show waits for every slot it fills");
+  assert.deepEqual(await launched("pop"), [1, LEAD], "and the round goes on from where it was");
+  assert.deepEqual(rows(w, "SELECT item, options FROM purchase_items ORDER BY rowid"), [
+    { item: "pop", options: '{"slot":4}' },
+    { item: "pop", options: null },
+    { item: "mega", options: '{"slot":4}' },
+    { item: "show", options: '{"slot":3}' },
+    { item: "pop", options: null },
+  ], "each kept with what was bought");
 });
 
 test("the funnel counts each purchase invoice once as made and once as paid, by item and hour", async (t) => {

@@ -6,7 +6,7 @@
 
 import { invoiceMatches } from "../shared/bolt11.mjs";
 import { donationEvent, MESSAGE_MAX, sanitize } from "../shared/donation.mjs";
-import { BEFORE, CATALOGUE, CATEGORY_NAME, isNth, itemOf, pricesOf, purchaseBoardMessage, purchaseCountsMessage, purchaseMessage } from "../shared/catalogue.mjs";
+import { BEFORE, CATALOGUE, CATEGORY_NAME, isNth, isSlot, itemOf, pricesOf, purchaseBoardMessage, purchaseCountsMessage, purchaseMessage } from "../shared/catalogue.mjs";
 import { FIREWORK, FIREWORK_CATEGORY, SLOTS } from "../shared/firework.mjs";
 import { cleanHandle } from "../shared/handle.mjs";
 import { parseUp } from "../shared/protocol.mjs";
@@ -108,10 +108,11 @@ const MIGRATIONS = [
   ALTER TABLE pending DROP COLUMN previous_price_stale;`,
   `ALTER TABLE pending ADD COLUMN github_login TEXT;`,
   // What is being bought, by category and item, makes a pending request a purchase, with no
-  // handle, message or price, and the coarse counts a page sends beside it once everyone may buy.
-  // See decision 0028.
+  // handle, message or price; the buyer's choices for it, such as a firework's slot of sky; and
+  // the coarse counts a page sends beside it once everyone may buy. See decision 0028.
   `ALTER TABLE pending ADD COLUMN category TEXT;
   ALTER TABLE pending ADD COLUMN item TEXT;
+  ALTER TABLE pending ADD COLUMN options TEXT;
   ALTER TABLE pending ADD COLUMN nth INTEGER;
   ALTER TABLE pending ADD COLUMN before TEXT;`,
 ];
@@ -240,13 +241,14 @@ export class DonationsObject {
   // checked everything; the item and who may buy are checked again, since another Worker in the
   // account could reach this object without the front door. Purchases have rates of their own,
   // so a run of them can't use up the budget that keeps donations open.
-  async purchase({ category, item, nth = null, before = null, github = null, client }) {
+  async purchase({ category, item, slot = null, nth = null, before = null, github = null, client }) {
     const limits = readLimits(this.env);
     const purchases = readPurchases(this.env);
     const { network, invoiceTimeoutMs } = readSettings(this.env);
     if (!limits || !purchases || !network) return closed();
     const forSale = itemOf(category, item);
-    if (!forSale || nth !== null && !isNth(nth) || before !== null && !BEFORE.includes(before) ||
+    if (!forSale || slot !== null && !isSlot(category, item, slot) ||
+        nth !== null && !isNth(nth) || before !== null && !BEFORE.includes(before) ||
         github !== null && !(Number.isSafeInteger(github?.id) && typeof github.login === "string")) {
       return json({ error: "invalid" }, 400);
     }
@@ -263,8 +265,9 @@ export class DonationsObject {
     this.purge();
     const request = this.platform.id();
     this.sql.exec(
-      "INSERT INTO pending (request, sats, handle, message, github_id, github_login, category, item, nth, before, created) VALUES (?, ?, '', '', ?, ?, ?, ?, ?, ?, ?)",
-      request, sats, github?.id ?? null, github?.login ?? null, category, item, nth, before, this.platform.now(),
+      "INSERT INTO pending (request, sats, handle, message, github_id, github_login, category, item, options, nth, before, created) VALUES (?, ?, '', '', ?, ?, ?, ?, ?, ?, ?, ?)",
+      request, sats, github?.id ?? null, github?.login ?? null, category, item, slot === null ? null : JSON.stringify({ slot }),
+      nth, before, this.platform.now(),
     );
     const reply = await this.ask(line, { type: "invoice", request, sats }, invoiceTimeoutMs);
     const invoice = reply?.invoice;
@@ -567,9 +570,9 @@ export class DonationsObject {
         "ON CONFLICT (id) DO NOTHING RETURNING id",
       ).bind(row.invoice, row.sats, this.platform.now(), method, row.github_id, row.github_login, row.nth, row.before),
       db.prepare(
-        "INSERT INTO purchase_items (purchase, line, category, item, quantity, sats) VALUES (?, 1, ?, ?, 1, ?) " +
+        "INSERT INTO purchase_items (purchase, line, category, item, quantity, sats, options) VALUES (?, 1, ?, ?, 1, ?, ?) " +
         "ON CONFLICT (purchase, line) DO NOTHING",
-      ).bind(row.invoice, row.category, row.item, row.sats),
+      ).bind(row.invoice, row.category, row.item, row.sats, row.options),
     ]);
     // With no bananas, finishing it adds nothing to the pile.
     const first = this.finish({ id: row.invoice, milli: null, at: this.platform.now() }) !== false;
@@ -578,7 +581,8 @@ export class DonationsObject {
       const sold = Object.hasOwn(CATALOGUE, row.category) ? CATALOGUE[row.category] : null;
       const at = this.platform.now();
       const login = sold?.announce ? row.github_login : null;
-      const launch = row.category === FIREWORK_CATEGORY && itemOf(row.category, row.item) ? this.launch(row.item, at) : {};
+      const launch = row.category === FIREWORK_CATEGORY && itemOf(row.category, row.item)
+        ? this.launch(row.item, at, chosenSlot(row)) : {};
       this.broadcast(purchaseMessage({ id: row.invoice, category: row.category, item: row.item, at, login }, launch));
       const [board, counts] = await Promise.all([
         sold?.board && row.github_id !== null ? this.purchaseBoard(row.category, { refresh: true }) : null,
@@ -590,17 +594,21 @@ export class DonationsObject {
     return purchase.results.length ? "recorded" : "duplicate";
   }
 
-  // Where and when every page launches a firework: the next slot round the sky, at the lead
-  // after now, or later while an earlier firework still holds a slot it needs. A show's slots
-  // are neighbours, so it starts again from the first rather than wrap round. Kept in memory: by
-  // the time the object sleeps, nothing is left in the sky.
-  launch(item, now) {
+  // Where and when every page launches a firework: the slot its buyer chose, or else the next
+  // round the sky, at the lead after now, or later while an earlier firework still holds a slot
+  // it needs. A chosen slot waits rather than moves, and leaves the round where it was. A show's
+  // slots are neighbours, so the round starts again from the first rather than wrap round. Kept
+  // in memory: by the time the object sleeps, nothing is left in the sky.
+  launch(item, now, chosen = null) {
     const { slots, holdMs } = FIREWORK.items[item];
-    if (this.nextSlot + slots > SLOTS) this.nextSlot = 0;
-    const slot = this.nextSlot;
+    let slot = chosen;
+    if (slot === null) {
+      if (this.nextSlot + slots > SLOTS) this.nextSlot = 0;
+      slot = this.nextSlot;
+      this.nextSlot = (slot + slots) % SLOTS;
+    }
     const launchAt = Math.max(now + readSettings(this.env).fireworkLeadMs, ...this.held.slice(slot, slot + slots));
     this.held.fill(launchAt + holdMs, slot, slot + slots);
-    this.nextSlot = (slot + slots) % SLOTS;
     return { slot, launchAt };
   }
 
@@ -1078,11 +1086,19 @@ const json = (body, status = 200) =>
 const closed = () => json({ error: "closed" }, 503);
 
 // What a page is told is for sale: each category of the catalogue that is open, who may buy in
-// it, and its prices. A category whose buyers setting is unknown is closed, and left out.
+// it, its prices, and how many slots a buyer may choose from where it has them. A category whose
+// buyers setting is unknown is closed, and left out.
 const catalogueOf = (env) => Object.fromEntries(Object.keys(CATALOGUE).flatMap((category) => {
   const buyers = readBuyers(env, category);
-  return buyers ? [[category, { buyers, prices: pricesOf(category) }]] : [];
+  const { slots } = CATALOGUE[category];
+  return buyers ? [[category, { buyers, prices: pricesOf(category), ...(slots ? { slots } : {}) }]] : [];
 }));
+
+// The slot a pending purchase's buyer chose, if it is still one the catalogue allows.
+const chosenSlot = ({ category, item, options }) => {
+  const slot = options ? JSON.parse(options).slot ?? null : null;
+  return slot !== null && isSlot(category, item, slot) ? slot : null;
+};
 const busy = () => json({ error: "busy" }, 429);
 
 // What a page shows of a rate: the price and whether it's stale, not when it was fetched. A

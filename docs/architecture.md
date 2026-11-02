@@ -262,8 +262,9 @@ handling of `purchase` in OBL: no new call, table, migration or relay change. Se
 a slot of sky and `launchAt`, a moment on the server's clock: 3 seconds after the purchase is
 recorded by default, or later while an earlier firework still holds the slot. Each page
 converts it with its own estimate of the server's clock, and counts down through the lead.
-Slots go round six regions of the sky, kept in memory: by the time the object sleeps, nothing is
-left in the sky to clash with. This is the one thing the object does for a category once it is
+The buyer may choose the slot, one of six regions across the sky; it is kept with the purchase,
+and a busy one waits rather than moves. Otherwise slots go round the sky. Both are kept in
+memory: by the time the object sleeps, nothing is left in the sky to clash with. This is the one thing the object does for a category once it is
 paid; most categories need nothing.
 
 **Who bought it, and what is kept.**

@@ -95,6 +95,10 @@ test("D1 records any kind of purchase apart from donations, and counts each reco
       [["Purchase02", 0, "firework", "pop", 1, 10], "lines count from 1"],
     ]) assert.throws(() => line.run(...args), /CHECK constraint failed/, why);
     assert.throws(() => line.run("NeverPaid1", 1, "firework", "pop", 1, 10), /FOREIGN KEY constraint failed/, "an item belongs to a recorded purchase");
+    const chose = db.prepare("INSERT INTO purchase_items (purchase, line, category, item, quantity, sats, options) VALUES ('Purchase02', 2, 'firework', 'pop', 1, 10, ?)");
+    chose.run('{"slot":4}');
+    assert.equal(db.prepare("SELECT options ->> '$.slot' AS slot FROM purchase_items WHERE purchase = 'Purchase02' AND line = 2").get().slot, 4, "what the buyer chose, as JSON");
+    assert.throws(() => db.prepare("INSERT INTO purchase_items (purchase, line, category, item, quantity, sats, options) VALUES ('Purchase02', 3, 'firework', 'pop', 1, 10, 'slot 4')").run(), /CHECK constraint failed/);
     assert.throws(() => purchase.run("Purchase05", 0, hour, null, null, null, null), /CHECK constraint failed/);
   } finally {
     db.close();
@@ -142,7 +146,7 @@ test("schema 6 upgrade preserves all frozen snapshots through restart, detection
   const ctx = schemaSix(), sql = ctx.storage.sql, platform = fakePlatform();
   const env = { ...ENV, DB: fakeD1() };
   const pending = () => rows(sql.exec("SELECT * FROM pending ORDER BY invoice").toArray());
-  const expected = pending().map(row => ({ ...row, price_stale: row.pricing === "invoice" ? null : row.price_stale, github_login: null, category: null, item: null, nth: null, before: null }));
+  const expected = pending().map(row => ({ ...row, price_stale: row.pricing === "invoice" ? null : row.price_stale, github_login: null, category: null, item: null, options: null, nth: null, before: null }));
   new DonationsObject(ctx, env, platform);
   assert.deepEqual(pending(), expected);
   assert.equal(sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 9);
@@ -182,5 +186,5 @@ test("a failed schema 7 upgrade rolls back its column changes and can be retried
   sql.exec = exec;
   new DonationsObject(ctx, env, platform);
   assert.equal(sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 9);
-  assert.deepEqual(rows(sql.exec("SELECT * FROM pending ORDER BY invoice").toArray()), before.map(row => ({ ...row, price_stale: row.pricing === "invoice" ? null : row.price_stale, github_login: null, category: null, item: null, nth: null, before: null })));
+  assert.deepEqual(rows(sql.exec("SELECT * FROM pending ORDER BY invoice").toArray()), before.map(row => ({ ...row, price_stale: row.pricing === "invoice" ? null : row.price_stale, github_login: null, category: null, item: null, options: null, nth: null, before: null })));
 });

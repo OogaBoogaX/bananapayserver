@@ -51,6 +51,7 @@ The pile has <strong id="pile">?</strong> bananas.</p>
     it. It goes as the test donor named above, or as nobody when both are empty; "Give
     anonymously" is for donations only.</p>
   <label>Item <select id="item" disabled></select></label>
+  <label id="slot-choice" hidden>Slot <select id="slot"></select></label>
   <button id="buy" type="button" disabled>Get invoice</button>
   <button id="mine" type="button">What I've bought</button>
   <p id="bought"></p>
@@ -73,7 +74,7 @@ The pile has <strong id="pile">?</strong> bananas.</p>
 const $ = (id) => document.getElementById(id);
 const seen = new Set();
 let request = null, invoiceId = null, purchaseId = null, lastId = null, socket = null, retryMs = 1000;
-let pile = null;
+let pile = null, catalogue = {};
 
 const log = (line) => { $("log").textContent = `${new Date().toLocaleTimeString()}  ${line}\n${$("log").textContent}`; };
 const show = (text) => { $("result").textContent = text; };
@@ -130,7 +131,9 @@ $("onchain").addEventListener("click", async () => {
 
 $("buy").addEventListener("click", async () => {
   const [category, item] = $("item").value.split("/");
-  const { status, data, ms } = await call("POST", "/purchases/buy", { category, item });
+  const body = { category, item };
+  if (!$("slot-choice").hidden && $("slot").value !== "") body.slot = Number($("slot").value);
+  const { status, data, ms } = await call("POST", "/purchases/buy", body);
   if (status !== 200) return tell(`${status} ${data?.error ?? ""} after ${ms} ms`);
   purchaseId = data.invoice.id;
   $("buy-pay").value = data.invoice.bolt11;
@@ -145,9 +148,24 @@ $("mine").addEventListener("click", async () => {
   tell(lines.length ? `Bought: ${lines.join("; ")}` : "Nothing bought yet, or no donor named");
 });
 
+// Where a buyer may ask for the chosen item to go, in a category with slots, such as the sky's for
+// fireworks: any, or one of them. This server refuses a slot the item doesn't fit from.
+function showSlots() {
+  const slots = catalogue[$("item").value.split("/")[0]]?.slots;
+  $("slot-choice").hidden = !slots;
+  if (!slots) return;
+  const any = new Option("Any, round the sky", "");
+  const chosen = $("slot").value;
+  $("slot").replaceChildren(any, ...Array.from({ length: slots }, (_, slot) => new Option(`${slot}`, `${slot}`)));
+  $("slot").value = [...$("slot").options].some((option) => option.value === chosen) ? chosen : "";
+}
+
+$("item").addEventListener("change", showSlots);
+
 // What is for sale, from status: each open category, who may buy, and its prices.
-function showCatalogue(catalogue) {
-  const options = Object.entries(catalogue ?? {}).flatMap(([category, { buyers, prices }]) =>
+function showCatalogue(open) {
+  catalogue = open ?? {};
+  const options = Object.entries(catalogue).flatMap(([category, { buyers, prices }]) =>
     Object.entries(prices).map(([item, sats]) => {
       const option = document.createElement("option");
       option.value = `${category}/${item}`;
@@ -158,8 +176,9 @@ function showCatalogue(catalogue) {
   $("item").replaceChildren(...options);
   if (options.some((option) => option.value === chosen)) $("item").value = chosen;
   $("item").disabled = $("buy").disabled = !options.length;
-  $("selling").textContent = catalogue ? (options.length ? "open" : "open, with nothing for sale") : "closed";
-  $("selling").className = catalogue && options.length ? "open" : "closed";
+  $("selling").textContent = open ? (options.length ? "open" : "open, with nothing for sale") : "closed";
+  $("selling").className = open && options.length ? "open" : "closed";
+  showSlots();
 }
 
 function showPurchaseBoard({ category, entries }) {

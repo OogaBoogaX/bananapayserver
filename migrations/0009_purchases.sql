@@ -30,7 +30,8 @@ CREATE TABLE purchases (
 CREATE INDEX purchases_github_id ON purchases (github_id);
 
 -- What each purchase bought. sats is what the line cost when it was bought, so a later change of
--- price leaves the record as it was. Lines are numbered from 1 within their purchase.
+-- price leaves the record as it was, and options what the buyer chose for it, as JSON, such as
+-- a firework's slot of sky, or null. Lines are numbered from 1 within their purchase.
 CREATE TABLE purchase_items (
   purchase TEXT NOT NULL REFERENCES purchases (id),
   line INTEGER NOT NULL CHECK (line > 0),
@@ -38,6 +39,7 @@ CREATE TABLE purchase_items (
   item TEXT NOT NULL CHECK (length(item) BETWEEN 1 AND 64 AND item NOT GLOB '*[^a-z0-9-]*'),
   quantity INTEGER NOT NULL CHECK (quantity > 0),
   sats INTEGER NOT NULL CHECK (sats >= 0),
+  options TEXT CHECK (options IS NULL OR json_valid(options)),
   PRIMARY KEY (purchase, line)
 );
 CREATE INDEX purchase_items_item ON purchase_items (category, item);

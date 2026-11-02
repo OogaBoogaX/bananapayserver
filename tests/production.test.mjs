@@ -48,7 +48,7 @@ test("production returns a mainnet invoice and advertises mainnet through the pa
   const w = await world(production.vars);
   const relay = await w.connectRelay();
   const page = await w.connectPage();
-  assert.deepEqual(page.messages()[0], { type: "status", open: true, network: "mainnet", limits: { minSats: 69, maxSats: 2100000000000000, lightningMaxSats: 100000, messageMinSats: 1000 }, catalogue: { firework: { buyers: "signed-in", prices: { pop: 10, bolt: 69, mega: 100, show: 300 } } } });
+  assert.deepEqual(page.messages()[0], { type: "status", open: true, network: "mainnet", limits: { minSats: 69, maxSats: 2100000000000000, lightningMaxSats: 100000, messageMinSats: 1000 }, catalogue: { firework: { buyers: "signed-in", prices: { pop: 10, bolt: 69, mega: 100, show: 300 }, slots: 6 } } });
   const { response } = await w.invoice(relay, { sats: 1000 }, () => invoice());
   assert.equal(response.status, 200);
   assert.deepEqual((await response.json()).invoice, invoice());

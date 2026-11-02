@@ -184,7 +184,7 @@ network fee. Build the payment URI from these two. There is no BTCPay link.
 ### `POST /purchases/buy`
 
 ```json
-{ "category": "firework", "item": "mega", "nth": 2, "before": "1" }
+{ "category": "firework", "item": "mega", "slot": 2, "nth": 2, "before": "1" }
 ```
 
 Something bought, from any OBL experience that sells: a purchase, not a donation. It makes no
@@ -197,6 +197,13 @@ most 64; messages use these names as they are. The page never sends
 sats, and any other key is refused as `invalid`; so is anything not in the catalogue.
 `MIN_SATS` and `messageMinSats` are donation limits and don't apply. A purchase has no handle
 and no message, and is always one of its item.
+
+`slot` is optional, and only for a category with slots, which `status.catalogue` advertises
+with `slots`: fireworks have 6 regions of sky, numbered 0 to 5 from left to right across the
+arc over the Timechain Sphere as seen from the island. It is the first slot the item fills:
+0 to 5 for a Pop, Bolt or Mega, and 0 to 3 for a show, which fills `slot`, `slot + 1` and
+`slot + 2`. Anything else, or a slot for a category without slots, is `invalid`. It is kept
+with the purchase. Without it, the server picks the slot.
 
 `nth` and `before` are optional, coarse and identify nobody. `nth` is how many things this
 page load has bought, counting this one, an integer from 1 to 999. `before` is how many this
@@ -254,9 +261,11 @@ counts, and the tally, then anything it missed. After that:
   `note`, and settlement strips one held by an older pending invoice, so tiny donations cannot speak. `maxSats` is the fixed Bitcoin supply bound, not an application
   cap. Kiosks warn about on-chain-only amounts before Continue and validate Bitcoin amounts. Legacy
   clients may ignore these extra fields. It also has
-  `catalogue: { "firework": { "buyers": "signed-in", "prices": { "pop": 10, "bolt": 69, "mega": 100, "show": 300 } } }`:
+  `catalogue: { "firework": { "buyers": "signed-in", "prices": { "pop": 10, "bolt": 69, "mega": 100, "show": 300 }, "slots": 6 } }`:
   each category open for sale, who may buy in it, `signed-in` or `everyone`, and the server's
   price for each item in sats, so an experience shows those prices or "Sign in to buy". A
+  category whose buyers may choose where an item goes also has `slots`, how many there are;
+  send `slot` to `/purchases/buy` only when it is there, so an older server is never sent one. A
   category closed by its buyers setting is left out, and `catalogue` is null while purchases
   are closed by configuration; donations may still be open.
 - `{ "type": "donation", "donation": { "id", "sats", "handle", "message", "at" }, "bananas": { "exact", "rounded" }, "seq": 12, "verified": true }`
@@ -293,8 +302,10 @@ counts, and the tally, then anything it missed. After that:
     `FIREWORK_LEAD_MS`, 3,000 by default, or later while an earlier firework still holds a
     slot it needs. A page converts it with its estimate of the server's clock, which `at`
     refines. `id` also seeds the burst, so every page draws the same one.
-  - `slot`, which of six regions of sky, 0 to 5, it bursts in. A `show` fills `slot`,
-    `slot + 1` and `slot + 2`, and never starts past slot 3. A slot is held for 4 s after a
+  - `slot`, which of six regions of sky, 0 to 5, it bursts in: the one its buyer chose, or
+    else the next round the sky. A chosen slot that is busy waits rather than moves, and
+    leaves the round where it was. A `show` fills `slot`, `slot + 1` and `slot + 2`, and never
+    starts past slot 3. A slot is held for 4 s after a
     Pop's launch, 5 s after a Bolt's, 7 s after a Mega's and 12 s after a show's; a page fits
     each item inside its hold.
 - `{ "type": "purchaseBoard", "category": "firework", "entries": [{ "login": "ooga-dev", "quantity": 4, "sats": 189 }] }`
