@@ -6,9 +6,11 @@
 
 import { invoiceMatches } from "../shared/bolt11.mjs";
 import { donationEvent, MESSAGE_MAX, sanitize } from "../shared/donation.mjs";
+import { BEFORE, CATALOGUE, CATEGORY_NAME, isNth, itemOf, pricesOf, purchaseBoardMessage, purchaseMessage } from "../shared/catalogue.mjs";
+import { FIREWORK, FIREWORK_CATEGORY, SLOTS } from "../shared/firework.mjs";
 import { cleanHandle } from "../shared/handle.mjs";
 import { parseUp } from "../shared/protocol.mjs";
-import { readLimits, readSettings } from "./config.mjs";
+import { readBuyers, readLimits, readPurchases, readSettings } from "./config.mjs";
 import { relayAuthorized } from "./relay-token.mjs";
 import { BANANA_CENTS, bananasOf, fetchPrice, milliBananas, rateOf } from "./price.mjs";
 
@@ -17,6 +19,9 @@ export const REPLAY_MAX = 50;
 
 // How many donation handles each leaderboard shows.
 export const BOARD_SIZE = 20;
+
+// How many buyers a category's leaderboard shows, such as the fireworks stand's plaque.
+export const PURCHASE_BOARD_SIZE = 10;
 
 // The newest donations sent to a page when it joins.
 export const RECENT_SIZE = 10;
@@ -102,6 +107,13 @@ const MIGRATIONS = [
   UPDATE pending SET price_stale = CASE WHEN pricing = 'invoice' THEN NULL ELSE previous_price_stale END;
   ALTER TABLE pending DROP COLUMN previous_price_stale;`,
   `ALTER TABLE pending ADD COLUMN github_login TEXT;`,
+  // What is being bought, by category and item, makes a pending request a purchase, with no
+  // handle, message or price, and the coarse counts a page sends beside it once everyone may buy.
+  // See decision 0028.
+  `ALTER TABLE pending ADD COLUMN category TEXT;
+  ALTER TABLE pending ADD COLUMN item TEXT;
+  ALTER TABLE pending ADD COLUMN nth INTEGER;
+  ALTER TABLE pending ADD COLUMN before TEXT;`,
 ];
 
 export class DonationsObject {
@@ -128,6 +140,11 @@ export class DonationsObject {
     this.rateSending = null;
     this.refreshing = null;
     this.receiving = new Map();
+    // Each category's leaderboard, as purchaseBoard() keeps it.
+    this.purchaseBoards = new Map();
+    // The next slot of sky to hand out for a firework, and until when each slot is held.
+    this.nextSlot = 0;
+    this.held = Array(SLOTS).fill(0);
   }
 
   migrate() {
@@ -153,6 +170,10 @@ export class DonationsObject {
         return this.note(await request.json());
       case "/onchain":
         return this.onchain(await request.json());
+      case "/purchase":
+        return this.purchase(await request.json());
+      case "/purchases":
+        return this.purchases(await request.json());
       case "/page":
         return this.page(request, url);
       case "/relay":
@@ -212,6 +233,89 @@ export class DonationsObject {
     });
   }
 
+  // Something bought: an ordinary Lightning invoice for the catalogue's price, down the same line
+  // as a donation's, with no handle, message or price quote, so nothing is looked up while the
+  // relay makes it. github is the signed-in buyer, { id, login }, or null. The front door has
+  // checked everything; the item and who may buy are checked again, since another Worker in the
+  // account could reach this object without the front door. Purchases have rates of their own,
+  // so a run of them can't use up the budget that keeps donations open.
+  async purchase({ category, item, nth = null, before = null, github = null, client }) {
+    const limits = readLimits(this.env);
+    const purchases = readPurchases(this.env);
+    const { network, invoiceTimeoutMs } = readSettings(this.env);
+    if (!limits || !purchases || !network) return closed();
+    const forSale = itemOf(category, item);
+    if (!forSale || nth !== null && !isNth(nth) || before !== null && !BEFORE.includes(before) ||
+        github !== null && !(Number.isSafeInteger(github?.id) && typeof github.login === "string")) {
+      return json({ error: "invalid" }, 400);
+    }
+    const buyers = readBuyers(this.env, category);
+    if (!buyers) return closed();
+    if (github === null && buyers === "signed-in") return json({ error: "sign-in" }, 403);
+    const { sats } = forSale;
+    // Lightning only: nothing is sold on-chain.
+    if (sats > limits.lightningMaxSats) return closed();
+    if (!this.allow("purchase", client, purchases)) return busy();
+    const line = this.line();
+    if (!line) return closed();
+
+    this.purge();
+    const request = this.platform.id();
+    this.sql.exec(
+      "INSERT INTO pending (request, sats, handle, message, github_id, github_login, category, item, nth, before, created) VALUES (?, ?, '', '', ?, ?, ?, ?, ?, ?, ?)",
+      request, sats, github?.id ?? null, github?.login ?? null, category, item, nth, before, this.platform.now(),
+    );
+    const reply = await this.ask(line, { type: "invoice", request, sats }, invoiceTimeoutMs);
+    const invoice = reply?.invoice;
+    if (!invoice?.bolt11 || !invoiceMatches(invoice.bolt11, network, sats) || !this.attach(request, invoice, null, null)) {
+      this.sql.exec("DELETE FROM pending WHERE request = ?", request);
+      // The relay keeps a minimum of its own, which no price in the catalogue may be under.
+      if (reply?.error === "cap") console.error(`purchase: the relay refused ${sats} sats for ${category} ${item}; its MIN_SATS is above the price`);
+      return closed();
+    }
+    this.ctx.waitUntil(this.countInvoiceLine(category, item));
+    return json({
+      request,
+      invoice: { id: invoice.id, bolt11: invoice.bolt11, expires: invoice.expires },
+      lightning: "available",
+    });
+  }
+
+  // Each line of a purchase invoice made, by item and UTC hour, for the funnel; D1 counts the
+  // paid ones as it records them. It never holds up the buyer, and a count that can't be written
+  // is lost.
+  async countInvoiceLine(category, item) {
+    const now = this.platform.now();
+    try {
+      await this.env.DB.prepare(
+        "INSERT INTO purchase_funnel (hour, category, item, created, paid) VALUES (?, ?, ?, 1, 0) " +
+        "ON CONFLICT (hour, category, item) DO UPDATE SET created = created + 1",
+      ).bind(now - (now % HOUR), category, item).run();
+    } catch (error) {
+      console.error("counting a purchase invoice failed:", error.message);
+    }
+  }
+
+  // What a signed-in donor has bought, by category and item, in every category or in one.
+  async purchases({ github, category = null }) {
+    if (!Number.isSafeInteger(github?.id) || category !== null && !(typeof category === "string" && CATEGORY_NAME.test(category))) {
+      return json({ error: "invalid" }, 400);
+    }
+    let rows;
+    try {
+      ({ results: rows } = await this.env.DB.prepare(
+        "SELECT category, item, quantity, sats FROM purchase_totals WHERE github_id = ? AND category = coalesce(?, category) " +
+        "ORDER BY category, item",
+      ).bind(github.id, category).all());
+    } catch (error) {
+      console.error("reading a donor's purchases failed:", error.message);
+      return closed();
+    }
+    const items = {};
+    for (const row of rows) (items[row.category] ??= {})[row.item] = { quantity: row.quantity, sats: row.sats };
+    return json({ items });
+  }
+
   // Records which invoice answers a request, and its estimated price. False if the relay
   // reused an invoice id.
   attach(request, { id, expires }, price, milli) {
@@ -228,20 +332,20 @@ export class DonationsObject {
 
   // The request capability may update display text until settlement starts. Account identity,
   // invoice, amount and rate stay fixed. A handle-only update preserves the existing message, and a
-  // donation under the message bar refuses a new nonempty message.
+  // donation under the message bar refuses a new nonempty message. A purchase has neither.
   note({ request, handle, message, client }) {
     const limits = readLimits(this.env);
     if (!limits) return closed();
     if (!this.allow("note", client, limits)) return busy();
     const clean = message === undefined ? undefined : sanitize(message, MESSAGE_MAX);
     if (clean) {
-      const [row] = this.sql.exec("SELECT sats FROM pending WHERE request = ? AND settling = 0", request).toArray();
+      const [row] = this.sql.exec("SELECT sats FROM pending WHERE request = ? AND settling = 0 AND category IS NULL", request).toArray();
       if (!row) return json({ error: "unknown" }, 404);
       if (row.sats < limits.messageMinSats) return json({ error: "message" }, 400);
     }
     const updated = this.sql.exec(
       "UPDATE pending SET handle = coalesce(?, handle), message = coalesce(?, message) " +
-      "WHERE request = ? AND settling = 0 RETURNING request",
+      "WHERE request = ? AND settling = 0 AND category IS NULL RETURNING request",
       handle === undefined ? null : cleanHandle(handle), clean === undefined ? null : clean, request,
     ).toArray();
     return updated.length ? new Response(null, { status: 204 }) : json({ error: "unknown" }, 404);
@@ -253,10 +357,12 @@ export class DonationsObject {
     if (!limits || !network) return closed();
     if (!this.allow("work", client, limits)) return busy();
     const [row] = this.sql.exec(
-      "SELECT sats, invoice, expires FROM pending WHERE request = ? AND invoice IS NOT NULL",
+      "SELECT sats, invoice, expires, category FROM pending WHERE request = ? AND invoice IS NOT NULL",
       request,
     ).toArray();
     if (!row) return json({ error: "unknown" }, 404);
+    // Purchases are Lightning only.
+    if (row.category !== null) return json({ error: "invalid" }, 400);
     if (row.expires * 1000 <= this.platform.now()) return json({ error: "expired" }, 410);
     const line = this.line();
     if (!line) return closed();
@@ -281,8 +387,10 @@ export class DonationsObject {
     this.ctx.acceptWebSocket(server, ["page", group]);
     server.send(JSON.stringify(this.statusMessage(this.line() !== null)));
     server.send(JSON.stringify(this.pileMessage(this.platform.now())));
-    const board = await this.board();
+    const ranked = Object.keys(CATALOGUE).filter((category) => CATALOGUE[category].board);
+    const [board, ...purchaseBoards] = await Promise.all([this.board(), ...ranked.map((category) => this.purchaseBoard(category))]);
     if (board) server.send(JSON.stringify(board));
+    for (const purchaseBoard of purchaseBoards) if (purchaseBoard) server.send(JSON.stringify(purchaseBoard));
     const tally = await this.tally();
     if (tally) {
       server.send(JSON.stringify(tally));
@@ -392,18 +500,13 @@ export class DonationsObject {
       "SELECT * FROM pending WHERE invoice = ?",
       invoice,
     ).toArray();
-    if (!row) {
-      const known = await this.env.DB.prepare("SELECT 1 FROM donations WHERE id = ?").bind(invoice).first();
-      return known ? "duplicate" : "unknown";
-    }
+    if (!row) return await this.known(invoice) ? "duplicate" : "unknown";
     if (row.sats !== sats) return "rejected";
+    if (row.category !== null) return this.purchased(row, method);
     this.sql.exec("UPDATE pending SET settling = 1 WHERE request = ?", row.request);
     row = await this.freezePrice(invoice);
     // Another delivery may have completed while this one was taking the price.
-    if (!row) {
-      const known = await this.env.DB.prepare("SELECT 1 FROM donations WHERE id = ?").bind(invoice).first();
-      return known ? "duplicate" : "unknown";
-    }
+    if (!row) return await this.known(invoice) ? "duplicate" : "unknown";
     const limits = readLimits(this.env);
     if (!limits) throw new Error("settlement requires valid limits");
     const message = row.sats >= limits.messageMinSats ? row.message : "";
@@ -435,10 +538,68 @@ export class DonationsObject {
     return inserted ? "recorded" : "duplicate";
   }
 
+  // Whether D1 has this invoice, as a donation or a purchase.
+  async known(invoice) {
+    return !!await this.env.DB.prepare(
+      "SELECT 1 FROM donations WHERE id = ? UNION ALL SELECT 1 FROM purchases WHERE id = ?",
+    ).bind(invoice, invoice).first();
+  }
+
+  // A payment for something bought, recorded in D1's purchases with what it bought, and never as
+  // a donation: no price is taken and no bananas made, and the pile, the board and the tally stay
+  // as they are. The purchase and its item go in together or not at all, and D1 ignores a repeat
+  // by invoice id; the finished mark lets the pages hear of it once. Every page hears what was
+  // bought, so the buyer's page finds its own invoice id; the buyer's login only where the
+  // category announces it, and the category's leaderboard where it has one and the buyer was
+  // signed in. A category no longer in the catalogue is still recorded.
+  async purchased(row, method) {
+    const db = this.env.DB;
+    const [purchase] = await db.batch([
+      db.prepare(
+        "INSERT INTO purchases (id, sats, at, method, github_id, login, nth, before) VALUES (?, ?, ?, ?, ?, ?, ?, ?) " +
+        "ON CONFLICT (id) DO NOTHING RETURNING id",
+      ).bind(row.invoice, row.sats, this.platform.now(), method, row.github_id, row.github_login, row.nth, row.before),
+      db.prepare(
+        "INSERT INTO purchase_items (purchase, line, category, item, quantity, sats) VALUES (?, 1, ?, ?, 1, ?) " +
+        "ON CONFLICT (purchase, line) DO NOTHING",
+      ).bind(row.invoice, row.category, row.item, row.sats),
+    ]);
+    // With no bananas, finishing it adds nothing to the pile.
+    const first = this.finish({ id: row.invoice, milli: null, at: this.platform.now() }) !== false;
+    this.sql.exec("DELETE FROM pending WHERE request = ?", row.request);
+    if (first) {
+      const sold = Object.hasOwn(CATALOGUE, row.category) ? CATALOGUE[row.category] : null;
+      const at = this.platform.now();
+      const login = sold?.announce ? row.github_login : null;
+      const launch = row.category === FIREWORK_CATEGORY && itemOf(row.category, row.item) ? this.launch(row.item, at) : {};
+      this.broadcast(purchaseMessage({ id: row.invoice, category: row.category, item: row.item, at, login }, launch));
+      if (sold?.board && row.github_id !== null) {
+        const board = await this.purchaseBoard(row.category, { refresh: true });
+        if (board) this.broadcast(board);
+      }
+    }
+    return purchase.results.length ? "recorded" : "duplicate";
+  }
+
+  // Where and when every page launches a firework: the next slot round the sky, at the lead
+  // after now, or later while an earlier firework still holds a slot it needs. A show's slots
+  // are neighbours, so it starts again from the first rather than wrap round. Kept in memory: by
+  // the time the object sleeps, nothing is left in the sky.
+  launch(item, now) {
+    const { slots, holdMs } = FIREWORK.items[item];
+    if (this.nextSlot + slots > SLOTS) this.nextSlot = 0;
+    const slot = this.nextSlot;
+    const launchAt = Math.max(now + readSettings(this.env).fireworkLeadMs, ...this.held.slice(slot, slot + slots));
+    this.held.fill(launchAt + holdMs, slot, slot + slots);
+    this.nextSlot = (slot + slots) % SLOTS;
+    return { slot, launchAt };
+  }
+
   // Freeze when BTCPay first reports the whole amount, including any required network fee.
   // Partial receipts don't fix a price or credit the pile. Confirmation only credits the snapshot.
   async seen({ invoice, sats, left }) {
-    let [row] = this.sql.exec("SELECT * FROM pending WHERE invoice = ?", invoice).toArray();
+    // A purchase is Lightning only, so nothing of one is seen on-chain.
+    let [row] = this.sql.exec("SELECT * FROM pending WHERE invoice = ? AND category IS NULL", invoice).toArray();
     if (!row) return;
     if (left === 0) row = await this.freezePrice(invoice);
     if (!row) return;
@@ -546,6 +707,32 @@ export class DonationsObject {
       }
     }
     return this.boardEntries ? { type: "board", entries: this.boardEntries, satsEntries: this.boardSatsEntries } : null;
+  }
+
+  // A category's leaderboard, such as the fireworks stand's plaque: the top signed-in buyers by
+  // the sats they have spent in it, each under the login of their latest purchase, with how many
+  // things they have bought. Kept in memory between purchases, and read again after each
+  // signed-in one in the category; null if D1 can't be read and nothing is kept. Only the newest
+  // read asked for is kept.
+  async purchaseBoard(category, { refresh = false } = {}) {
+    let board = this.purchaseBoards.get(category);
+    if (!board) this.purchaseBoards.set(category, board = { rows: null, asked: 0, shown: 0 });
+    if (refresh || !board.rows) {
+      const asked = ++board.asked;
+      try {
+        const { results } = await this.env.DB.prepare(
+          "SELECT login, sum(quantity) AS quantity, sum(sats) AS sats FROM purchase_totals WHERE category = ? " +
+          "GROUP BY github_id, login ORDER BY sats DESC, login LIMIT ?",
+        ).bind(category, PURCHASE_BOARD_SIZE).all();
+        if (asked > board.shown) {
+          board.shown = asked;
+          board.rows = results;
+        }
+      } catch (error) {
+        console.error(`reading the ${category} board failed:`, error.message);
+      }
+    }
+    return board.rows ? purchaseBoardMessage(category, board.rows) : null;
   }
 
   // Bitcoin's price for an invoice, in cents: a new one from 2140data's service, asked for
@@ -746,11 +933,13 @@ export class DonationsObject {
     this.webSocketClose(ws);
   }
 
-  // Whether donations are open, and on which network, so a page can label test donations.
+  // Whether donations are open, and on which network, so a page can label test donations; and
+  // what is for sale, to whom and at what prices.
   statusMessage(open) {
     const limits = readLimits(this.env);
     return { type: "status", open, network: readSettings(this.env).network,
-      limits: limits ? { minSats: limits.minSats, maxSats: limits.maxSats, lightningMaxSats: limits.lightningMaxSats, messageMinSats: limits.messageMinSats } : null };
+      limits: limits ? { minSats: limits.minSats, maxSats: limits.maxSats, lightningMaxSats: limits.lightningMaxSats, messageMinSats: limits.messageMinSats } : null,
+      catalogue: limits && readPurchases(this.env) ? catalogueOf(this.env) : null };
   }
 
   line(excluding = null) {
@@ -793,7 +982,8 @@ export class DonationsObject {
   }
 
   // Fixed one-minute windows. Invoices and on-chain switches, the requests that make work for
-  // the node, count per visitor and overall. Notes and page sockets count per visitor, each on
+  // the node, count per visitor and overall. Purchase invoices count the same way, on counts of
+  // their own, against their own limits. Notes and page sockets count per visitor, each on
   // their own, so a crowd of page loads can't close donations. The counts are kept in storage,
   // so they hold when the object sleeps, under the visitor's group rather than their address,
   // and go when the minute ends. A visitor shares a count only with the rare other in their
@@ -811,9 +1001,10 @@ export class DonationsObject {
     );
     const key = `${kind} ${visitorGroup(visitor, 64)}`;
     const limit = kind === "note" ? noteRatePerIp : ratePerIp;
-    if (counted(key) >= limit || (kind === "work" && counted("total") >= rateGlobal)) return false;
+    const total = { work: "total", purchase: "purchase total" }[kind];
+    if (counted(key) >= limit || (total && counted(total) >= rateGlobal)) return false;
     add(key);
-    if (kind === "work") add("total");
+    if (total) add(total);
     return true;
   }
 
@@ -854,6 +1045,13 @@ const json = (body, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
 const closed = () => json({ error: "closed" }, 503);
+
+// What a page is told is for sale: each category of the catalogue that is open, who may buy in
+// it, and its prices. A category whose buyers setting is unknown is closed, and left out.
+const catalogueOf = (env) => Object.fromEntries(Object.keys(CATALOGUE).flatMap((category) => {
+  const buyers = readBuyers(env, category);
+  return buyers ? [[category, { buyers, prices: pricesOf(category) }]] : [];
+}));
 const busy = () => json({ error: "busy" }, 429);
 
 // What a page shows of a rate: the price and whether it's stale, not when it was fetched. A

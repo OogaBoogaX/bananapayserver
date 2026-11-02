@@ -27,13 +27,13 @@ async function donate(w, relay, sats, { login = null, id = 1 } = {}) {
   return invoice;
 }
 
-test("a page gets the tally on connect, after status, pile and board, and before any replay", async () => {
+test("a page gets the tally on connect, after status, pile and both boards, and before any replay", async () => {
   const w = await world();
   const relay = await w.connectRelay();
   const first = await donate(w, relay, 10_000, { login: "ooga-dev" });
   await donate(w, relay, 2_500);
   const page = await w.connectPage(first);
-  assert.deepEqual(page.messages().map((m) => m.type), ["status", "pile", "board", "tally", "recent", "donation"]);
+  assert.deepEqual(page.messages().map((m) => m.type), ["status", "pile", "board", "purchaseBoard", "tally", "recent", "donation"]);
   assert.deepEqual(tallies(page)[0], {
     type: "tally",
     count: 2,
@@ -217,7 +217,7 @@ test("when D1 can't be read, the tally is skipped and everything else still arri
   };
   const page = await w.connectPage();
   await w.ctx.settle();
-  assert.deepEqual(page.messages().map((m) => m.type), ["status", "pile", "board", "recent"]);
+  assert.deepEqual(page.messages().map((m) => m.type), ["status", "pile", "board", "purchaseBoard", "recent"]);
   assert.match(errors.mock.calls[0].arguments[0], /reading the tally failed/);
 });
 

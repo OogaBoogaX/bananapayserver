@@ -56,6 +56,14 @@ export class PageApi extends WorkerEntrypoint {
     return pageApi(this.env).onchain(request, visitor);
   }
 
+  purchase(request, donor, visitor) {
+    return pageApi(this.env).purchase(request, donor, visitor);
+  }
+
+  purchases(request, donor, visitor) {
+    return pageApi(this.env).purchases(request, donor, visitor);
+  }
+
   fetch(request) {
     return pageApi(this.env).fetch(request);
   }

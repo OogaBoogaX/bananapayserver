@@ -36,6 +36,8 @@ export async function world(overrides = {}, platformOptions = {}) {
     if (path === "/donations/invoice") return w.page.invoice(request, who, visitor);
     if (path === "/donations/note") return w.page.note(request, visitor);
     if (path === "/donations/onchain") return w.page.onchain(request, visitor);
+    if (path === "/purchases/buy") return w.page.purchase(request, who, visitor);
+    if (path === "/purchases/mine") return w.page.purchases(request, who, visitor);
     throw new Error(`no call for ${path}`);
   };
   w.socket = (after, visitor = "visitor-p") =>

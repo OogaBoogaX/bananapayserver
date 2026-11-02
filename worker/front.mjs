@@ -5,8 +5,9 @@
 // passes what survives to the Durable Object. It never calls the relay; the relay dials in.
 
 import { MESSAGE_MAX, sanitize } from "../shared/donation.mjs";
+import { BEFORE, CATEGORY_NAME, isNth, itemOf } from "../shared/catalogue.mjs";
 import { cleanHandle } from "../shared/handle.mjs";
-import { readLimits, readSettings } from "./config.mjs";
+import { readBuyers, readLimits, readPurchases, readSettings } from "./config.mjs";
 import { relayAuthorized } from "./relay-token.mjs";
 
 const MAX_BODY = 1024;
@@ -33,6 +34,10 @@ export const pageApi = (env) => ({
   invoice: (request, donor, visitor) => invoice(request, env, donor, visitorOf(visitor)),
   note: (request, visitor) => note(request, env, visitorOf(visitor)),
   onchain: (request, visitor) => onchain(request, env, visitorOf(visitor)),
+  // Something bought, such as a firework, and what the signed-in donor has bought. See decision
+  // 0028.
+  purchase: (request, donor, visitor) => purchase(request, env, donor, visitorOf(visitor)),
+  purchases: (request, donor, visitor) => purchases(request, env, donor, visitorOf(visitor)),
   // The socket's upgrade, with the visitor's address in X-Client.
   fetch: (request) => socket(request, env),
 });
@@ -74,6 +79,38 @@ async function onchain(request, env, visitor) {
   if (body.error) return reply({ error: body.error }, body.status);
   if (!isRequest(body.value.request)) return reply({ error: "invalid" }, 400);
   return toObject(env, "/onchain", { request: body.value.request, client: visitor });
+}
+
+// The page names what it buys, by category and item, and nothing that costs anything: the price
+// is the catalogue's. nth and before, which a page sends once everyone may buy, are coarse and
+// identify nobody. Who may buy is the category's, and configuration can change it: while it says
+// signed-in, a purchase without a donor is refused.
+async function purchase(request, env, donor, visitor) {
+  if (!isDonor(donor) || !visitor) return reply({ error: "invalid" }, 400);
+  const body = await readBody(request, ["category", "item", "nth", "before"], ["category", "item"]);
+  if (body.error) return reply({ error: body.error }, body.status);
+  const value = body.value, nth = value.nth ?? null, before = value.before ?? null;
+  if (!itemOf(value.category, value.item) || Object.hasOwn(value, "nth") && !isNth(value.nth) ||
+      Object.hasOwn(value, "before") && !BEFORE.includes(value.before)) return reply({ error: "invalid" }, 400);
+  const buyers = readBuyers(env, value.category);
+  if (!buyers || !readPurchases(env) || !readLimits(env) || !readSettings(env).network) return reply({ error: "closed" }, 503);
+  if (donor === null && buyers === "signed-in") return reply({ error: "sign-in" }, 403);
+  const github = donor === null ? null : { id: donor.id, login: donor.login };
+  return toObject(env, "/purchase", { category: value.category, item: value.item, nth, before, github, client: visitor });
+}
+
+// What the signed-in donor has bought, in every category or in one, including one no longer
+// sold. Nobody signed in has bought anything they can be shown.
+async function purchases(request, env, donor, visitor) {
+  if (!isDonor(donor) || !visitor) return reply({ error: "invalid" }, 400);
+  const body = await readBody(request, ["category"], []);
+  if (body.error) return reply({ error: body.error }, body.status);
+  const category = body.value.category ?? null;
+  if (Object.hasOwn(body.value, "category") && !(typeof category === "string" && CATEGORY_NAME.test(category))) {
+    return reply({ error: "invalid" }, 400);
+  }
+  if (donor === null) return reply({ items: {} }, 200);
+  return toObject(env, "/purchases", { github: { id: donor.id, login: donor.login }, category });
 }
 
 function socket(request, env) {

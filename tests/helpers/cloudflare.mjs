@@ -64,6 +64,8 @@ export function fakeD1() {
     db.exec(readFileSync(new URL(file, migrations), "utf8"));
   }
   const statement = (sql, args = []) => ({
+    sql,
+    args,
     bind: (...bound) => statement(sql, bound),
     run: async () => {
       const result = db.prepare(sql).run(...args);
@@ -72,7 +74,19 @@ export function fakeD1() {
     first: async () => db.prepare(sql).get(...args) ?? null,
     all: async () => ({ results: db.prepare(sql).all(...args) }),
   });
-  return { db, prepare: (sql) => statement(sql) };
+  // A batch runs its statements in order as one transaction, each with its own results.
+  const batch = async (statements) => {
+    db.exec("BEGIN");
+    try {
+      const results = statements.map(({ sql, args }) => ({ results: db.prepare(sql).all(...args) }));
+      db.exec("COMMIT");
+      return results;
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  };
+  return { db, prepare: (sql) => statement(sql), batch };
 }
 
 export class FakeSocket {
@@ -184,6 +198,8 @@ export const ENV = {
   LIGHTNING_MAX_SATS: "100000",
   RATE_PER_IP: "5",
   RATE_GLOBAL: "50",
+  PURCHASE_RATE_PER_IP: "5",
+  PURCHASE_RATE_GLOBAL: "50",
   SOCKETS_PER_IP: "5",
   PRICE_JUMP_MAX: "2",
   ONCHAIN_FEE_ALLOWANCE: "100000",
