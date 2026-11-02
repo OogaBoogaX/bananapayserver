@@ -18,6 +18,8 @@ const HOUR = 3_600_000;
 const firework = (item, extra = {}) => ({ category: "firework", item, ...extra });
 const typed = (page, type) => page.messages().filter((m) => m.type === type);
 const rows = (w, sql) => w.env.DB.db.prepare(sql).all().map((row) => ({ ...row }));
+// The start of the earliest hour of the seven days the tally and the counts cover.
+const weekOf = (now) => now - (now % HOUR) - (7 * 24 - 1) * HOUR;
 const pendingCount = (w) => w.ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM pending").one().n;
 
 let made = 0;
@@ -58,11 +60,12 @@ async function bought(w, who, body = {}) {
 }
 
 test("every item in the catalogue fits D1's records and has a whole price", () => {
-  for (const [category, { items, buyers, announce, board }] of Object.entries(CATALOGUE)) {
+  for (const [category, { items, buyers, announce, board, counts }] of Object.entries(CATALOGUE)) {
     assert.match(category, CATEGORY_NAME);
     assert.ok(["signed-in", "everyone"].includes(buyers), category);
     assert.equal(typeof announce, "boolean");
     assert.equal(typeof board, "boolean");
+    assert.equal(typeof counts, "boolean");
     for (const [item, { sats }] of Object.entries(items)) {
       assert.match(item, ITEM_NAME);
       assert.ok(Number.isSafeInteger(sats) && sats > 0, `${category} ${item}`);
@@ -214,6 +217,7 @@ test("a paid purchase is recorded apart from donations, announced once to every 
     assert.deepEqual(page.messages().slice(joined[i]), [
       { type: "purchase", id, category: "firework", item: "mega", quantity: 1, at: now, login: "ooga-dev", slot: 0, launchAt: now + LEAD },
       { type: "purchaseBoard", category: "firework", entries: [{ login: "ooga-dev", quantity: 1, sats: 100 }] },
+      { type: "purchaseCounts", category: "firework", days: 7, since: weekOf(now), items: { pop: 0, bolt: 0, mega: 1, show: 0 } },
     ], "no donation, pile, board, tally or recent list");
   }
   assert.equal(pendingCount(w), 0);
@@ -226,19 +230,21 @@ test("a paid purchase is recorded apart from donations, announced once to every 
 });
 
 test("a new category sells through the same call, record and messages, with nothing else to wire", async () => {
-  CATALOGUE.costume = { items: { "banana-suit": { sats: 2_000 } }, buyers: "signed-in", announce: false, board: false };
+  CATALOGUE.costume = { items: { "banana-suit": { sats: 2_000 } }, buyers: "signed-in", announce: false, board: false, counts: false };
   try {
     const w = await world();
     const relay = await w.connectRelay();
     const page = await w.connectPage();
     assert.deepEqual(page.messages()[0].catalogue.costume, { buyers: "signed-in", prices: { "banana-suit": 2_000 } });
     assert.deepEqual(typed(page, "purchaseBoard").map((m) => m.category), ["firework"], "only a category with a board gets one");
+    assert.deepEqual(typed(page, "purchaseCounts").map((m) => m.category), ["firework"], "and only one that keeps counts gets them");
     assert.equal((await w.post("/purchases/buy", { category: "costume", item: "banana-suit" })).status, 403, "its own buyers rule");
     const id = await buy(w, relay, { category: "costume", item: "banana-suit" }, { donor: donor() });
     const now = w.platform.now();
     assert.deepEqual(typed(page, "purchase"), [{ type: "purchase", id, category: "costume", item: "banana-suit", quantity: 1, at: now, login: null }],
       "the buyer's page finds its own id; a category that doesn't announce its buyers names nobody");
     assert.deepEqual(typed(page, "purchaseBoard").length, 1, "and with no board, none goes out");
+    assert.deepEqual(typed(page, "purchaseCounts").length, 1, "nor any counts");
     assert.deepEqual(rows(w, "SELECT category, item, quantity, sats FROM purchase_items"), [{ category: "costume", item: "banana-suit", quantity: 1, sats: 2_000 }]);
     assert.deepEqual(await bought(w, donor()), [200, { items: { costume: { "banana-suit": { quantity: 1, sats: 2_000 } } } }]);
     assert.deepEqual(rows(w, "SELECT category, item, created, paid FROM purchase_funnel"), [{ category: "costume", item: "banana-suit", created: 1, paid: 1 }]);
@@ -257,6 +263,48 @@ test("a new category sells through the same call, record and messages, with noth
   } finally {
     delete CATALOGUE.costume;
   }
+});
+
+test("the counts give each item sold in the last seven days, anyone's, once per purchase", async (t) => {
+  const errors = t.mock.method(console, "error", () => {});
+  const w = await world({ FIREWORK_BUYERS: "everyone", PURCHASE_RATE_PER_IP: "20" });
+  const relay = await w.connectRelay();
+  const page = await w.connectPage();
+  const start = w.platform.now();
+  const counts = (items, now = start) => ({ type: "purchaseCounts", category: "firework", days: 7, since: weekOf(now), items });
+  const types = page.messages().map((m) => m.type);
+  assert.equal(types[types.indexOf("purchaseBoard") + 1], "purchaseCounts", "sent on connect, after the leaderboards");
+  assert.deepEqual(typed(page, "purchaseCounts"), [counts({ pop: 0, bolt: 0, mega: 0, show: 0 })], "every item, at 0 before any sale");
+
+  await buy(w, relay, firework("pop"));
+  const repeated = await buy(w, relay, firework("pop"), { donor: donor() });
+  await w.relaySays(relay, { type: "paid", invoice: repeated, sats: 10, method: "lightning" });
+  await ask(w, relay, firework("mega"), { donor: donor() });
+  await buy(w, relay, firework("show"), { donor: donor() });
+  assert.equal(typed(page, "purchaseCounts").length, 4, "one on connect and one per purchase, none for a repeat or an unpaid invoice");
+  assert.deepEqual(typed(page, "purchaseCounts").at(-1), counts({ pop: 2, bolt: 0, mega: 0, show: 1 }),
+    "anonymous and signed-in alike, and a show counts once");
+
+  w.platform.advance(7 * 24 * HOUR - 1);
+  assert.deepEqual(typed(await w.connectPage(undefined, "visitor-q"), "purchaseCounts"), [typed(page, "purchaseCounts").at(-1)].map((m) => ({ ...m, since: weekOf(w.platform.now()) })),
+    "still within seven days of the last hour");
+  w.platform.advance(1);
+  assert.deepEqual(typed(await w.connectPage(undefined, "visitor-r"), "purchaseCounts"), [counts({ pop: 0, bolt: 0, mega: 0, show: 0 }, w.platform.now())],
+    "read again once the seven days have moved on an hour, and the old sales are gone");
+
+  const prepare = w.env.DB.prepare;
+  w.env.DB.prepare = (sql) => {
+    if (sql.includes("sum(paid)")) throw new Error("D1 is down");
+    return prepare(sql);
+  };
+  const kept = typed(page, "purchaseCounts").length;
+  await buy(w, relay, firework("bolt"));
+  assert.ok(errors.mock.calls.some((c) => /reading the firework counts failed/.test(c.arguments[0])));
+  assert.equal(typed(page, "purchaseCounts").length, kept + 1);
+  assert.deepEqual(typed(page, "purchaseCounts").at(-1).items, { pop: 0, bolt: 0, mega: 0, show: 0 }, "the last counts read are kept");
+  w.env.DB.prepare = prepare;
+  await buy(w, relay, firework("bolt"));
+  assert.deepEqual(typed(page, "purchaseCounts").at(-1).items, { pop: 0, bolt: 2, mega: 0, show: 0 });
 });
 
 test("a page is never sent a purchase it missed, nor finds one among the donations", async () => {
@@ -420,7 +468,7 @@ test("a leaderboard ranks the top buyers by sats, ties by login, and keeps the l
   const woken = new DonationsObject(w.ctx, w.env, w.platform);
   w.env.DONATIONS.get = () => ({ fetch: (input, init) => woken.fetch(new Request(input, init)) });
   const fresh = await w.connectPage(undefined, "visitor-q");
-  assert.deepEqual(fresh.messages().map((m) => m.type), ["status", "pile", "board", "tally", "recent"], "with nothing kept, the plaque is skipped");
+  assert.deepEqual(fresh.messages().map((m) => m.type), ["status", "pile", "board", "purchaseCounts", "tally", "recent"], "with nothing kept, the plaque is skipped");
 });
 
 test("every page launches a firework at the lead after settlement, a busy slot waits, and a show takes three neighbouring slots", async () => {

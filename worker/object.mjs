@@ -6,7 +6,7 @@
 
 import { invoiceMatches } from "../shared/bolt11.mjs";
 import { donationEvent, MESSAGE_MAX, sanitize } from "../shared/donation.mjs";
-import { BEFORE, CATALOGUE, CATEGORY_NAME, isNth, itemOf, pricesOf, purchaseBoardMessage, purchaseMessage } from "../shared/catalogue.mjs";
+import { BEFORE, CATALOGUE, CATEGORY_NAME, isNth, itemOf, pricesOf, purchaseBoardMessage, purchaseCountsMessage, purchaseMessage } from "../shared/catalogue.mjs";
 import { FIREWORK, FIREWORK_CATEGORY, SLOTS } from "../shared/firework.mjs";
 import { cleanHandle } from "../shared/handle.mjs";
 import { parseUp } from "../shared/protocol.mjs";
@@ -140,8 +140,9 @@ export class DonationsObject {
     this.rateSending = null;
     this.refreshing = null;
     this.receiving = new Map();
-    // Each category's leaderboard, as purchaseBoard() keeps it.
+    // Each category's leaderboard and counts, as purchaseBoard() and purchaseCounts() keep them.
     this.purchaseBoards = new Map();
+    this.purchaseCounted = new Map();
     // The next slot of sky to hand out for a firework, and until when each slot is held.
     this.nextSlot = 0;
     this.held = Array(SLOTS).fill(0);
@@ -388,9 +389,14 @@ export class DonationsObject {
     server.send(JSON.stringify(this.statusMessage(this.line() !== null)));
     server.send(JSON.stringify(this.pileMessage(this.platform.now())));
     const ranked = Object.keys(CATALOGUE).filter((category) => CATALOGUE[category].board);
-    const [board, ...purchaseBoards] = await Promise.all([this.board(), ...ranked.map((category) => this.purchaseBoard(category))]);
+    const counted = Object.keys(CATALOGUE).filter((category) => CATALOGUE[category].counts);
+    const [board, ...purchases] = await Promise.all([
+      this.board(),
+      ...ranked.map((category) => this.purchaseBoard(category)),
+      ...counted.map((category) => this.purchaseCounts(category)),
+    ]);
     if (board) server.send(JSON.stringify(board));
-    for (const purchaseBoard of purchaseBoards) if (purchaseBoard) server.send(JSON.stringify(purchaseBoard));
+    for (const message of purchases) if (message) server.send(JSON.stringify(message));
     const tally = await this.tally();
     if (tally) {
       server.send(JSON.stringify(tally));
@@ -550,8 +556,9 @@ export class DonationsObject {
   // as they are. The purchase and its item go in together or not at all, and D1 ignores a repeat
   // by invoice id; the finished mark lets the pages hear of it once. Every page hears what was
   // bought, so the buyer's page finds its own invoice id; the buyer's login only where the
-  // category announces it, and the category's leaderboard where it has one and the buyer was
-  // signed in. A category no longer in the catalogue is still recorded.
+  // category announces it; the category's leaderboard where it has one and the buyer was signed
+  // in; and its counts where it keeps them. A category no longer in the catalogue is still
+  // recorded.
   async purchased(row, method) {
     const db = this.env.DB;
     const [purchase] = await db.batch([
@@ -573,10 +580,12 @@ export class DonationsObject {
       const login = sold?.announce ? row.github_login : null;
       const launch = row.category === FIREWORK_CATEGORY && itemOf(row.category, row.item) ? this.launch(row.item, at) : {};
       this.broadcast(purchaseMessage({ id: row.invoice, category: row.category, item: row.item, at, login }, launch));
-      if (sold?.board && row.github_id !== null) {
-        const board = await this.purchaseBoard(row.category, { refresh: true });
-        if (board) this.broadcast(board);
-      }
+      const [board, counts] = await Promise.all([
+        sold?.board && row.github_id !== null ? this.purchaseBoard(row.category, { refresh: true }) : null,
+        sold?.counts ? this.purchaseCounts(row.category, { refresh: true }) : null,
+      ]);
+      if (board) this.broadcast(board);
+      if (counts) this.broadcast(counts);
     }
     return purchase.results.length ? "recorded" : "duplicate";
   }
@@ -733,6 +742,28 @@ export class DonationsObject {
       }
     }
     return board.rows ? purchaseBoardMessage(category, board.rows) : null;
+  }
+
+  // How many of each item in a category sold over the tally's seven days, by the paid counts D1's
+  // funnel keeps by the hour, anyone's purchases alike, since counts name nobody. Kept in memory,
+  // and read again after each purchase in the category and once the seven days have moved on an
+  // hour; null if D1 can't be read and nothing is kept. Only the newest read asked for is kept.
+  async purchaseCounts(category, { refresh = false } = {}) {
+    let counts = this.purchaseCounted.get(category);
+    if (!counts) this.purchaseCounted.set(category, counts = { since: null, rows: null, asked: 0, shown: 0 });
+    const since = this.tallySince();
+    if (refresh || !counts.rows || counts.since !== since) {
+      const asked = ++counts.asked;
+      try {
+        const { results } = await this.env.DB.prepare(
+          "SELECT item, sum(paid) AS paid FROM purchase_funnel WHERE category = ? AND hour >= ? GROUP BY item",
+        ).bind(category, since).all();
+        if (asked > counts.shown) Object.assign(counts, { shown: asked, since, rows: results });
+      } catch (error) {
+        console.error(`reading the ${category} counts failed:`, error.message);
+      }
+    }
+    return counts.rows ? purchaseCountsMessage(category, { days: TALLY_HOURS / 24, since: counts.since }, counts.rows) : null;
   }
 
   // Bitcoin's price for an invoice, in cents: a new one from 2140data's service, asked for

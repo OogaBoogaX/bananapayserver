@@ -5,7 +5,8 @@ export const FIREWORK_CATEGORY = "firework";
 
 // Each firework's price, how many of the sky's slots it fills, and how long it holds them from
 // its launch. A show fills `slots` neighbouring slots, starting at its own. Every page hears
-// who launched it, and signed-in buyers are ranked on the stand's plaque.
+// who launched it, signed-in buyers are ranked on the stand's plaque, and the stand's top
+// launches board counts each firework sold in the last seven days.
 export const FIREWORK = {
   items: {
     pop: { sats: 10, slots: 1, holdMs: 4_000 },
@@ -16,6 +17,7 @@ export const FIREWORK = {
   buyers: "signed-in",
   announce: true,
   board: true,
+  counts: true,
 };
 
 // The regions of sky the shows are spread over.
