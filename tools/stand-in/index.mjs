@@ -3,7 +3,12 @@
 // (docs/protocol.md). There's no sign-in here, so the page names a test donor itself; OBL's
 // Worker takes the donor from its own GitHub sign-in. Never deployed.
 
-const CALLS = { "/donations/invoice": "invoice", "/donations/note": "note", "/donations/onchain": "onchain" };
+const CALLS = {
+  "/donations/invoice": "invoice", "/donations/note": "note", "/donations/onchain": "onchain",
+  "/purchases/buy": "purchase", "/purchases/mine": "purchases",
+};
+// The calls that carry who is giving or buying.
+const SIGNED = new Set(["invoice", "purchase", "purchases"]);
 const SOCKET_HEADERS = ["Upgrade", "Connection", "Sec-WebSocket-Key", "Sec-WebSocket-Version"];
 
 export default {
@@ -17,12 +22,13 @@ export default {
       const method = CALLS[url.pathname];
       if (!method || request.method !== "POST") return Response.json({ error: "not found" }, { status: 404 });
       // Only the page's body and its type go on, never the browser's own request and its cookies.
+      // The body is read whole first, as OBL's Worker reads it.
       const call = new Request(url, {
         method: "POST",
         headers: { "Content-Type": request.headers.get("Content-Type") ?? "" },
-        body: request.body,
+        body: await request.arrayBuffer(),
       });
-      if (method === "invoice") return await env.DONATIONS.invoice(call, donorOf(request, url), visitor);
+      if (SIGNED.has(method)) return await env.DONATIONS[method](call, donorOf(request, url), visitor);
       return await env.DONATIONS[method](call, visitor);
     } catch {
       // bananapayserver can't be reached, so the page hears that donations are closed.

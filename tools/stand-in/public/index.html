@@ -10,7 +10,7 @@
   body { font: 15px/1.5 system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; color: var(--fg); background: var(--bg); }
   fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 1rem 0; padding: 1rem; }
   label { display: block; margin: 0.4rem 0; }
-  input:not([type="checkbox"]), textarea { font: inherit; width: 100%; box-sizing: border-box; padding: 0.3rem 0.5rem; background: transparent; color: inherit; border: 1px solid var(--line); border-radius: 4px; }
+  input:not([type="checkbox"]), select, textarea { font: inherit; width: 100%; box-sizing: border-box; padding: 0.3rem 0.5rem; background: transparent; color: inherit; border: 1px solid var(--line); border-radius: 4px; }
   textarea { font: 12px ui-monospace, monospace; height: 6rem; }
   .open { color: var(--ok); } .closed { color: var(--bad); }
   #log { font: 12px ui-monospace, monospace; white-space: pre-wrap; }
@@ -25,6 +25,7 @@ over a service binding, as OBL's do (<code>docs/protocol.md</code>). For regtest
 <code>docs/testing.md</code>.</p>
 
 <p>Donations are <strong id="status">connecting</strong>.
+Purchases are <strong id="selling">connecting</strong>.
 The pile has <strong id="pile">?</strong> bananas.</p>
 
 <fieldset>
@@ -44,23 +45,39 @@ The pile has <strong id="pile">?</strong> bananas.</p>
   <textarea id="pay" readonly placeholder="The invoice, or the on-chain payment, appears here"></textarea>
 </fieldset>
 
+<fieldset>
+  <legend>Buy</legend>
+  <p>Anything in bananapayserver's catalogue, such as a firework, the way OBL's experiences sell
+    it. It goes as the test donor named above, or as nobody when both are empty; "Give
+    anonymously" is for donations only.</p>
+  <label>Item <select id="item" disabled></select></label>
+  <button id="buy" type="button" disabled>Get invoice</button>
+  <button id="mine" type="button">What I've bought</button>
+  <p id="bought"></p>
+  <textarea id="buy-pay" readonly placeholder="The purchase's invoice appears here"></textarea>
+</fieldset>
+
 <h2>Banana leaderboard</h2>
 <ol id="board"></ol>
 <h2>Sats leaderboard</h2>
 <ol id="sats-board"></ol>
 
-<h2>Donations on the socket</h2>
+<div id="purchase-boards"></div>
+<div id="purchase-counts"></div>
+
+<h2>Donations and purchases on the socket</h2>
 <div id="log"></div>
 
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
 const seen = new Set();
-let request = null, invoiceId = null, lastId = null, socket = null, retryMs = 1000;
+let request = null, invoiceId = null, purchaseId = null, lastId = null, socket = null, retryMs = 1000;
 let pile = null;
 
 const log = (line) => { $("log").textContent = `${new Date().toLocaleTimeString()}  ${line}\n${$("log").textContent}`; };
 const show = (text) => { $("result").textContent = text; };
+const tell = (text) => { $("bought").textContent = text; };
 const count = (bananas) => bananas ? `${bananas.exact.toFixed(2)} bananas, ${bananas.rounded} rounded` : "no bananas: no price";
 
 // The page calls its own origin, as OBL's page does. The test donor rides in two headers that
@@ -111,6 +128,76 @@ $("onchain").addEventListener("click", async () => {
   show(`On-chain address in ${ms} ms, for ${data.sats} sats`);
 });
 
+$("buy").addEventListener("click", async () => {
+  const [category, item] = $("item").value.split("/");
+  const { status, data, ms } = await call("POST", "/purchases/buy", { category, item });
+  if (status !== 200) return tell(`${status} ${data?.error ?? ""} after ${ms} ms`);
+  purchaseId = data.invoice.id;
+  $("buy-pay").value = data.invoice.bolt11;
+  tell(`Invoice in ${ms} ms, payable until ${new Date(data.invoice.expires * 1000).toLocaleTimeString()}`);
+});
+
+$("mine").addEventListener("click", async () => {
+  const { status, data, ms } = await call("POST", "/purchases/mine", {});
+  if (status !== 200) return tell(`${status} ${data?.error ?? ""} after ${ms} ms`);
+  const lines = Object.entries(data.items).flatMap(([category, items]) =>
+    Object.entries(items).map(([item, { quantity, sats }]) => `${category}/${item}: ${quantity} for ${sats} sats`));
+  tell(lines.length ? `Bought: ${lines.join("; ")}` : "Nothing bought yet, or no donor named");
+});
+
+// What is for sale, from status: each open category, who may buy, and its prices.
+function showCatalogue(catalogue) {
+  const options = Object.entries(catalogue ?? {}).flatMap(([category, { buyers, prices }]) =>
+    Object.entries(prices).map(([item, sats]) => {
+      const option = document.createElement("option");
+      option.value = `${category}/${item}`;
+      option.textContent = `${category}/${item}: ${sats} sats (${buyers})`;
+      return option;
+    }));
+  const chosen = $("item").value;
+  $("item").replaceChildren(...options);
+  if (options.some((option) => option.value === chosen)) $("item").value = chosen;
+  $("item").disabled = $("buy").disabled = !options.length;
+  $("selling").textContent = catalogue ? (options.length ? "open" : "open, with nothing for sale") : "closed";
+  $("selling").className = catalogue && options.length ? "open" : "closed";
+}
+
+function showPurchaseBoard({ category, entries }) {
+  const id = `purchase-board-${category}`;
+  let list = document.getElementById(id);
+  if (!list) {
+    const heading = document.createElement("h2");
+    heading.textContent = `${category} leaderboard`;
+    list = document.createElement("ol");
+    list.id = id;
+    $("purchase-boards").append(heading, list);
+  }
+  list.replaceChildren(...entries.map((entry) => {
+    const item = document.createElement("li");
+    item.textContent = `@${entry.login}: ${entry.quantity} for ${entry.sats.toLocaleString()} sats`;
+    return item;
+  }));
+}
+
+// How many of each item sold in the last seven days, anyone's.
+function showPurchaseCounts({ category, days, items }) {
+  const id = `purchase-counts-${category}`;
+  let line = document.getElementById(id);
+  if (!line) {
+    line = document.createElement("p");
+    line.id = id;
+    $("purchase-counts").append(line);
+  }
+  line.textContent = `${category} sold in ${days} days: ${Object.entries(items).map(([item, count]) => `${item} ${count}`).join(", ")}`;
+}
+
+// A purchase reaches every page; a firework says when and where every page launches it.
+function logPurchase(p) {
+  const who = p.login ? `@${p.login}` : "someone";
+  const launch = p.launchAt ? `, launching at slot ${p.slot} in ${Math.max(0, Math.round((p.launchAt - p.at) / 100) / 10)} s` : "";
+  log(`${who} bought ${p.category}/${p.item}${launch}${p.id === purchaseId ? "   <- yours, thank you" : ""}`);
+}
+
 function setStatus(label, open) {
   $("status").textContent = label;
   $("status").className = open ? "open" : "closed";
@@ -140,7 +227,13 @@ function connect() {
   socket.addEventListener("open", () => { retryMs = 1000; });
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
-    if (message.type === "status") setStatus(`${message.open ? "open" : "closed"}, on ${message.network}`, message.open);
+    if (message.type === "status") {
+      setStatus(`${message.open ? "open" : "closed"}, on ${message.network}`, message.open);
+      showCatalogue(message.catalogue);
+    }
+    if (message.type === "purchaseBoard") showPurchaseBoard(message);
+    if (message.type === "purchaseCounts") showPurchaseCounts(message);
+    if (message.type === "purchase") return logPurchase(message);
     if (message.type === "pile") pile = { ...message, received: Date.now() };
     if (message.type === "board") {
       showBoard("board", message.entries, "bananas");
