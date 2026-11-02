@@ -41,6 +41,66 @@ test("D1 retires account totals and corrects unknown legacy freshness without ch
   }
 });
 
+test("D1 records any kind of purchase apart from donations, and counts each recorded line once", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    for (const name of ["0001_donations.sql", "0002_stats.sql", "0003_tally.sql", "0004_donor_sats.sql", "0005_handle_totals.sql",
+      "0006_receipt_pricing.sql", "0007_legacy_metadata.sql", "0008_verified_donations.sql"]) db.exec(migration(name));
+    db.prepare("INSERT INTO donations (id, sats, handle, message, at, method, github_id) VALUES ('Donation01', 1000, 'ooga', '', 1, 'lightning', 7)").run();
+    const untouched = ["donations", "totals", "handle_totals", "tally", "tally_hours"];
+    const snapshot = () => untouched.map((table) => rows(db.prepare(`SELECT * FROM ${table}`).all()));
+    const before = snapshot();
+    db.exec(migration("0009_purchases.sql"));
+    const hour = 1_790_002_800_000;
+    const purchase = db.prepare(
+      "INSERT INTO purchases (id, sats, at, method, github_id, login, nth, before) VALUES (?, ?, ?, 'lightning', ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING",
+    );
+    const line = db.prepare(
+      "INSERT INTO purchase_items (purchase, line, category, item, quantity, sats) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (purchase, line) DO NOTHING",
+    );
+    purchase.run("Purchase01", 10, hour + 1, 7, "old-login", null, null);
+    line.run("Purchase01", 1, "firework", "pop", 1, 10);
+    purchase.run("Purchase01", 10, hour + 2, 7, "old-login", null, null);
+    line.run("Purchase01", 1, "firework", "pop", 1, 10);
+    purchase.run("Purchase02", 100, hour + 3, 7, "new-login", null, null);
+    line.run("Purchase02", 1, "firework", "mega", 1, 100);
+    // Things not sold yet need no migration: one payment for a costume and two of a shirt.
+    purchase.run("Purchase03", 62_000, hour + 4, 8, "other", null, null);
+    line.run("Purchase03", 1, "costume", "banana-suit", 1, 2_000);
+    line.run("Purchase03", 2, "merch", "shirt-l", 2, 60_000);
+    purchase.run("Purchase04", 10, hour + 3_600_000, null, null, 1, "none");
+    line.run("Purchase04", 1, "firework", "pop", 1, 10);
+    assert.deepEqual(rows(db.prepare("SELECT * FROM purchase_totals ORDER BY github_id, category, item").all()), [
+      { github_id: 7, login: "new-login", category: "firework", item: "mega", quantity: 1, sats: 100 },
+      { github_id: 7, login: "new-login", category: "firework", item: "pop", quantity: 1, sats: 10 },
+      { github_id: 8, login: "other", category: "costume", item: "banana-suit", quantity: 1, sats: 2_000 },
+      { github_id: 8, login: "other", category: "merch", item: "shirt-l", quantity: 2, sats: 60_000 },
+    ], "once per line, per account and item, under the latest login, and nothing for an anonymous buyer");
+    assert.deepEqual(rows(db.prepare("SELECT * FROM purchase_funnel ORDER BY hour, category, item").all()), [
+      { hour, category: "costume", item: "banana-suit", created: 0, paid: 1 },
+      { hour, category: "firework", item: "mega", created: 0, paid: 1 },
+      { hour, category: "firework", item: "pop", created: 0, paid: 1 },
+      { hour, category: "merch", item: "shirt-l", created: 0, paid: 1 },
+      { hour: hour + 3_600_000, category: "firework", item: "pop", created: 0, paid: 1 },
+    ]);
+    assert.deepEqual(rows(db.prepare("SELECT id, sats, (SELECT sum(sats) FROM purchase_items WHERE purchase = id) AS lines FROM purchases ORDER BY seq").all()),
+      [{ id: "Purchase01", sats: 10, lines: 10 }, { id: "Purchase02", sats: 100, lines: 100 }, { id: "Purchase03", sats: 62_000, lines: 62_000 }, { id: "Purchase04", sats: 10, lines: 10 }],
+      "one row per invoice, its whole amount, and its lines adding up to it");
+    assert.deepEqual(snapshot(), before, "no donation, total or tally moves");
+    for (const [args, why] of [
+      [["Purchase02", 2, "Firework", "pop", 1, 10], "a category is a lowercase name"],
+      [["Purchase02", 2, "firework", "big pop", 1, 10], "so is an item"],
+      [["Purchase02", 2, "firework", "", 1, 10], "and never empty"],
+      [["Purchase02", 2, "firework", "pop", 0, 10], "at least one of it"],
+      [["Purchase02", 0, "firework", "pop", 1, 10], "lines count from 1"],
+    ]) assert.throws(() => line.run(...args), /CHECK constraint failed/, why);
+    assert.throws(() => line.run("NeverPaid1", 1, "firework", "pop", 1, 10), /FOREIGN KEY constraint failed/, "an item belongs to a recorded purchase");
+    assert.throws(() => purchase.run("Purchase05", 0, hour, null, null, null, null), /CHECK constraint failed/);
+  } finally {
+    db.close();
+  }
+});
+
 // Schema 6 as it was deployed, written independently of the current migration array.
 function schemaSix() {
   const ctx = fakeCtx(), sql = ctx.storage.sql;
