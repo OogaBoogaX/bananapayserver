@@ -4,6 +4,7 @@
 
 import { isNetwork } from "../shared/bolt11.mjs";
 import { readLightningMaxSats } from "../shared/config.mjs";
+import { BUYERS, buyersSetting, CATALOGUE } from "../shared/catalogue.mjs";
 import { MAX_SATS as MAX_MONEY } from "../shared/protocol.mjs";
 
 const positiveInt = (value) => {
@@ -36,6 +37,24 @@ export function readLimits(env) {
   return { minSats, maxSats, lightningMaxSats, messageMinSats, ratePerIp, noteRatePerIp, rateGlobal, socketsPerIp, priceJumpMax, onchainFeeAllowance };
 }
 
+// Purchases, which are not donations: request rates of their own, apart from the donations'
+// budgets, shared by everything sold. They are required limits: a missing or malformed one closes
+// purchases and leaves donations open. Null when purchases are closed.
+export function readPurchases(env) {
+  const ratePerIp = positiveInt(env.PURCHASE_RATE_PER_IP);
+  const rateGlobal = positiveInt(env.PURCHASE_RATE_GLOBAL);
+  return ratePerIp && rateGlobal ? { ratePerIp, rateGlobal } : null;
+}
+
+// Who may buy in a category of the catalogue: its own choice, unless the deployment's
+// <CATEGORY>_BUYERS setting, such as FIREWORK_BUYERS, says otherwise. Null, which closes that
+// category, for any value but signed-in or everyone.
+export function readBuyers(env, category) {
+  const value = env[buyersSetting(category)];
+  const buyers = value === undefined ? CATALOGUE[category].buyers : value?.trim?.();
+  return BUYERS.includes(buyers) ? buyers : null;
+}
+
 // Settings that are not limits. A missing or unknown network also closes donations.
 export function readSettings(env) {
   const network = isNetwork(env.NETWORK) ? env.NETWORK : null;
@@ -43,6 +62,8 @@ export function readSettings(env) {
     network,
     invoiceTimeoutMs: positiveInt(env.INVOICE_TIMEOUT_MS) ?? 10_000,
     pendingDays: positiveInt(env.PENDING_DAYS) ?? 7,
+    // How long after a firework is paid for every page launches it.
+    fireworkLeadMs: positiveInt(env.FIREWORK_LEAD_MS) ?? 3_000,
     // The global pile: where it starts, and how many bananas the Oogas eat an hour. Both are
     // the team's to tune; these are placeholders.
     pileStart: wholeNumber(env.PILE_START) ?? 1_000,

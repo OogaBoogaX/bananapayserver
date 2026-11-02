@@ -6,6 +6,12 @@ RATE_PER_IP=
 # NOTE_RATE_PER_IP=
 RATE_GLOBAL=
 SOCKETS_PER_IP=
+# Purchases' own request rates, shared by everything sold. Purchases stay closed until both are
+# set; donations don't need them.
+PURCHASE_RATE_PER_IP=
+PURCHASE_RATE_GLOBAL=
+# Who may buy fireworks, signed-in (the catalogue's default) or everyone. Any category has one.
+# FIREWORK_BUYERS=signed-in
 PRICE_JUMP_MAX=
 ONCHAIN_FEE_ALLOWANCE=
 # SHA-256, in hex, of the relay's token.

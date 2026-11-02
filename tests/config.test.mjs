@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readConfig } from "../relay/config.mjs";
-import { readLimits, readSettings } from "../worker/config.mjs";
+import { readBuyers, readLimits, readPurchases, readSettings } from "../worker/config.mjs";
 
 const RELAY = {
   WORKER_URL: "wss://api.example.org/relay",
@@ -95,6 +95,7 @@ test("the Worker's other settings", () => {
     network: "signet",
     invoiceTimeoutMs: 10_000,
     pendingDays: 7,
+    fireworkLeadMs: 3_000,
     pileStart: 1_000,
     pileEatPerHour: 60,
   });
@@ -102,6 +103,21 @@ test("the Worker's other settings", () => {
   const pile = readSettings({ PILE_START: "0", PILE_EAT_PER_HOUR: "0" });
   assert.deepEqual([pile.pileStart, pile.pileEatPerHour], [0, 0], "zero is allowed for the pile");
   assert.equal(readSettings({ PILE_EAT_PER_HOUR: "-3" }).pileEatPerHour, 60);
+});
+
+test("purchases read settings of their own, and close without them while donations stay open", () => {
+  const rates = { PURCHASE_RATE_PER_IP: "3", PURCHASE_RATE_GLOBAL: "30" };
+  assert.deepEqual(readPurchases(rates), { ratePerIp: 3, rateGlobal: 30 });
+  for (const broken of [{ PURCHASE_RATE_PER_IP: undefined }, { PURCHASE_RATE_GLOBAL: "0" }, { PURCHASE_RATE_GLOBAL: "-1" }, { PURCHASE_RATE_PER_IP: "1.5" }]) {
+    assert.equal(readPurchases({ ...rates, ...broken }), null, JSON.stringify(broken));
+  }
+  const donations = { LIGHTNING_MAX_SATS: "100000", RATE_PER_IP: "5", RATE_GLOBAL: "50", SOCKETS_PER_IP: "4", PRICE_JUMP_MAX: "3", ONCHAIN_FEE_ALLOWANCE: "0" };
+  assert.notEqual(readLimits(donations), null, "donations need none of them");
+  assert.equal(readBuyers({}, "firework"), "signed-in", "the catalogue's own choice, unless told otherwise");
+  assert.equal(readBuyers({ FIREWORK_BUYERS: " everyone " }, "firework"), "everyone");
+  for (const value of ["all", "", 1]) assert.equal(readBuyers({ FIREWORK_BUYERS: value }, "firework"), null, JSON.stringify(value));
+  assert.equal(readSettings({ FIREWORK_LEAD_MS: "5000" }).fireworkLeadMs, 5_000);
+  assert.equal(readSettings({ FIREWORK_LEAD_MS: "soon" }).fireworkLeadMs, 3_000);
 });
 
 test("both ends accept legacy MAX_SATS only when the canonical Lightning threshold is absent", () => {
