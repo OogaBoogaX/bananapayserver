@@ -182,7 +182,7 @@ services:
 
   btcpay:
     <<: *service
-    image: btcpayserver/btcpayserver:2.4.4@sha256:c264aa08cd32a469bd30d41978b73dc8bb2de1503ce67bdb0ab8fd5d934fb614
+    image: btcpayserver/btcpayserver:2.4.7@sha256:313b6178d8566784b8ec1811b80836df9157b9ee821098785bb0853ed1ef9df0
     environment:
       # The same network as NBXplorer's.
       BTCPAY_NETWORK: mutinynet
