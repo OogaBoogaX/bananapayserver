@@ -47,6 +47,8 @@ means writing a new record.
 | [0024](0024-onchain-above-lightning-limit.md) | On-chain donations above the Lightning threshold | amount policy superseded by 0025 |
 | [0025](0025-no-onchain-donation-cap.md) | No application cap on on-chain donations | accepted |
 | [0026](0026-rock-default-branch.md) | rock is the default branch | accepted |
+| [0028](0028-purchases-are-not-donations.md) | Purchases are not donations | accepted |
+| [0029](0029-purchase-message.md) | A purchase message, never a donation event | accepted |
 
 ## Waiting for a record
 

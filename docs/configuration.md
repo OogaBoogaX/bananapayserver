@@ -2,7 +2,7 @@
 
 Every setting the Worker and the relay read. The Lightning threshold and request rates are
 required: one that is missing or malformed keeps donations closed on the Worker and stops
-the relay. Deployment-specific limits and secrets are set in each deployment and never
+the relay. Purchases' own request rates are required too, but keep only purchases closed. Deployment-specific limits and secrets are set in each deployment and never
 committed. The shared public defaults are a 69-sat minimum and 1,000-sat message bar;
 deployment settings can change either value. Deploy OBL's page
 before a Worker that refuses sub-bar messages; [`protocol.md`](protocol.md) says why.
@@ -35,6 +35,10 @@ regtest.
 | `PRICE_JUMP_MAX` | limit, required | A whole number, 2 or more. A price more than this many times the last one, or the last divided by it, within a day of it, is taken for a fault at the price service and refused; invoices get the last price, marked stale. Banana counts are kept for good, so a wrong price would stay on the pile and the board |
 | `ONCHAIN_FEE_ALLOWANCE` | limit, required | How many sats more than its invoice the relay may ask a donor to pay on-chain, as room for a network fee the store adds. 0 allows none. Anything more is refused, as a mistake |
 | `RATE_GLOBAL` | limit, required | Invoice requests and on-chain switches per minute, for all visitors together. Notes and page sockets don't count, so a crowd of page loads can't close donations |
+| `PURCHASE_RATE_PER_IP` | limit, required for purchases | Purchase invoices per visitor and per minute, for everything sold together, counted apart from `RATE_PER_IP` and kept the same way. A stand that asks for an invoice whenever an item stays selected, as the fireworks stand does, needs a few choices per sale. Missing or malformed, purchases stay closed and donations stay open |
+| `PURCHASE_RATE_GLOBAL` | limit, required for purchases | Purchase invoices per minute, for all visitors together, counted apart from `RATE_GLOBAL`, so a run of purchases can't use up the budget that keeps donations open. Missing or malformed, purchases stay closed |
+| `<CATEGORY>_BUYERS` | optional | Who may buy in a category of the catalogue, such as `FIREWORK_BUYERS` for fireworks: `signed-in`, donors signed in on OBL only, or `everyone`. The catalogue's own choice when unset, `signed-in` for fireworks; any other value closes that category. Set it with `wrangler secret put`, so moving to `everyone` changes a setting, not the code. Advertised to pages in `status.catalogue` |
+| `FIREWORK_LEAD_MS` | optional | How long after a firework is recorded every page launches it, in milliseconds; 3,000 when unset. Pages count down through it |
 | `RELAY_TOKEN_SHA256` | secret | The SHA-256, in hex, of the relay's token |
 | `NETWORK` | variable | `mainnet`, `testnet`, `signet` or `regtest`; invoices and addresses for any other are refused. Set in each config file |
 | `INVOICE_TIMEOUT_MS` | optional | How long a page waits for the relay before hearing donations are closed; 10,000 when unset |
@@ -86,6 +90,31 @@ There are no sign-in or origin settings. Pages reach the Worker only through OBL
 which signs donors in and checks origins; see
 [decision 0014](decisions/0014-pages-through-obl.md).
 
+### Purchases
+
+Purchases are not donations ([decision 0028](decisions/0028-purchases-are-not-donations.md)).
+What is for sale and every price are fixed in the catalogue,
+[`shared/catalogue.mjs`](../shared/catalogue.mjs), never configured; fireworks cost 10 sats for
+a Pop, 69 for a Bolt, 100 for a Mega and 300 for a show. `MIN_SATS` and `MESSAGE_MIN_SATS`
+don't apply to them. Besides the two purchase rates, they need:
+
+- **A Lightning threshold at or above the dearest item** in the Worker and the relay, 300 sats
+  for fireworks. An item above the Worker's threshold isn't sold: purchases are Lightning
+  only.
+- **The relay's `MIN_SATS` at or below the cheapest item,** 10 sats for the Pop. The relay
+  refuses any invoice under its own minimum, a purchase's too, and then the purchase answers
+  `closed` and the Worker logs that the relay's minimum is above the price. With the relay's
+  default of 69, the Pop can't be sold and the other fireworks can. Donations keep the
+  Worker's own `MIN_SATS`, so lowering the relay's lets no smaller donation through. Changing
+  the relay's settings is a deployment change and needs two maintainers.
+- **The relay's `RATE_PER_MINUTE` at least `RATE_GLOBAL` plus `PURCHASE_RATE_GLOBAL`.** The
+  relay counts every invoice it makes, purchase or donation, against one budget, so a lower
+  value would let a run of purchases close donations at the relay.
+
+Apply migration 0009 before deploying the Worker that sells them; see
+[`protocol.md`](protocol.md). Opening fireworks to everyone is `FIREWORK_BUYERS=everyone`,
+set as a secret, with no change of code.
+
 ### Deploying
 
 Into the account OBL's Workers use. Staging deploys through a manually dispatched GitHub
@@ -114,8 +143,8 @@ them.
 | `BTCPAY_WEBHOOK_SECRET` | secret | The webhook's secret, as set in BTCPay |
 | `MAX_SATS` | legacy alias | Lightning threshold when `LIGHTNING_MAX_SATS` is absent; no longer an on-chain cap. The Compose files always pass `LIGHTNING_MAX_SATS`, so a relay run with them never falls back to it |
 | `LIGHTNING_MAX_SATS` | limit, required unless legacy alias is set | The relay's independently enforced Lightning threshold. Above this, create only the on-chain method and never activate Lightning |
-| `RATE_PER_MINUTE` | limit, required | How many invoices and on-chain addresses the relay makes in a minute, whatever the Worker asks. At least the Worker's `RATE_GLOBAL`, so it only ever stops a Worker gone wrong |
-| `MIN_SATS` | optional | 69 when unset. Any positive whole sat amount is valid up to the Lightning threshold; match the Worker's value |
+| `RATE_PER_MINUTE` | limit, required | How many invoices and on-chain addresses the relay makes in a minute, whatever the Worker asks. At least the Worker's `RATE_GLOBAL`, plus its `PURCHASE_RATE_GLOBAL` where anything is sold, so it only ever stops a Worker gone wrong |
+| `MIN_SATS` | optional | 69 when unset. Any positive whole sat amount is valid up to the Lightning threshold; match the Worker's value, or set it at or below the cheapest item for sale, 10 for the Pop firework (see "Purchases" above) |
 | `WEBHOOK_LISTEN` | optional | Where the webhook listener binds inside the container; `0.0.0.0:8080` when unset. Never publish this port, and never run the relay with host networking, where this would listen on the machine itself |
 | `INVOICE_MINUTES` | optional | How long an invoice stays payable; 15 when unset |
 | `INVOICE_DEADLINE_MS` | optional | How long after an invoice ask the relay aims to answer, in milliseconds; 8000 when unset. Lightning gets whatever time making the invoice left, and if it isn't ready by then, the invoice goes back on-chain only. Keep it under the Worker's `INVOICE_TIMEOUT_MS` (10000 when unset), with room for the answer to cross Tor |

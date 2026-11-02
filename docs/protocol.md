@@ -5,14 +5,17 @@ Ooga Booga Land's own Worker, and the relay's line. Both are checked at the rece
 drop anything that doesn't match exactly. The flows they carry are in
 [`architecture.md`](architecture.md).
 
-Status: v0.2. Pages now reach the Worker through OBL's Worker; see
-[decision 0014](decisions/0014-pages-through-obl.md). Until it has run against a real node,
-expect changes, and change both ends together.
+Status: v0.3. Pages can buy things, fireworks first, which are purchases, not donations: two
+calls, the `purchase` and `purchaseBoard` messages and `status.catalogue`; see
+[decision 0028](decisions/0028-purchases-are-not-donations.md) and
+[decision 0029](decisions/0029-purchase-message.md). v0.2: pages reach the Worker through OBL's
+Worker; see [decision 0014](decisions/0014-pages-through-obl.md). Until it has run against a
+real node, expect changes, and change both ends together.
 
 ## The page's calls
 
 The page calls its own Worker, OBL's, which signs donors in with GitHub and passes donation
-calls on to this Worker over a service binding. The page sees the paths below on its own
+and purchase calls on to this Worker over a service binding. The page sees the paths below on its own
 origin, with the bodies, replies and errors below, unchanged. JSON in and out, at most 1 KiB
 per request. An error is `{ "error": "<name>" }`:
 
@@ -21,12 +24,13 @@ per request. An error is `{ "error": "<name>" }`:
 | 400 | `invalid` | The request is malformed |
 | 400 | `amount` | The amount is outside the Worker's limits or above the node's own cap |
 | 400 | `message` | A nonempty message needs a donation at or above `messageMinSats` |
+| 403 | `sign-in` | Only signed-in donors may buy this at the moment |
 | 404 | `unknown` | No such request |
 | 410 | `expired` | The invoice has expired |
 | 413 | `too large` | The body is over 1 KiB |
 | 415 | `invalid` | The body isn't `application/json` |
 | 429 | `busy` | Too many requests this minute; try again in the next one |
-| 503 | `closed` | Donations are closed: the relay isn't connected, didn't answer in time, a limit isn't configured, or this Worker can't be reached |
+| 503 | `closed` | Donations are closed: the relay isn't connected, didn't answer in time, a limit isn't configured, or this Worker can't be reached. For a purchase, also when purchases' own limits or that category's buyers setting aren't configured, or Lightning couldn't be made |
 
 ### How OBL's Worker passes them on
 
@@ -43,6 +47,8 @@ internet can't. Staging binds to `bananapayserver-staging` and production to
 | `POST /donations/invoice` | `invoice(request, donor, visitor)` | the `Response`, as it is |
 | `POST /donations/note` | `note(request, visitor)` | the `Response`, as it is |
 | `POST /donations/onchain` | `onchain(request, visitor)` | the `Response`, as it is |
+| `POST /purchases/buy` | `purchase(request, donor, visitor)` | the `Response`, as it is |
+| `POST /purchases/mine` | `purchases(request, donor, visitor)` | the `Response`, as it is |
 | `GET /donations/socket` | `fetch(request)` | the socket's upgrade |
 
 - **`request`** is a new request carrying only the page's body and its `Content-Type`, never
@@ -58,7 +64,7 @@ internet can't. Staging binds to `bananapayserver-staging` and production to
   browser sent. Without `X-Client` it is refused.
 
 OBL's Worker also checks that the calls and the socket come from its own site, runs the
-Worker first for `/donations/*`, answers `{ "error": "closed" }` with 503 when this Worker
+Worker first for `/donations/*` and `/purchases/*`, answers `{ "error": "closed" }` with 503 when this Worker
 throws or can't be reached, and treats donations as off while it has no binding. This Worker's
 public address takes only the relay's line, until Foundry's exporters post there too.
 
@@ -128,6 +134,13 @@ a 1,000-sat bar when `status` names none, and shows an empty recent list and no 
 this Worker answers, so it runs correctly against either Worker. The order is therefore: the
 page, then migration 0008, then this Worker.
 
+Apply migration 0009 before deploying the Worker that sells things. Without its tables, a
+repeated notice for a donation already recorded can't be told from an unknown one, so it
+isn't acknowledged and the relay keeps sending it until the migration is applied. Set
+`PURCHASE_RATE_PER_IP` and `PURCHASE_RATE_GLOBAL` to open purchases; until then `status`
+carries `catalogue: null` and every purchase is `closed`. A page older than purchases ignores
+the new field and messages.
+
 `lightning` is `available`, `limit` (above the configured Lightning threshold), or
 `unavailable` (BTCPay couldn't make Lightning in time, for example while LND is down or
 slow). The last two have `invoice.bolt11: null` and still support `/donations/onchain`.
@@ -143,7 +156,8 @@ Legacy `MAX_SATS` supplies the Lightning threshold only when `LIGHTNING_MAX_SATS
 ```
 
 Updates optional `handle` and/or `message` before settlement starts. Omitted fields are
-preserved; legacy calls with neither clear the message. A donation under `messageMinSats`
+preserved; legacy calls with neither clear the message. A purchase's request has no details
+to edit and answers 404. A donation under `messageMinSats`
 refuses a nonempty message with 400 `{ "error": "message" }`. Text uses the same sanitization as
 invoice creation. The invoice, its payment code/address, sats, expiry, rate and authenticated
 account identity stay fixed. Answers 204, or 404 once settlement has started or the request
@@ -157,7 +171,8 @@ edits an already recorded donation.
 { "request": "3f0c…" }
 ```
 
-When the donor switches to on-chain. BTCPay makes the address only now.
+When the donor switches to on-chain. BTCPay makes the address only now. A purchase's request
+is refused with 400 `invalid`: purchases are Lightning only.
 
 ```json
 { "address": "bc1q…", "sats": 1000 }
@@ -166,11 +181,70 @@ When the donor switches to on-chain. BTCPay makes the address only now.
 `sats` is what BTCPay expects on-chain, which is more than the invoice when the store adds a
 network fee. Build the payment URI from these two. There is no BTCPay link.
 
+### `POST /purchases/buy`
+
+```json
+{ "category": "firework", "item": "mega", "nth": 2, "before": "1" }
+```
+
+Something bought, from any OBL experience that sells: a purchase, not a donation. It makes no
+bananas, and never touches the pile, the leaderboard, the tally or the recent list. `category`
+and `item` name it in bananapayserver's catalogue, [`shared/catalogue.mjs`](../shared/catalogue.mjs),
+which sets every price; `status.catalogue` publishes what is open. Fireworks are the
+`firework` category, with the items `pop`, `bolt`, `mega` and `show`. Every category's name is
+lowercase letters, digits and hyphens, at most 32 characters, and every item's the same, at
+most 64; messages use these names as they are. The page never sends
+sats, and any other key is refused as `invalid`; so is anything not in the catalogue.
+`MIN_SATS` and `messageMinSats` are donation limits and don't apply. A purchase has no handle
+and no message, and is always one of its item.
+
+`nth` and `before` are optional, coarse and identify nobody. `nth` is how many things this
+page load has bought, counting this one, an integer from 1 to 999. `before` is how many this
+browser bought before, as `none`, `1`, `2-5` or `6+`. A page sends them once everyone may
+buy; each is kept with the purchase.
+
+Who may buy is each category's: the catalogue's choice, which the deployment's
+`<CATEGORY>_BUYERS` setting can change, such as `FIREWORK_BUYERS`. While it is `signed-in`, a
+purchase with no `donor` is refused with 403 `{ "error": "sign-in" }`; with `everyone`, anyone
+may buy. A signed-in buyer's GitHub id and login are kept with the purchase.
+
+```json
+{
+  "request": "3f0c…32 hex characters",
+  "invoice": { "id": "BTCPay invoice id", "bolt11": "lnbc…", "expires": 1790000900 },
+  "lightning": "available"
+}
+```
+
+It goes down the relay's line as an ordinary invoice, so the relay and BTCPay see a request id
+and an amount, as for a donation. Nothing is priced, so nothing waits for a price. A purchase
+is Lightning only: when BTCPay can't make Lightning in time, or the price is above the
+Lightning threshold, the answer is 503 `closed`, never an on-chain invoice, and
+`/donations/onchain` refuses its request. `lightning` is always `available`. Purchase
+invoices have rate limits of their own, shared by every category, apart from donations'.
+
+### `POST /purchases/mine`
+
+```json
+{ "category": "firework" }
+```
+
+What the signed-in donor has bought, in every category, or in the one named, including one no
+longer sold. Send `{}` for every category.
+
+```json
+{ "items": { "firework": { "mega": { "quantity": 2, "sats": 200 }, "pop": { "quantity": 10, "sats": 100 } } } }
+```
+
+`items` lists only what was bought, by category and item. With nobody signed in the answer is
+`{ "items": {} }`; a malformed `donor`, or a category that isn't a lowercase name, is refused
+as `invalid`, and 503 `closed` means the totals can't be read just now.
+
 ### `GET /donations/socket?after=<invoice id>`
 
 A WebSocket. The page sends nothing on it; a page that does is closed with code 1008. When it
-connects, it receives the status, the pile, the leaderboard and the tally, then anything it
-missed. After that:
+connects, it receives the status, the pile, the leaderboard, each category's leaderboard and
+counts, and the tally, then anything it missed. After that:
 
 - `{ "type": "status", "open": true, "network": "signet" }` whenever the relay's line opens or
   closes, so the page can say donations are closed before anyone tries. `network` is the
@@ -179,7 +253,12 @@ missed. After that:
   needs to carry a message: new nonempty messages below it are refused at creation and by
   `note`, and settlement strips one held by an older pending invoice, so tiny donations cannot speak. `maxSats` is the fixed Bitcoin supply bound, not an application
   cap. Kiosks warn about on-chain-only amounts before Continue and validate Bitcoin amounts. Legacy
-  clients may ignore these extra fields.
+  clients may ignore these extra fields. It also has
+  `catalogue: { "firework": { "buyers": "signed-in", "prices": { "pop": 10, "bolt": 69, "mega": 100, "show": 300 } } }`:
+  each category open for sale, who may buy in it, `signed-in` or `everyone`, and the server's
+  price for each item in sats, so an experience shows those prices or "Sign in to buy". A
+  category closed by its buyers setting is left out, and `catalogue` is null while purchases
+  are closed by configuration; donations may still be open.
 - `{ "type": "donation", "donation": { "id", "sats", "handle", "message", "at" }, "bananas": { "exact", "rounded" }, "seq": 12, "verified": true }`
   for each payment. `donation` is OBL's contract exactly, with the invoice id as `id`, the
   chosen display handle (or `""` from an older anonymous client), and `at` in milliseconds.
@@ -199,6 +278,41 @@ missed. After that:
   `donation` messages retain the separate OBL event and banana estimate envelope. Recent and
   replayed rows recorded under an older, lower message bar have their message blanked when
   sent if their sats fall below the currently advertised `messageMinSats`.
+- `{ "type": "purchase", "id": "invoice id", "category": "firework", "item": "mega", "quantity": 1, "at": 1790000000000, "login": "ooga-dev", "slot": 2, "launchAt": 1790000003000 }`
+  for each purchase paid for, to every page, signed in or not, so the experience that sold it
+  can act on it wherever it is open. It is never a `donation`, and no donation event is sent
+  for a purchase. `id` is the purchase's invoice id, as its reply gave it, so the buyer's page
+  recognizes its own. `quantity` is always 1 for now. `at` is the server's clock as the message
+  goes out, once the purchase is recorded, in milliseconds. `login` is the buyer's GitHub login
+  where the category announces its buyers and the buyer was signed in, and null otherwise, so
+  for a category that doesn't, the message names nobody. Purchases are neither kept nor
+  replayed: a page that reconnects has missed them, and asks `/purchases/mine` for what
+  a signed-in donor owns. A repeated payment notice sends none. A category may add fields of
+  its own; fireworks, which announce their buyers, add two:
+  - `launchAt`, the moment every page launches it, on the server's clock: `at` plus
+    `FIREWORK_LEAD_MS`, 3,000 by default, or later while an earlier firework still holds a
+    slot it needs. A page converts it with its estimate of the server's clock, which `at`
+    refines. `id` also seeds the burst, so every page draws the same one.
+  - `slot`, which of six regions of sky, 0 to 5, it bursts in. A `show` fills `slot`,
+    `slot + 1` and `slot + 2`, and never starts past slot 3. A slot is held for 4 s after a
+    Pop's launch, 5 s after a Bolt's, 7 s after a Mega's and 12 s after a show's; a page fits
+    each item inside its hold.
+- `{ "type": "purchaseBoard", "category": "firework", "entries": [{ "login": "ooga-dev", "quantity": 4, "sats": 189 }] }`
+  for each category with a leaderboard, such as the fireworks stand's plaque: on connect, right
+  after `board`, and after each signed-in buyer's purchase in it. It lists the top 10 signed-in
+  buyers by the sats they have spent in the category, ties in login order, each with how many
+  things they have bought and the login of their latest purchase. A show counts as one.
+  Anonymous purchases never appear. If D1 can't be read, the last board is kept, or skipped if
+  none has been read.
+- `{ "type": "purchaseCounts", "category": "firework", "days": 7, "since": 1789398000000, "items": { "pop": 12, "bolt": 5, "mega": 3, "show": 1 } }`
+  for each category that keeps counts, such as the fireworks stand's top launches board: on
+  connect, after the leaderboards, and after each purchase paid in it. `items` is how many of
+  each were paid for over the same seven days as the tally: since `since`, the start of the
+  earliest hour, the current hour included. Every purchase counts once, a show as one `show`,
+  anonymous ones too, since counts name nobody; a repeated notice or an unpaid invoice counts
+  nothing. Every item for sale is listed, at 0 when none sold. The counts are worked out again
+  when a page connects in a later hour, so an old sale drops out then, or at the next
+  purchase. If D1 can't be read, the last counts are kept, or skipped if none have been read.
 - `{ "type": "seen", "id", "sats", "due", "left" }` when BTCPay sees an on-chain payment it
   hasn't yet settled, before the donation itself, which follows once BTCPay settles the
   invoice. `id` is the invoice id the donation will carry, `sats` is everything the invoice
@@ -262,7 +376,7 @@ newer ones. Leave it out on a first visit. A donation recorded while a replay is
 can reach the page twice, so ignore an id the page has already played.
 
 Donations are the record, so they stay when a donor deletes their OBL account, and a donor
-who comes back keeps their history. Whether the leaderboard shows an account that is gone is
+who comes back keeps their history. Purchases are records too, and stay the same way. Whether the leaderboard shows an account that is gone is
 the page's choice.
 
 The object keeps its page sockets below Cloudflare's limit for one object, so the relay's
@@ -311,7 +425,9 @@ From the relay to the object:
 | `{ "type": "paid", "invoice", "sats", "method" }` | Settled, and how: `lightning`, `onchain`, or `mixed` for an invoice paid partly each way. Repeated until acknowledged |
 | `{ "type": "seen", "invoice", "sats", "left" }` | An on-chain payment BTCPay hasn't settled yet: everything received on-chain so far, and what BTCPay still wants on-chain, network fee included. Once per payment, never acknowledged |
 
-The handle and message never go down the line: the relay sees a request id and an amount.
+The handle and message never go down the line: the relay sees a request id and an amount. A
+purchase's invoice is the same `invoice` message, so the relay can't tell it from a donation's;
+what was bought, and by whom, stays in the object.
 
 The object checks every reply before a page sees it. An invoice must be for the configured
 network and exactly the requested amount, an address must be for the configured network, and

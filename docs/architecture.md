@@ -48,8 +48,8 @@ the node's machine.
 | **Relay** | the BTCPay key, the webhook secret, its credential for the line | Keeps the line open, asks BTCPay for invoices, takes BTCPay's webhook, reports payments |
 | **Worker** | the SHA-256 of the relay's credential | The front door: checks the relay's credential and every call OBL's Worker passes on, and takes the exporters' batches |
 | **OBL's Worker** (OBL's, not this repository's) | its GitHub app's secret and its sessions | Serves the page, signs donors in, and passes donation calls on with who is giving and from where |
-| **Durable Object** | pending requests, until paid or expired; bitcoin's last price; the pile | Holds the relay's line and every page's socket, matches payments to requests, pushes donations, the pile, the leaderboard and the tally |
-| **D1** | donation records with their banana counts, each signed-in donor's total, the tally, feed history | Keeps what the object replays when a page reconnects; a feed, not a ledger |
+| **Durable Object** | pending requests, donations' and purchases', until paid or expired; bitcoin's last price; the pile | Holds the relay's line and every page's socket, matches payments to requests, pushes donations, the pile, the leaderboard, the tally and purchases |
+| **D1** | donation records with their banana counts, each signed-in donor's total, the tally, purchases, of fireworks and of whatever is sold later, with each signed-in buyer's totals by item and the funnel, feed history | Keeps what the object replays when a page reconnects; a feed, not a ledger |
 
 Nothing in that table can spend from a node, and nothing in it can reach one.
 
@@ -94,6 +94,7 @@ Several choices in the design are there for it:
   A receipt-priced donation first freezes its own price: socket then REST, each bounded by
   the price source timeout (currently two seconds). Slow sources can therefore add up to four
   seconds of source waits before the thanks and acknowledgement, plus storage/runtime work.
+  A purchase has no price to freeze, so it never waits for one.
   This is deliberate: the final donation, pile and rankings must agree on one durable value
   before the relay can discard its notice. It never waits for another donor's quote. An
   already-priced full on-chain detection or legacy invoice adds no settlement lookup.
@@ -223,6 +224,87 @@ checks the price every five minutes while pages are open. See
 
 None of them belongs along a production line in the Lightning cave. Banana counts follow
 donation amounts closely, and joined to a line they could expose its balance.
+
+## Purchases
+
+**Anything OBL sells is a purchase, not a donation.** Fireworks at the hub's stand are the
+first: an Ooga Pop, a Lightning Bolt, a ₿ Mega Blast or a show of several. Any OBL experience
+can sell things the same way, through the same call, invoice, record and message:
+
+1. **The catalogue.** [`shared/catalogue.mjs`](../shared/catalogue.mjs) lists every category
+   for sale, each from a module of its own, such as [`shared/firework.mjs`](../shared/firework.mjs):
+   its items and their prices in sats, who may buy, whether every page hears who bought,
+   whether its buyers are ranked, and whether every page hears how many of each item sold in
+   the last seven days. The server sets every price; a page names only a category
+   and an item.
+2. **The call.** `POST /purchases/buy` reaches this Worker through OBL's Worker, like a
+   donation, with the signed-in donor beside it. The Worker checks the item is for sale and
+   who may buy; the object asks the relay for an ordinary Lightning invoice, the same message as
+   a donation's, so the relay and BTCPay still see a request id and an amount and nothing more.
+   Purchases are Lightning only, and have request rates of their own, shared by every
+   category, so a run of them can't use up the budget that keeps donations open.
+3. **The record.** On settlement the object records the purchase in D1's `purchases` and
+   `purchase_items`, never in `donations`: it makes no bananas, and the pile, the leaderboard,
+   the tally and the recent list don't move. There is no price to freeze, so pages hear sooner
+   than for a donation.
+4. **The message.** Every page hears a `purchase` message, never a donation event, which OBL's
+   scenes are built on; see [decision 0029](decisions/0029-purchase-message.md). The buyer's
+   page finds its own invoice id, and the experience that sold it acts on it. A category with
+   a leaderboard also sends its `purchaseBoard` after a signed-in buyer's purchase, and one
+   that keeps counts sends its `purchaseCounts` after every purchase, the fireworks stand's top
+   launches board among them.
+
+Selling something new is a module and a line in the catalogue here, and the experience's
+handling of `purchase` in OBL: no new call, table, migration or relay change. See
+[decision 0028](decisions/0028-purchases-are-not-donations.md).
+
+**Fireworks launch on every page together.** For a firework, the `purchase` message also names
+a slot of sky and `launchAt`, a moment on the server's clock: 3 seconds after the purchase is
+recorded by default, or later while an earlier firework still holds the slot. Each page
+converts it with its own estimate of the server's clock, and counts down through the lead.
+Slots go round six regions of the sky, kept in memory: by the time the object sleeps, nothing is
+left in the sky to clash with. This is the one thing the object does for a category once it is
+paid; most categories need nothing.
+
+**Who bought it, and what is kept.**
+
+- Who may buy is each category's, and configuration can change it. Fireworks, for the first
+  month on production, are for donors signed in on OBL only, whose sign-in is for contributors
+  (`FIREWORK_BUYERS=signed-in`); then for everyone.
+- A signed-in buyer's purchase keeps their numeric GitHub id, which survives a rename, and
+  their login. Every page hears their login only where the category announces its buyers, as
+  fireworks do. D1's `purchase_totals` keeps each account's quantity and sats by item, with a
+  trigger like the donations' totals, for a category's leaderboard, the top 10 by sats, and for
+  what a donor has bought, which `POST /purchases/mine` answers.
+- An anonymous purchase keeps no identifier: no address, no token. Only the coarse `nth` and
+  `before` its page sent go with it, and it never reaches a leaderboard.
+- Purchases are records, like donations, so they stay when a buyer deletes their OBL account.
+- `purchase_funnel` counts the invoice lines made and paid, by item and UTC hour, and nothing
+  else, to show how many choices end in a sale. Its paid counts over the last seven days are
+  also what a category's `purchaseCounts` shows every page: how many sold, never who bought.
+
+**One record for everything sold.** D1 keeps purchases the way an order and its lines are kept:
+
+- `purchases` has one row per paid invoice, with its whole amount, how it was paid and who
+  paid, so each row matches one BTCPay invoice exactly.
+- `purchase_items` has one row per thing bought: its category and item, such as `firework`
+  and `mega`, the quantity, and what it cost then. One payment can carry several things, or
+  several of one, and a later change of price leaves the record as it was.
+- `purchase_totals` and `purchase_funnel` are kept by item, for every category alike.
+
+The tables never list what is for sale: the catalogue is the code's, so a new category needs
+no migration. Columns can be added to these tables later; their keys and checks are what is
+hard to change, so those are kept general. What the record holds is a sale, never a delivery:
+no postal address, email or anything else needed to send goods. Selling things that ship would
+need a design and a decision of its own, and fulfilment, like a refund, would be a record of
+its own, keyed by the purchase, never an edit of it.
+
+**The books.** The relay is unchanged, so a purchase's invoice goes to the same BTCPay store
+with the same `orderId` as a donation's. The books tell purchases from donations by joining
+BTCPay's invoice ids to `purchases`. Whether sales need a store of their own, or a different
+treatment from donations, is for whoever keeps the books.
+
+Purchases are payments too, so they stay apart from node feeds, as donations do.
 
 ## Node event feeds
 

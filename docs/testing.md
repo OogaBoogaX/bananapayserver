@@ -55,8 +55,9 @@ contributor docs list for running it from source. BTCPay 2.4.4 needs the .NET 10
    - **The stand-in** for OBL's page and Worker, in [`tools/stand-in/`](../tools/stand-in/).
      Run `wrangler dev -c tools/stand-in/wrangler.jsonc --port 8788`, check its
      binding shows as `connected`, and open `http://localhost:8788`. It should say donations
-     are open, on regtest, and show the pile. Name a GitHub id and username there to test a
-     signed-in donation; OBL's Worker takes them from its sign-in.
+     are open, on regtest, and show the pile and what is for sale. Name a GitHub id and
+     username there to test a signed-in donation or purchase; OBL's Worker takes them from its
+     sign-in.
    - **OBL's own page and Worker,** run locally from their repository with their binding to
      `bananapayserver-staging`.
 7. **A donation.** Ask for 10,000 sats and check the rate and the banana counts it shows. Pay
@@ -88,6 +89,9 @@ Then the failure drills:
 | Stop the Worker while the stand-in is open | The stand-in answers `closed` for anything the page asks |
 | Ask the Worker's own address, `http://localhost:8787`, for `/donations/invoice` | 404: only the relay's line is public |
 | Name a test donor on the stand-in and donate, then donate again with "Give anonymously" | The first appears on the leaderboard under that name; the second only adds to the pile |
+| With `PURCHASE_RATE_PER_IP` and `PURCHASE_RATE_GLOBAL` set in `.dev.vars`, name a test donor, buy a Mega firework under Buy, and pay it with `scripts/regtest.sh pay <invoice>` | The page logs it as yours, with its slot and launch time, the firework leaderboard lists the donor, the pile doesn't move, and "What I've bought" shows it. D1 has a row in `purchases` and one in `purchase_items`, and no new donation |
+| Buy with no test donor named | `403 sign-in`, while fireworks are for signed-in donors only; with `FIREWORK_BUYERS=everyone` in `.dev.vars`, the purchase goes through as nobody's |
+| Buy a Pop with the relay's `MIN_SATS` unset | `503 closed`, and the Worker logs that the relay's minimum is above the price; set `MIN_SATS=10` in `relay/.env` and the Pop sells |
 | Open a second page and watch both for a few minutes | Both show the same pile, falling at the same rate |
 | Stop the price service answering, for example by taking the machine offline briefly, and donate | The donation still goes through, counted at the last price; the page shows an alert, and `price_at` in D1 shows when that price was fetched |
 
