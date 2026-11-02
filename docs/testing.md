@@ -21,7 +21,7 @@ behaving differently from the stand-ins, which is what the stages below are for.
 
 Proves the whole path end to end, through the same service binding OBL's Worker uses. You need
 Docker, Node 22 or newer, curl, jq and openssl, and a checkout of BTCPay Server with what its
-contributor docs list for running it from source. BTCPay 2.4.4 needs the .NET 10 SDK.
+contributor docs list for running it from source. BTCPay 2.4.7 needs the .NET 10 SDK.
 [`scripts/regtest.sh`](../scripts/regtest.sh) does the setup; give it the checkout as
 `BTCPAY_DIR`.
 
@@ -32,6 +32,10 @@ contributor docs list for running it from source. BTCPay 2.4.4 needs the .NET 10
 2. **BTCPay.** In the checkout's `BTCPayServer` folder, run
    `dotnet run --launch-profile Bitcoin`. That profile serves plain HTTP at
    `http://localhost:14142`, so there's no certificate to trust.
+   Before starting 2.4.5 or newer, configure `BTCPAY_SSRFEXCEPTIONS` privately for the exact
+   Lightning and webhook destinations and ports used by this rehearsal. Follow the
+   [private outbound rules](staging.md#btcpay-private-outbound-connections), using this
+   source-based setup's destinations rather than copying another deployment's values.
 3. **The store.** `scripts/regtest.sh setup` creates the store, with Lightning on the merchant
    node and a watch-only regtest wallet, plus an API key that can only create and view invoices
    on it, and the webhook. It writes `.dev.vars` and `relay/.env` with fresh secrets. BTCPay's

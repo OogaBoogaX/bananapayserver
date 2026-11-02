@@ -67,6 +67,9 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
      as `addnode`.
    - **`BITCOIN_RPC_PASSWORD` and `POSTGRES_PASSWORD`:** fresh values, made here and used
      nowhere else, from `openssl rand -hex 24`.
+   - **`BTCPAY_SSRFEXCEPTIONS`:** the exact private Lightning and webhook destinations, each
+     with its port, selected as [described below](#btcpay-private-outbound-connections).
+     The empty default blocks these connections; fill it before startup and setup.
    - **`WORKER_URL`:** `wss://bananapayserver-staging.<account subdomain>.workers.dev/relay`.
    - **`RELAY_LIGHTNING_MAX_SATS`:** the team's Lightning threshold for staging, passed as
      `LIGHTNING_MAX_SATS` to the relay. It does not cap on-chain donations. An `.env` from
@@ -221,8 +224,9 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
   chain, so the next test doesn't wait for a sync.
 - **Start again,** after a stop, a crash or a reboot: `./start.sh`, which puts the firewall's
   rules back first and skips any that are already there.
-- **Update:** pull the branch, then `docker compose -p obl-staging build relay` and
-  `./start.sh`.
+- **Update:** complete the [upgrade checks below](#btcpay-upgrade-handoff), including private
+  configuration and backups, before pulling the branch, building the relay with
+  `docker compose -p obl-staging build relay`, and running `./start.sh`.
 - **Remove,** when testing is done: `docker compose -p obl-staging down -v`, which deletes
   staging's chain, wallets and BTCPay. Signet only. The firewall's rules then guard nothing,
   and go at the next reboot.
@@ -255,8 +259,9 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
 regtest, with a payer node, and points the relay at a Worker running on the workstation. It
 proves the wiring before anything touches the machine, in minutes rather than hours:
 
-1. `.env` from the example, with any placeholder for `SIGNET_PEER` and
-   `RELAY_LIGHTNING_MAX_SATS` set.
+1. `.env` from the example, with any placeholder for `SIGNET_PEER`,
+   `RELAY_LIGHTNING_MAX_SATS` set, and `BTCPAY_SSRFEXCEPTIONS` selected for the disposable
+   stack as described below. The rehearsal inherits the same default-deny setting.
 2. `export COMPOSE_FILE=compose.yaml:compose.rehearsal.yaml`, then step 4's build, and
    `docker compose -p obl-staging up -d` with step 4's services and `payer`. A workstation
    has no node to fence off, so it skips `start.sh` and the firewall.
@@ -268,3 +273,62 @@ proves the wiring before anything touches the machine, in minutes rather than ho
 5. `docker compose -p obl-staging up -d relay worker`. The relay should log `line: open`.
 6. Open a channel from `payer` to `lnd`, mine 6 blocks, ask the stand-in for an invoice, and
    pay it from `payer`. The donation should land in the local D1.
+
+## BTCPay private outbound connections
+
+BTCPay 2.4.5 introduced default blocking of private outbound Lightning and webhook requests.
+This stack keeps that protection enabled. Its empty `BTCPAY_SSRFEXCEPTIONS` default does not
+make the upgrade operational: the machine's operator must select the exceptions privately
+before setup or an upgrade. Existing `.env` files need the new setting too.
+
+1. Inspect the store's Lightning connection and webhook destination privately. For a fresh
+   stack, use the destinations configured by `deploy/staging/setup.mjs`. Confirm the matching
+   service names and listening ports in the effective Compose configuration. Do not paste
+   that configuration, connection strings, certificates or credentials into an issue or log.
+2. Copy only each exact destination hostname (or individual IP) and its destination port into
+   `deploy/staging/.env`, separated by semicolons. Quote the value. The shape is
+   `BTCPAY_SSRFEXCEPTIONS='<lightning-host>:<port>;<webhook-host>:<port>'`; replace the
+   placeholders privately. Do not include URL schemes, paths, credentials or connection-string
+   options. IPv6 literals with a port need brackets. Do not add the payer or unrelated services.
+3. Require a port on every entry. Do not use CIDR ranges, whole private networks, wildcards,
+   or `BTCPAY_DISABLESSRFPROTECTION=true`. BTCPay accepts some broader forms, so its parser
+   alone does not enforce this narrower policy. Keep `.env` owner-readable only and untracked.
+   Check for shell variables or Compose overrides that would replace the intended value.
+4. Trust only operator-controlled DNS: an exact hostname exception permits every address it
+   resolves to at that port. Exceptions apply to all SSRF-protected HTTP clients, not just one
+   store or webhook. Redirects to another private destination require a separate review and
+   exception. Preserve TLS certificate validation, the setup's certificate pin and the network
+   fence; this setting grants no new network access by itself.
+
+Settings take effect when BTCPay is recreated during the approved operator rollout, not while
+it is running. Invalid exception syntax prevents startup. Debug logs can include permitted
+private destinations, so keep raw logs private and report only sanitized outcomes.
+
+Semantics are verified against the tagged 2.4.7
+[options](https://github.com/btcpayserver/btcpayserver/blob/v2.4.7/BTCPayServer/Configuration/BTCPayServerOptions.cs),
+[exception parser](https://github.com/btcpayserver/btcpayserver/blob/v2.4.7/BTCPayServer/SSRFAllowedDestination.cs)
+and [connection filter](https://github.com/btcpayserver/btcpayserver/blob/v2.4.7/BTCPayServer/SSRFProtectionExtensions.cs).
+See also the [operator guide](https://docs.btcpayserver.org/Operators/#allow-private-outbound-destinations).
+
+## BTCPay upgrade handoff
+
+The machine's operator owns these checks. Two maintainer approvals are required for deployment
+changes. Merging the image pin does not update a running stack or any donating node's BTCPay.
+
+- Confirm the private exception values above and the target architecture. Independently check
+  the official image tag's manifest digest against the Compose pin before rollout.
+- Rehearse the proposed pinned image and configuration on a disposable regtest workstation,
+  then the isolated signet staging stack with the operator's approval. Verify startup,
+  Lightning connectivity, invoice creation, test payment detection and successful webhook
+  delivery. Use test coins only; keep donating nodes and funded infrastructure out of the test.
+- Redeliver a webhook and confirm it produces no duplicate donation. Disable the test webhook,
+  pay a test invoice and confirm recovery polling still records it; restore delivery afterwards.
+  Follow the failure drills in [testing.md](testing.md) and record sanitized results.
+- Before rollout, make consistent backups of stateful services and verify restoration in an
+  isolated environment. Review the release's database and plugin migrations and agree on a
+  rollback that restores compatible application and data versions together. Reverting only
+  the image after a migration is not a proven rollback. Keep backup and recovery details private.
+
+Automated tests check the committed configuration and application behavior using stand-ins.
+They do not exercise BTCPay's real SSRF filter, validate private operator values, or establish
+that Lightning, webhook delivery, backup/restore or rollback works on the running installation.

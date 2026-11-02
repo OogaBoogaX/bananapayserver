@@ -192,6 +192,10 @@ services:
       BTCPAY_POSTGRES: User ID=postgres;Password=${POSTGRES_PASSWORD:?};Host=postgres;Port=5432;Database=btcpayserver
       BTCPAY_EXPLORERPOSTGRES: User ID=postgres;Password=${POSTGRES_PASSWORD:?};Host=postgres;Port=5432;Database=nbxplorer
       BTCPAY_BTCEXPLORERURL: http://nbxplorer:32838/
+      # Keep private outbound requests blocked until the operator selects exact destinations
+      # and ports in .env. Required for Lightning and webhooks since 2.4.5; see docs/staging.md.
+      BTCPAY_DISABLESSRFPROTECTION: "false"
+      BTCPAY_SSRFEXCEPTIONS: "${BTCPAY_SSRFEXCEPTIONS:-}"
       # 768 MiB for its heap, what .NET would take from mem_limit, for kernels that don't
       # enforce it.
       DOTNET_GCHeapHardLimit: "0x30000000"
