@@ -32,10 +32,10 @@ contributor docs list for running it from source. BTCPay 2.4.7 needs the .NET 10
 2. **BTCPay.** In the checkout's `BTCPayServer` folder, run
    `dotnet run --launch-profile Bitcoin`. That profile serves plain HTTP at
    `http://localhost:14142`, so there's no certificate to trust.
-   Before starting 2.4.5 or newer, configure `BTCPAY_SSRFEXCEPTIONS` privately for the exact
-   Lightning and webhook destinations and ports used by this rehearsal. Follow the
-   [private outbound rules](staging.md#btcpay-private-outbound-connections), using this
-   source-based setup's destinations rather than copying another deployment's values.
+   2.4.5 and later block outbound requests to private addresses, so give it
+   `BTCPAY_SSRFEXCEPTIONS=localhost:8080` in its environment, for the relay's webhook at
+   `http://localhost:8080/btcpay`. Its Lightning connection, to `127.0.0.1` with
+   `allowinsecure`, is set up by the admin and needs no exception.
 3. **The store.** `scripts/regtest.sh setup` creates the store, with Lightning on the merchant
    node and a watch-only regtest wallet, plus an API key that can only create and view invoices
    on it, and the webhook. It writes `.dev.vars` and `relay/.env` with fresh secrets. BTCPay's

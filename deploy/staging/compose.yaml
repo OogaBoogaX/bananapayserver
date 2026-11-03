@@ -192,10 +192,10 @@ services:
       BTCPAY_POSTGRES: User ID=postgres;Password=${POSTGRES_PASSWORD:?};Host=postgres;Port=5432;Database=btcpayserver
       BTCPAY_EXPLORERPOSTGRES: User ID=postgres;Password=${POSTGRES_PASSWORD:?};Host=postgres;Port=5432;Database=nbxplorer
       BTCPAY_BTCEXPLORERURL: http://nbxplorer:32838/
-      # Keep private outbound requests blocked until the operator selects exact destinations
-      # and ports in .env. Required for Lightning and webhooks since 2.4.5; see docs/staging.md.
-      BTCPAY_DISABLESSRFPROTECTION: "false"
-      BTCPAY_SSRFEXCEPTIONS: "${BTCPAY_SSRFEXCEPTIONS:-}"
+      # 2.4.5 and later block outbound requests to private addresses. The webhook to the
+      # relay is the one this stack needs: BTCPay doesn't filter Lightning that an admin
+      # set up.
+      BTCPAY_SSRFEXCEPTIONS: relay:8080
       # 768 MiB for its heap, what .NET would take from mem_limit, for kernels that don't
       # enforce it.
       DOTNET_GCHeapHardLimit: "0x30000000"
