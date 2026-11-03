@@ -27,6 +27,19 @@ The machine's operator sets it up, by hand, from `rock` only
 - **BTCPay reaches LND only with an invoice-only macaroon.** Decode the macaroon in the store's
   Lightning connection string with `lncli printmacaroon <hex>`. Its permissions must be exactly
   `info:read`, `invoices:read` and `invoices:write`.
+- **BTCPay may send its webhook to the relay.** BTCPay 2.4.5 and later block outbound requests
+  to private addresses, and the relay's webhook address on BTCPay's network is one. Give
+  BTCPay's container `BTCPAY_SSRFEXCEPTIONS=obl-relay:8080`, after a `;` if it already has
+  exceptions, and check again after every BTCPay update:
+
+  ```bash
+  docker exec <BTCPay's container> printenv BTCPAY_SSRFEXCEPTIONS
+  ```
+
+  It should list `obl-relay:8080`. Allow nothing broader: no address ranges, and never
+  `BTCPAY_DISABLESSRFPROTECTION=true`. Without it a paid donation still counts, from the
+  relay's own check each minute, but not at once. A Lightning connection to a local address
+  that a server admin saved needs no exception.
 - **BTCPay's pages are private.** Two-factor sign-in on every admin account, and public user
   registration off.
 - **The store settles an on-chain payment only after at least one confirmation.** A payment
@@ -130,12 +143,15 @@ The machine's operator sets it up, by hand, from `rock` only
      It should print BTCPay's network, never `host`.
    - **No secrets in the log:** `docker compose -p obl-relay logs relay` shows no token, key
      or macaroon.
+   - **BTCPay reaches the webhook:** in the store's webhook settings, send a test event. BTCPay
+     should report it delivered.
 
 ## Running it
 
 - **Logs:** `docker compose -p obl-relay logs --tail 50 relay`.
 - **After a reboot or a crash:** Docker starts the relay again by itself.
-- **After a BTCPay update:** check again that BTCPay can't read LND's data folder.
+- **After a BTCPay update:** check again that BTCPay can't read LND's data folder, and that it
+  still has the webhook's exception.
 - **Update:** `git pull` on `rock`, the threshold check from step 5, then
   `docker compose -p obl-relay up -d --build`.
 - **Stop:** `docker compose -p obl-relay stop`. Donations close until it's back.
