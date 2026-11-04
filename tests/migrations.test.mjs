@@ -124,3 +124,44 @@ test("a failed schema 7 upgrade rolls back its column changes and can be retried
   assert.equal(sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 8);
   assert.deepEqual(rows(sql.exec("SELECT * FROM pending ORDER BY invoice").toArray()), before.map(row => ({ ...row, price_stale: row.pricing === "invoice" ? null : row.price_stale, github_login: null })));
 });
+
+test("verified donor rename preserves receipts and totals, separates shared names and handles delayed/retried payments", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    for (const name of ["0001_donations.sql", "0002_stats.sql", "0003_tally.sql", "0004_donor_sats.sql", "0005_handle_totals.sql", "0006_receipt_pricing.sql", "0007_legacy_metadata.sql", "0008_verified_donations.sql"]) db.exec(migration(name));
+    const insert = db.prepare("INSERT INTO donations(id,sats,handle,message,at,method,github_id,milli,verified) VALUES(?,1000,?,'',1000,'lightning',?,500,?) ON CONFLICT(id) DO NOTHING");
+    insert.run("owned-old", "Old-Name", 42, 1);
+    insert.run("owned-new", "New-Name", 42, 1);
+    insert.run("anonymous-old", "Old-Name", null, 0);
+    insert.run("unverified-old", "Old-Name", 42, 0);
+    insert.run("claimant-old", "Old-Name", 99, 1);
+    insert.run("custom", "custom-label", 42, 0);
+    insert.run("other-new", "New-Name", 99, 1);
+    const raw = () => rows(db.prepare("SELECT * FROM donations ORDER BY seq").all());
+    const boards = () => rows(db.prepare("SELECT * FROM handle_totals ORDER BY handle").all());
+    const before = raw(), beforeBoards = boards(), tally = db.prepare("SELECT * FROM tally").get();
+    db.exec(migration("0009_verified_donor_renames.sql"));
+    assert.deepEqual(raw(), before); assert.deepEqual(boards(), beforeBoards);
+    db.prepare("INSERT INTO donor_login_migrations VALUES(42,'old-name','New-Name')").run();
+    assert.deepEqual(raw(), before);
+    assert.deepEqual(db.prepare("SELECT * FROM tally").get(), tally);
+    assert.deepEqual(boards(), [
+      { handle: "custom-label", milli: 500, sats: 1000, donations: 1 },
+      { handle: "New-Name", milli: 1500, sats: 3000, donations: 3 },
+      { handle: "Old-Name", milli: 1500, sats: 3000, donations: 3 },
+    ]);
+    insert.run("delayed", "OLD-NAME", 42, 1);
+    insert.run("delayed", "OLD-NAME", 42, 1);
+    insert.run("future", "New-Name", 42, 1);
+    insert.run("new-claimant", "Old-Name", 99, 1);
+    assert.equal(db.prepare("SELECT sats FROM handle_totals WHERE handle='new-name'").get().sats, 5000);
+    assert.equal(db.prepare("SELECT sats FROM handle_totals WHERE handle='old-name'").get().sats, 4000);
+    const sums = db.prepare("SELECT sum(sats) sats, sum(milli) milli, sum(donations) donations FROM handle_totals").get();
+    assert.deepEqual({ ...sums }, { sats: 10000, milli: 5000, donations: 10 });
+    const after = boards();
+    db.prepare("INSERT INTO donor_login_migrations VALUES(42,'old-name','New-Name') ON CONFLICT DO NOTHING").run();
+    assert.deepEqual(boards(), after);
+    assert.throws(() => db.exec("UPDATE donor_login_migrations SET new_login='another'"), /immutable/);
+    assert.throws(() => db.exec("DELETE FROM donor_login_migrations"), /immutable/);
+  } finally { db.close(); }
+});
