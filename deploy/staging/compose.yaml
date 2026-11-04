@@ -182,7 +182,7 @@ services:
 
   btcpay:
     <<: *service
-    image: btcpayserver/btcpayserver:2.4.4@sha256:c264aa08cd32a469bd30d41978b73dc8bb2de1503ce67bdb0ab8fd5d934fb614
+    image: btcpayserver/btcpayserver:2.4.7@sha256:313b6178d8566784b8ec1811b80836df9157b9ee821098785bb0853ed1ef9df0
     environment:
       # The same network as NBXplorer's.
       BTCPAY_NETWORK: mutinynet
@@ -192,6 +192,10 @@ services:
       BTCPAY_POSTGRES: User ID=postgres;Password=${POSTGRES_PASSWORD:?};Host=postgres;Port=5432;Database=btcpayserver
       BTCPAY_EXPLORERPOSTGRES: User ID=postgres;Password=${POSTGRES_PASSWORD:?};Host=postgres;Port=5432;Database=nbxplorer
       BTCPAY_BTCEXPLORERURL: http://nbxplorer:32838/
+      # 2.4.5 and later block outbound requests to private addresses. The webhook to the
+      # relay is the one this stack needs: BTCPay doesn't filter Lightning that an admin
+      # set up.
+      BTCPAY_SSRFEXCEPTIONS: relay:8080
       # 768 MiB for its heap, what .NET would take from mem_limit, for kernels that don't
       # enforce it.
       DOTNET_GCHeapHardLimit: "0x30000000"

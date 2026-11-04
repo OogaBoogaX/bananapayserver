@@ -22,3 +22,13 @@ test("the check catches the form that broke an older Compose", () => {
   assert.match("LIGHTNING_MAX_SATS: ${LIGHTNING_MAX_SATS-${MAX_SATS:-}}", NESTED);
   assert.doesNotMatch("TOR_SOCKS: ${TOR_FRONT_IP:?}:9050 ${OTHER:-}", NESTED);
 });
+
+test("staging's BTCPay exempts only the relay's webhook from its private-address filter", () => {
+  const staging = readFileSync(deploy + "staging/compose.yaml", "utf8");
+  const btcpay = staging.match(/^  btcpay:\n([\s\S]*?)(?=^  \w+:|^networks:)/m)?.[1];
+  assert.ok(btcpay, "finds BTCPay's service settings");
+  assert.deepEqual(
+    btcpay.split("\n").filter((line) => /^\s+BTCPAY_.*SSRF/.test(line)).map((line) => line.trim()),
+    ["BTCPAY_SSRFEXCEPTIONS: relay:8080"],
+  );
+});

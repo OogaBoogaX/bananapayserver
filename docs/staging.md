@@ -17,7 +17,9 @@ The machine's operator deploys it, by hand. Nothing pushes to the machine, CI in
 - **Only Tor reaches the internet.** BTCPay, NBXplorer, Postgres, bitcoind and LND sit on a
   network with no way out, and the relay on another, shared only with BTCPay and Tor. bitcoind
   and LND reach signet's peers through Tor, and the relay reaches the Worker through Tor, so
-  the machine's address stays hidden, as the mainnet node's is.
+  the machine's address stays hidden, as the mainnet node's is. BTCPay 2.4.5 and later also
+  refuse outbound requests to private addresses; `compose.yaml` exempts only its webhook to the
+  relay, `relay:8080`.
 - **A firewall,** [`firewall.sh`](../deploy/staging/firewall.sh): Tor's network can't reach the
   machine or any private network, and no staging network can reach the machine's own addresses.
 - **No IPv6:** the firewall fences IPv4, so no container in the stack has an IPv6 address.
