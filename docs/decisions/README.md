@@ -47,6 +47,7 @@ means writing a new record.
 | [0024](0024-onchain-above-lightning-limit.md) | On-chain donations above the Lightning threshold | amount policy superseded by 0025 |
 | [0025](0025-no-onchain-donation-cap.md) | No application cap on on-chain donations | accepted |
 | [0026](0026-rock-default-branch.md) | rock is the default branch | accepted |
+| [0027](0027-line-heartbeat.md) | The relay's line proves itself end to end | proposed |
 
 ## Waiting for a record
 
