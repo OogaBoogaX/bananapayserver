@@ -9,6 +9,8 @@ import { donationEvent, MESSAGE_MAX, sanitize } from "../shared/donation.mjs";
 import { cleanHandle } from "../shared/handle.mjs";
 import { parseUp } from "../shared/protocol.mjs";
 import { readLimits, readSettings } from "./config.mjs";
+import { PILE_SCHEMA, pileKnows, pileRevision, pileView, recordPileDelta, recordPileException } from "./pile.mjs";
+import { hashRequest } from "./receipts.mjs";
 import { relayAuthorized } from "./relay-token.mjs";
 import { BANANA_CENTS, bananasOf, fetchPrice, milliBananas, rateOf } from "./price.mjs";
 
@@ -102,6 +104,39 @@ const MIGRATIONS = [
   UPDATE pending SET price_stale = CASE WHEN pricing = 'invoice' THEN NULL ELSE previous_price_stale END;
   ALTER TABLE pending DROP COLUMN previous_price_stale;`,
   `ALTER TABLE pending ADD COLUMN github_login TEXT;`,
+  // The pile stops decaying. Its saved row stays exactly as it was, as the checkpoint; credits
+  // from now on are permanent deltas, and the pile is pending until an audited anchor. Every
+  // donation with a finished mark now is already in the checkpoint, and is fenced for good.
+  PILE_SCHEMA,
+  // Each settlement's provenance token, saved before its D1 insert; see migration 0009.
+  `ALTER TABLE pending ADD COLUMN d1_token TEXT;`,
+  // What a quarantined settlement knew, kept privately and for good, so review can recover
+  // who it was for and how it was valued. Never purged, never overwritten, never published.
+  // The request token is kept only as its SHA-256.
+  `CREATE TABLE quarantined (
+    invoice TEXT NOT NULL,
+    request_hash TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    method TEXT,
+    sats INTEGER NOT NULL,
+    handle TEXT NOT NULL,
+    message TEXT NOT NULL,
+    github_id INTEGER,
+    github_login TEXT,
+    price_cents INTEGER,
+    price_at INTEGER,
+    milli INTEGER,
+    received_at INTEGER,
+    price_stale INTEGER,
+    pricing TEXT,
+    d1_token TEXT,
+    created INTEGER NOT NULL,
+    existing_seq INTEGER,
+    existing_sats INTEGER,
+    existing_provenance TEXT,
+    quarantined_at INTEGER NOT NULL,
+    PRIMARY KEY (invoice, request_hash)
+  );`,
 ];
 
 export class DonationsObject {
@@ -215,6 +250,14 @@ export class DonationsObject {
   // Records which invoice answers a request, and its estimated price. False if the relay
   // reused an invoice id.
   attach(request, { id, expires }, price, milli) {
+    // An invoice id this object already knows a donation for (credited, in the checkpoint, held
+    // for review, or still marked finished) came back from the provider. It is refused before
+    // the donor sees anything payable. Only the object's own records are read, so the quote
+    // waits on nothing; an older id D1 alone remembers is caught at payment, and held there.
+    if (pileKnows(this.sql, `donation:${id}`) || this.sql.exec("SELECT 1 FROM finished WHERE invoice = ?", id).toArray().length) {
+      console.error(`invoice: the provider reused invoice id ${id}; refused before it was shown`);
+      return false;
+    }
     try {
       this.sql.exec(
         "UPDATE pending SET invoice = ?, expires = ?, price_cents = ?, price_at = ?, milli = ? WHERE request = ?",
@@ -280,7 +323,7 @@ export class DonationsObject {
     server.serializeAttachment({ role: "page" });
     this.ctx.acceptWebSocket(server, ["page", group]);
     server.send(JSON.stringify(this.statusMessage(this.line() !== null)));
-    server.send(JSON.stringify(this.pileMessage(this.platform.now())));
+    server.send(JSON.stringify(this.pileMessage()));
     const board = await this.board();
     if (board) server.send(JSON.stringify(board));
     const tally = await this.tally();
@@ -404,23 +447,34 @@ export class DonationsObject {
       const known = await this.env.DB.prepare("SELECT 1 FROM donations WHERE id = ?").bind(invoice).first();
       return known ? "duplicate" : "unknown";
     }
+    // The settlement's provenance token, saved before the insert and reused by every retry, so
+    // a row this request wrote can be told from any other.
+    if (row.d1_token === null) {
+      this.sql.exec("UPDATE pending SET d1_token = coalesce(d1_token, ?) WHERE request = ?", this.platform.id(), row.request);
+      row = this.sql.exec("SELECT * FROM pending WHERE request = ?", row.request).toArray()[0];
+    }
     const limits = readLimits(this.env);
     if (!limits) throw new Error("settlement requires valid limits");
     const message = row.sats >= limits.messageMinSats ? row.message : "";
     const verified = row.github_id !== null && row.github_login && row.handle.toLowerCase() === row.github_login.toLowerCase() ? 1 : 0;
     const inserted = await this.env.DB.prepare(
-      "INSERT INTO donations (id, sats, handle, message, at, method, github_id, price_cents, price_at, banana_cents, milli, received_at, price_stale, pricing, verified) " +
-      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
-      "ON CONFLICT (id) DO NOTHING RETURNING seq, id, sats, handle, message, at, milli, verified",
+      "INSERT INTO donations (id, sats, handle, message, at, method, github_id, price_cents, price_at, banana_cents, milli, received_at, price_stale, pricing, verified, provenance) " +
+      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+      "ON CONFLICT (id) DO NOTHING RETURNING seq, id, sats, handle, message, at, milli, verified, provenance",
     ).bind(
       invoice, sats, row.handle, message, this.platform.now(), method, row.github_id,
       row.price_cents, row.price_at, row.price_cents === null ? null : BANANA_CENTS, row.milli,
-      row.received_at, row.price_stale, row.pricing, verified,
+      row.received_at, row.price_stale, row.pricing, verified, row.d1_token,
     ).first();
     const recorded = inserted ?? await this.env.DB.prepare(
-      "SELECT seq, id, sats, handle, message, at, milli, verified FROM donations WHERE id = ?",
+      "SELECT seq, id, sats, handle, message, at, milli, verified, provenance FROM donations WHERE id = ?",
     ).bind(invoice).first();
     if (!recorded) throw new Error("a donation that was neither inserted nor found");
+    // D1 already holds a donation under this id that this settlement didn't write: an older row,
+    // a manual import, or a write the old code made before a crash. None of them proves whether
+    // its credit is already in the pile, and timestamps can't tell them apart, so it is held for
+    // review: no credit, no donation event, and D1 unchanged.
+    if (!inserted && recorded.provenance !== row.d1_token) return this.quarantine(invoice, row, "unproven-existing-donation", { method, recorded });
     const pile = this.finish(recorded);
     this.sql.exec("DELETE FROM pending WHERE request = ?", row.request);
     if (pile !== false) {
@@ -477,8 +531,36 @@ export class DonationsObject {
     return pending;
   }
 
-  // Marks a recorded donation finished and adds it to the pile, in one step. False if it was
-  // already finished; otherwise the pile's new state, or null for a donation with no bananas.
+  // A settlement the pile can't credit safely: recorded once for review, and its pending
+  // request archived privately before it is removed, all in one step. The archive keeps what
+  // the settlement knew (who it was for, the text, the sats, the frozen price and its
+  // provenance token) and what it found in D1, so the payment can be reconciled later. A
+  // retry, or a second notice racing this one, changes nothing already archived. Every page
+  // is told the pile's state now needs review.
+  async quarantine(invoice, row, reason, { method = null, recorded = null } = {}) {
+    const requestHash = await hashRequest(row.request);
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        "INSERT INTO quarantined (invoice, request_hash, reason, method, sats, handle, message, github_id, github_login, " +
+        "price_cents, price_at, milli, received_at, price_stale, pricing, d1_token, created, existing_seq, existing_sats, " +
+        "existing_provenance, quarantined_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+        "ON CONFLICT (invoice, request_hash) DO NOTHING",
+        invoice, requestHash, reason, method, row.sats, row.handle, row.message, row.github_id, row.github_login ?? null,
+        row.price_cents, row.price_at, row.milli, row.received_at, row.price_stale, row.pricing, row.d1_token, row.created,
+        recorded?.seq ?? null, recorded?.sats ?? null, recorded?.provenance ?? null, this.platform.now(),
+      );
+      recordPileException(this.sql, `donation:${invoice}`, reason, row.milli, this.platform.now());
+      this.sql.exec("DELETE FROM pending WHERE request = ?", row.request);
+    });
+    this.broadcast(this.pileMessage());
+    console.error(`paid: invoice ${invoice} is held for review (${reason})`);
+    return "rejected";
+  }
+
+  // Marks a recorded donation finished and credits the pile, in one step. False if it was
+  // already finished; otherwise the pile's new state, or null when the pile didn't change: a
+  // donation with no bananas, or one whose credit is already recorded. The credit is keyed by
+  // its invoice for good, so it can never repeat, even after the finished mark has been purged.
   finish({ id, milli, at }) {
     return this.ctx.storage.transactionSync(() => {
       const first = this.sql.exec(
@@ -486,39 +568,19 @@ export class DonationsObject {
         id, at,
       ).toArray();
       if (!first.length) return false;
-      return milli === null ? null : this.addToPile(milli, at);
+      if (milli === null) return null;
+      // A repeat with a different amount isn't a retry: it is recorded for review, and the
+      // pile's changed health goes out like any other change.
+      const revision = pileRevision(this.sql);
+      if (!recordPileDelta(this.sql, `donation:${id}`, milli, at)) return pileRevision(this.sql) === revision ? null : this.pileMessage();
+      return this.pileMessage();
     });
   }
 
-  // The global pile: one level for everyone, worked out from the donations and a fixed eating
-  // rate. Each donation is added once, and the Oogas eat at the same rate on every page, so any
-  // page can tell the level from the last state it was sent. Its clock never runs backwards,
-  // even when notices finish out of order.
-  pileState(now) {
-    let [row] = this.sql.exec("SELECT milli, at FROM pile").toArray();
-    if (!row) {
-      row = { milli: readSettings(this.env).pileStart * 1000, at: now };
-      this.sql.exec("INSERT INTO pile (id, milli, at, started) VALUES (1, ?, ?, ?)", row.milli, now, now);
-    }
-    return row;
-  }
-
-  pileAt(now, state = this.pileState(now)) {
-    // Thousandths eaten: bananas an hour, times milliseconds, over 3,600 seconds' worth.
-    const eaten = BigInt(readSettings(this.env).pileEatPerHour) * BigInt(Math.max(0, now - state.at)) / 3_600n;
-    return Math.max(0, state.milli - Number(eaten));
-  }
-
-  addToPile(milli, at) {
-    const state = this.pileState(at);
-    const time = Math.max(at, state.at);
-    const level = this.pileAt(time, state) + milli;
-    this.sql.exec("UPDATE pile SET milli = ?, at = ? WHERE id = 1", level, time);
-    return this.pileMessage(time, level);
-  }
-
-  pileMessage(now, level = this.pileAt(now)) {
-    return { type: "pile", bananas: level / 1000, at: now, eatPerHour: readSettings(this.env).pileEatPerHour };
+  // The global pile: one level for everyone, with no decay. Pending until its audited anchor;
+  // see pile.mjs.
+  pileMessage() {
+    return pileView(this.sql);
   }
 
   // The top entered handles in each unit: recorded fractional bananas and exact sats. Each list is limited

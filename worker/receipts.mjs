@@ -29,7 +29,7 @@ export const PRICING_RECOVERY = ["stale-candidate", "review"];
 export const HOLDS = [
   "identity-unverified", "import-fence", "destination-unbound", "identity-conflict",
   "identity-changed", "amount-changed", "destination-changed", "claimed-by-other-invoice",
-  "missing-from-complete-snapshot", "pricing-interrupted",
+  "missing-from-complete-snapshot", "pricing-interrupted", "confirmation-policy",
 ];
 const UNRELEASABLE = new Set(["identity-unverified", "import-fence", "destination-unbound", "identity-conflict"]);
 
@@ -216,7 +216,20 @@ const SCHEMA = [
     resolved_at INTEGER,
     resolution TEXT
   );`,
+  // Each invoice keeps the reviewed attribution policy it was issued under, with its version,
+  // so its receipts are processed by that policy whatever later configuration says. Rows from
+  // before this step have none, and processing them refuses.
+  `ALTER TABLE ra_invoices ADD COLUMN edit_window TEXT;
+  ALTER TABLE ra_invoices ADD COLUMN message_rule TEXT;
+  ALTER TABLE ra_invoices ADD COLUMN policy_version TEXT;`,
+  // The rest of the reviewed policy: how an interrupted price lookup is resolved, and which
+  // provider confirmation policy a settled observation must have been made under.
+  `ALTER TABLE ra_invoices ADD COLUMN pricing_recovery TEXT;
+  ALTER TABLE ra_invoices ADD COLUMN confirmation_policy TEXT;`,
 ];
+
+const POLICY_VERSION = /^[A-Za-z0-9._:-]{1,64}$/;
+const isReference = (v) => typeof v === "string" && POLICY_VERSION.test(v);
 
 export class PolicyRequired extends Error {
   constructor(name) {
@@ -232,15 +245,24 @@ export async function hashRequest(request) {
 
 export class ReceiptLedger {
   // storage: { sql, transactionSync }. now: milliseconds. randomHex: 32 hex characters.
-  // policy: { editWindow, messageRule }, each one of the listed values or absent.
+  // issuance: true only where new receipt-mode invoices may be issued; off unless given.
+  // policy: { editWindow, messageRule, pricingRecovery, confirmationPolicy, version }, the
+  // reviewed policy new invoices are issued under. confirmationPolicy names the provider's
+  // confirmation policy that settled observations must report. It is saved with each invoice;
+  // processing always uses the invoice's own copy, so turning issuance off or changing
+  // configuration never changes how issued invoices count.
   // freshnessMs: how long a provider read stays current; deployment configuration, required by
   // everything that publishes totals or health. failpoint: called by name inside transactions,
   // so tests can stop the work at each boundary.
-  constructor({ storage, now, randomHex, policy = {}, freshnessMs = null, failpoint = () => {} }) {
+  constructor({ storage, now, randomHex, issuance = false, policy = {}, freshnessMs = null, failpoint = () => {} }) {
     Object.assign(this, { storage, sql: storage.sql, now, randomHex, failpoint });
+    this.issuance = issuance === true;
     this.policy = {
       editWindow: EDIT_WINDOWS.includes(policy.editWindow) ? policy.editWindow : null,
       messageRule: MESSAGE_RULES.includes(policy.messageRule) ? policy.messageRule : null,
+      pricingRecovery: PRICING_RECOVERY.includes(policy.pricingRecovery) ? policy.pricingRecovery : null,
+      confirmationPolicy: isReference(policy.confirmationPolicy) ? policy.confirmationPolicy : null,
+      version: isReference(policy.version) ? policy.version : null,
     };
     this.freshnessMs = Number.isSafeInteger(freshnessMs) && freshnessMs > 0 ? freshnessMs : null;
     // Receipts this instance created, and lookups it started. A restart forgets both, so an
@@ -272,11 +294,39 @@ export class ReceiptLedger {
     return this.rows(query, ...bindings)[0] ?? null;
   }
 
-  // Anything that can observe or credit a receipt needs both attribution policies: when edits
-  // end, and which receipts carry the message. Neither is ever chosen silently.
-  creditPolicies() {
+  // The reviewed policy new invoices are issued under: every part, or a refusal.
+  issuancePolicy() {
     if (!this.policy.editWindow) throw new PolicyRequired("edit window policy");
     if (!this.policy.messageRule) throw new PolicyRequired("message rule policy");
+    if (!this.policy.pricingRecovery) throw new PolicyRequired("pricing recovery policy");
+    if (!this.policy.confirmationPolicy) throw new PolicyRequired("confirmation policy reference");
+    if (!this.policy.version) throw new PolicyRequired("policy version");
+    return this.policy;
+  }
+
+  // The policy an invoice was issued under, saved with it. Anything that can observe, price or
+  // credit its receipts needs every part. A row without them, or with a value this code doesn't
+  // know, is refused, never defaulted.
+  invoicePolicy(invoice) {
+    const row = this.row(
+      "SELECT edit_window, message_rule, pricing_recovery, confirmation_policy, policy_version FROM ra_invoices WHERE invoice = ?",
+      invoice,
+    );
+    if (!row) return null;
+    if (!EDIT_WINDOWS.includes(row.edit_window)) throw new PolicyRequired("edit window policy");
+    if (!MESSAGE_RULES.includes(row.message_rule)) throw new PolicyRequired("message rule policy");
+    if (!PRICING_RECOVERY.includes(row.pricing_recovery)) throw new PolicyRequired("pricing recovery policy");
+    if (!isReference(row.confirmation_policy)) throw new PolicyRequired("confirmation policy reference");
+    if (!isReference(row.policy_version)) throw new PolicyRequired("policy version");
+    return {
+      editWindow: row.edit_window, messageRule: row.message_rule, pricingRecovery: row.pricing_recovery,
+      confirmationPolicy: row.confirmation_policy, version: row.policy_version,
+    };
+  }
+
+  receiptPolicy(receipt) {
+    const row = this.row("SELECT invoice FROM ra_receipts WHERE id = ?", receipt);
+    return row ? this.invoicePolicy(row.invoice) : null;
   }
 
   freshness() {
@@ -407,6 +457,10 @@ export class ReceiptLedger {
   // never stands in for either.
   issueInvoice({ invoice, network, provider, store, owner = null, login = null, handle, message = "",
     messageMinSats, requestHash, due }) {
+    // New issuance is off unless this instance was told otherwise, and needs a whole reviewed
+    // policy. Neither affects invoices already issued.
+    if (!this.issuance) return { error: "closed" };
+    const policy = this.issuancePolicy();
     if (!INVOICE_ID.test(invoice) || !isNetwork(network) || !SCOPE.test(provider) || !SCOPE.test(store)) return { error: "invalid" };
     if (owner === null ? login !== null : !isPositive(owner) || typeof login !== "string" || !LOGIN.test(login)) return { error: "invalid" };
     if (!isPositive(due) || due > MAX_SATS || !Number.isSafeInteger(messageMinSats) || messageMinSats < 0) return { error: "invalid" };
@@ -418,10 +472,11 @@ export class ReceiptLedger {
       if (this.modeOf(invoice) !== null) return { error: "fenced" };
       if (this.row("SELECT 1 FROM ra_invoices WHERE request_hash = ?", requestHash)) return { error: "invalid" };
       this.sql.exec(
-        "INSERT INTO ra_invoices (invoice, mode, network, provider, store, owner, login, handle, message, message_min_sats, request_hash, due, created) " +
-        "VALUES (?, 'receipt-v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO ra_invoices (invoice, mode, network, provider, store, owner, login, handle, message, message_min_sats, request_hash, due, created, " +
+        "edit_window, message_rule, pricing_recovery, confirmation_policy, policy_version) VALUES (?, 'receipt-v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         invoice, network, provider, store, owner, login,
         displayHandle(handle === undefined && owner !== null ? login : handle), text, messageMinSats, requestHash, due, this.now(),
+        policy.editWindow, policy.messageRule, policy.pricingRecovery, policy.confirmationPolicy, policy.version,
       );
       return { invoice, accounting: MODE };
     });
@@ -521,7 +576,7 @@ export class ReceiptLedger {
   // the object's stored last price, { cents, at } or null: each new receipt keeps it as its
   // pricing intent. Returns the receipts that need a price.
   applySnapshot({ invoice, line, generation, sequence, frames, candidate = null }) {
-    this.creditPolicies();
+    this.invoicePolicy(invoice);
     this.freshness();
     const outcome = this.mutate(() => {
       const read = this.row("SELECT * FROM ra_reads WHERE invoice = ? AND sequence = ?", invoice, sequence);
@@ -619,7 +674,9 @@ export class ReceiptLedger {
     const id = `r${this.randomHex()}`;
     if (!HEX32.test(id.slice(1)) || id.length !== 33) throw new Error("randomHex must give 32 hex characters");
     const holds = [];
+    const trusted = this.trustedSettlement(inv.invoice, p, begin);
     if (!verified) holds.push("identity-unverified");
+    if (p.state === "settled" && !trusted) holds.push("confirmation-policy");
     if (p.method === "onchain") {
       if (this.row("SELECT invoice FROM ra_addresses WHERE network = ? AND address = ?", network, p.destination)?.invoice !== inv.invoice) {
         holds.push("destination-unbound");
@@ -640,7 +697,7 @@ export class ReceiptLedger {
     if (verified) this.addCanonical(network, p, id);
     this.evidence(id, sequence, p, begin, true);
     for (const reason of holds) this.openHold(id, reason);
-    if (this.policy.editWindow === "first-observation" || p.state === "settled") this.capture(id);
+    if (this.invoicePolicy(inv.invoice).editWindow === "first-observation" || trusted) this.capture(id);
     this.settleState(id, { force: true });
     return { receipt: id, created: true };
   }
@@ -681,9 +738,18 @@ export class ReceiptLedger {
     }
     this.sql.exec("UPDATE ra_receipts SET provider_state = ? WHERE id = ?", p.state, e.id);
     this.evidence(e.id, sequence, p, begin, true);
-    if (p.state === "settled") this.capture(e.id);
+    // A settlement reported under a confirmation policy other than the invoice's reviewed one
+    // is quarantined, and it captures nothing.
+    if (this.trustedSettlement(inv.invoice, p, begin)) this.capture(e.id);
+    else if (p.state === "settled") this.openHold(e.id, "confirmation-policy");
     this.settleState(e.id);
     return { receipt: e.id };
+  }
+
+  // A settled observation counts only when the read reports the provider confirmation policy
+  // the invoice was issued against. Anything else, missing or different, is not trusted.
+  trustedSettlement(invoice, p, begin) {
+    return p.state === "settled" && begin.policyVersion === this.invoicePolicy(invoice).confirmationPolicy;
   }
 
   addAlias(network, begin, providerId, receipt) {
@@ -834,13 +900,14 @@ export class ReceiptLedger {
   firstCredit(receipt) {
     const r = this.row("SELECT * FROM ra_receipts WHERE id = ?", receipt);
     if (!r.attr_captured) throw new Error("a receipt credited without its attribution captured");
-    // Defense in depth: inside the crediting transaction, so a missing rule rolls it all back.
-    this.creditPolicies();
+    // The invoice's own saved rule, read inside the crediting transaction, so a missing one
+    // rolls it all back.
+    const { messageRule } = this.invoicePolicy(r.invoice);
     const inv = this.row("SELECT message_min_sats, message_receipt FROM ra_invoices WHERE invoice = ?", r.invoice);
     let message = "";
     const qualifies = r.attr_message && r.sats >= inv.message_min_sats;
-    if (qualifies && this.policy.messageRule === "each-qualifying") message = r.attr_message;
-    if (qualifies && this.policy.messageRule === "once" && inv.message_receipt === null) {
+    if (qualifies && messageRule === "each-qualifying") message = r.attr_message;
+    if (qualifies && messageRule === "once" && inv.message_receipt === null) {
       message = r.attr_message;
       this.sql.exec("UPDATE ra_invoices SET message_receipt = ? WHERE invoice = ?", receipt, r.invoice);
     }
@@ -866,7 +933,7 @@ export class ReceiptLedger {
   // be recovered, never sampled again.
   freezePrice(receipt, fresh) {
     if (!this.inflight.has(receipt)) throw new Error("no lookup of this instance's is pricing that receipt");
-    this.creditPolicies();
+    this.receiptPolicy(receipt);
     this.inflight.delete(receipt);
     if (fresh !== null && (!isPositive(fresh?.cents) || !Number.isSafeInteger(fresh?.at))) throw new Error("invalid price");
     return this.mutate(() => this.freeze(receipt, fresh));
@@ -897,11 +964,12 @@ export class ReceiptLedger {
     ).map((r) => r.id).filter((id) => !this.inflight.has(id) && !this.fresh.has(id));
   }
 
-  // Resolves an interrupted lookup without a new market sample, by an explicit policy: freeze
-  // the stored candidate as stale (or null), or quarantine the receipt.
-  recoverPricing(receipt, policy) {
-    if (!PRICING_RECOVERY.includes(policy)) throw new PolicyRequired("pricing recovery policy");
-    this.creditPolicies();
+  // Resolves an interrupted lookup without a new market sample, by the recovery rule saved with
+  // the receipt's invoice: freeze the stored candidate as stale (or null), or quarantine it.
+  // Nothing passed in at startup can choose the outcome.
+  recoverPricing(receipt) {
+    if (arguments.length !== 1) throw new Error("recovery follows the invoice's saved rule; it takes no policy");
+    const policy = this.receiptPolicy(receipt)?.pricingRecovery;
     if (this.inflight.has(receipt) || this.fresh.has(receipt)) throw new Error("that receipt's lookup belongs to this instance");
     return this.mutate(() => {
       const r = this.row("SELECT price_state FROM ra_receipts WHERE id = ?", receipt);
@@ -930,10 +998,12 @@ export class ReceiptLedger {
   releaseHold(receipt, reason, resolution) {
     if (typeof resolution !== "string" || !resolution) throw new Error("a release needs a resolution");
     if (UNRELEASABLE.has(reason)) return { error: "unreleasable" };
-    this.creditPolicies();
+    this.receiptPolicy(receipt);
     return this.mutate(() => {
       if (!this.row("SELECT 1 FROM ra_holds WHERE receipt = ? AND reason = ? AND resolved_at IS NULL", receipt, reason)) return { error: "not held" };
       this.resolveHold(receipt, reason, resolution);
+      // A reviewed release of an untrusted settlement is the point it becomes trusted.
+      if (reason === "confirmation-policy" && this.row("SELECT 1 FROM ra_receipts WHERE id = ? AND provider_state = 'settled'", receipt)) this.capture(receipt);
       this.settleState(receipt);
       return { ok: true, holds: this.holds(receipt) };
     });
@@ -1002,6 +1072,17 @@ export class ReceiptLedger {
       : left === 0 && confirming > 0 ? "confirming"
       : received > 0 ? "partial" : "unpaid";
     return { id: invoice, due: inv.due, received, credited, review, left, state, revision: inv.revision };
+  }
+
+  // The original BOLT11 asks for the full target. It stays withdrawn for good once any receipt
+  // has ever been observed on the invoice, whatever became of it: invalid, reversed or netting
+  // to zero, nothing brings it back. v1 has no verified replacement code for the remaining
+  // amount. This is only a necessary guard: showing the code also needs fresh provider evidence
+  // that it is usable, unexpired and unpaid, which the API wrapper must check, and a page can
+  // never infer it from totals.
+  originalBolt11Allowed(invoice) {
+    if (!this.row("SELECT 1 FROM ra_invoices WHERE invoice = ?", invoice)) return false;
+    return this.row("SELECT 1 FROM ra_receipts WHERE invoice = ?", invoice) === null;
   }
 
   // The address the provider currently offers, from fresh verified evidence, already bound to
@@ -1118,13 +1199,6 @@ export class ReceiptLedger {
 export function qrAmount(status, selectedAddress) {
   const left = status?.invoice?.left;
   return status?.payableAddress !== null && selectedAddress === status?.payableAddress && isPositive(left) ? left : null;
-}
-
-// The original BOLT11 asks for the full target, so it is offered only while nothing has been
-// received, credited or held for review. After that the private status returns bolt11: null,
-// until a provider-verified remaining-amount code exists. Receipts of any method still count.
-export function originalBolt11Allowed(invoice) {
-  return invoice?.received === 0 && invoice?.credited === 0 && invoice?.review === 0;
 }
 
 const isPositive = (v) => Number.isSafeInteger(v) && v > 0;

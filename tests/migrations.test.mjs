@@ -82,10 +82,11 @@ test("schema 6 upgrade preserves all frozen snapshots through restart, detection
   const ctx = schemaSix(), sql = ctx.storage.sql, platform = fakePlatform();
   const env = { ...ENV, DB: fakeD1() };
   const pending = () => rows(sql.exec("SELECT * FROM pending ORDER BY invoice").toArray());
-  const expected = pending().map(row => ({ ...row, price_stale: row.pricing === "invoice" ? null : row.price_stale, github_login: null }));
+  // Schema 10 adds the provenance token, empty until a settlement starts its D1 insert.
+  const expected = pending().map(row => ({ ...row, price_stale: row.pricing === "invoice" ? null : row.price_stale, github_login: null, d1_token: null }));
   new DonationsObject(ctx, env, platform);
   assert.deepEqual(pending(), expected);
-  assert.equal(sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 8);
+  assert.equal(sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 11);
   assert.equal(sql.exec("PRAGMA table_info(pending)").toArray().find(column => column.name === "price_stale").notnull, 0);
   const object = new DonationsObject(ctx, env, platform);
   assert.deepEqual(pending(), expected, "restart does not repeat or alter the migration");
@@ -121,6 +122,6 @@ test("a failed schema 7 upgrade rolls back its column changes and can be retried
   assert.deepEqual(rows(sql.exec("SELECT * FROM pending ORDER BY invoice").toArray()), before);
   sql.exec = exec;
   new DonationsObject(ctx, env, platform);
-  assert.equal(sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 8);
-  assert.deepEqual(rows(sql.exec("SELECT * FROM pending ORDER BY invoice").toArray()), before.map(row => ({ ...row, price_stale: row.pricing === "invoice" ? null : row.price_stale, github_login: null })));
+  assert.equal(sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 11);
+  assert.deepEqual(rows(sql.exec("SELECT * FROM pending ORDER BY invoice").toArray()), before.map(row => ({ ...row, price_stale: row.pricing === "invoice" ? null : row.price_stale, github_login: null, d1_token: null })));
 });

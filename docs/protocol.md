@@ -115,10 +115,21 @@ sampling on reconnect, without reconstructing the price at BTCPay's payment time
 D1 stores backend detection time as `received_at` separately from `price_at`, along with `price_cents`,
 `price_stale`, `pricing` and `milli`. A missing price freezes a null price and zero credited
 bananas, without blocking payment. Once stored, a receipt is never repriced by retries,
-restarts or service recovery. Apply all migrations through 0008 before deploying. Historical
+restarts or service recovery. Apply all migrations through 0009 before deploying. Historical
 rows and totals keep their recorded invoice prices; legacy price freshness is unknown (NULL).
-If the Worker runs before 0008, settlement inserts fail and the relay cannot receive an
+If the Worker runs before 0009, settlement inserts fail and the relay cannot receive an
 acknowledgement; it retries those notices after the migration is applied.
+
+Each settlement saves a random provenance token with its pending request before its D1
+insert, and the insert carries it (`donations.provenance`, migration 0009). If the object
+stops between the insert and the pile credit, the retry finds its own token and finishes
+once. If D1 already holds the id under no token or another one, the settlement can't prove
+the existing row is its own. That covers an older row, a manual import, or a write the old
+code made before a crash, and timestamps can't tell these apart. Such a settlement is acked
+`rejected` and recorded for review. Its own attribution, value and provenance are archived
+privately, never published. It credits nothing and sends no donation event, D1 is left
+unchanged, and every page gets the pile's review state at once. An invoice id the object
+already knows from its own records is refused before any QR is shown.
 
 Deploy the page before this Worker. A page older than OBL #242 sends whatever message the
 donor typed at any amount, so against this Worker a tip under `messageMinSats` with a
@@ -126,7 +137,7 @@ message is refused with 400 `message` at creation and in `note`, which that page
 problem it cannot explain. The page from #242 on blanks such messages itself, falls back to
 a 1,000-sat bar when `status` names none, and shows an empty recent list and no check until
 this Worker answers, so it runs correctly against either Worker. The order is therefore: the
-page, then migration 0008, then this Worker.
+page, then migrations 0008 and 0009, then this Worker.
 
 `lightning` is `available`, `limit` (above the configured Lightning threshold), or
 `unavailable` (BTCPay couldn't make Lightning in time, for example while LND is down or
@@ -211,9 +222,16 @@ missed. After that:
   `pricing: { receivedAt, rate, bananas }`: the receipt timestamp, the recorded rate (or null),
   and the recorded banana count (or null). Repeated notices return the same snapshot. The
   snapshot is durable, though the notice itself isn't replayed. Lightning payments never send it.
-- `{ "type": "pile", "bananas": 980.5, "at": 1790000000000, "eatPerHour": 60 }` after each
-  donation that counts. Every page works the pile out the same way: `bananas`, less
-  `eatPerHour` for each hour since the message arrived, never below zero. Show whole bananas.
+- `{ "type": "pile", "bananas": 980.5, "at": 1790000000000, "eatPerHour": 0, "revision": 7, "basis": "credits", "cutover": "done", "reconciliation": "off", "uncertain": { "sats": 0, "bananas": 0 } }`
+  on connect and after each donation that changes it. The pile no longer decays:
+  `eatPerHour` is always 0, so older pages that still subtract it show a steady level. A page
+  applies a pile only if its `revision` is newer, and shows whole bananas. It is the current
+  pile from credits, not a wallet balance, and is kept apart from the lifetime tally and board.
+  Until an audited cutover anchor exists, the pile is pending:
+  `{ "type": "pile", "bananas": null, "at": null, "eatPerHour": 0, "revision": 3, "basis": "credits", "cutover": "pending", "reconciliation": "review", "uncertain": null }`.
+  Pages show no number then. Older pages ignore a pile without a numeric `bananas`. Donations
+  while pending still count in the tally and board, and are added to the pile after the
+  anchor's boundary, once each. See [`receipt-accounting-v1.md`](receipt-accounting-v1.md#cutover-anchor).
 - `{ "type": "board", "entries": [{ "handle": "ooga-dev", "bananas": 300.125, "sats": 300000 }], "satsEntries": [{ "handle": "ooga-dev", "bananas": 300.125, "sats": 300000 }] }`
   after each named donation. `entries` is the top 20 by total bananas,
   excluding donors with no counted bananas; `satsEntries` is

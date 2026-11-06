@@ -10,8 +10,28 @@ Open decisions are listed in [Activation gates](#activation-gates) and
 **Phase 1:** the durable core is in [`worker/receipts.mjs`](../worker/receipts.mjs), tested
 in `tests/receipts.test.mjs`. Nothing calls it. The edit window, the message rule, the
 pricing recovery and the freshness bound are explicit inputs, and the operations that need
-them refuse without them, atomically. Without both the edit window and the message rule,
-nothing can be observed, priced, recovered or released into credit. Provider capabilities are fixture inputs, never verified claims.
+them refuse without them, atomically. Provider capabilities are fixture inputs, never
+verified claims.
+
+- **Issuance:** off unless enabled. A new invoice needs a whole reviewed policy, and that
+  policy is saved with the invoice. It has five parts:
+  - the edit window;
+  - the message rule;
+  - the pricing-recovery rule for an interrupted lookup;
+  - a reference to the provider confirmation policy settlements must be reported under;
+  - a policy version.
+- **Settlement trust:** a settled observation whose read reports any other confirmation
+  policy, or none, is held as `confirmation-policy` and captures nothing. Only a reviewed
+  release credits it.
+- **Recovery:** an interrupted lookup is recovered by the invoice's saved rule, never by an
+  argument supplied at startup.
+- **Processing:** observing, pricing, recovering and releasing always use the invoice's saved
+  policy, never the current configuration. Disabling issuance or changing the configured
+  policy doesn't change how issued invoices count. An invoice without a whole saved policy
+  is refused, never defaulted.
+
+**Phase 2, first step:** the no-decay pile is in the runtime ([`worker/pile.mjs`](../worker/pile.mjs));
+see [Cutover anchor](#cutover-anchor). The receipt core is still not called by the Worker.
 
 ## Goal
 
@@ -99,6 +119,12 @@ fence, because the existing triggers would add it to the aggregates.
     needs a reconciled disposition against the legacy credit, which v1 doesn't define.
 - **Release fence:** after the first receipt-mode invoice is issued, a rollback to a Worker
   that doesn't know these fences is forbidden.
+- **Pile fence, earlier and independent of issuance:** once the no-decay pile migration
+  (object schema step 9) has run, the delta journal is live, whether or not receipt issuance
+  ever starts. Rolling back to the old decaying Worker after that point is forbidden. The old
+  code would resume decay from the old checkpoint and miss every delta recorded since. A
+  downgrade past that point needs its own reviewed reconciliation of the journal and the
+  checkpoint first. Nothing here authorizes a deployment or a rollback.
 
 ## Attribution and ownership
 
@@ -354,12 +380,19 @@ OBL's Worker calls `status(request, donor, visitor)`. The body is exactly one of
   nothing. Freshness counts from when the read began, not when its reply arrived. A reply
   that arrives after the bound is refused. So is one whose observation time falls before
   its read began or in the future.
-- **`bolt11`:** the original invoice asks for the full target. In v1 it is `null`, and every
-  page, active or reopened, hides it, once `received`, `credited` or `review` is above zero.
-  This holds until a provider-verified remaining-amount code is defined. Mixed receipts still
-  count. Zero amounts are only a necessary guard (`originalBolt11Allowed`). Showing the code
-  also needs fresh provider-verified evidence that it is usable, unexpired and not yet paid,
-  so a full reversal alone never brings back a stale or settled BOLT11.
+- **`bolt11`:** the original invoice asks for the full target. In v1 it is `null` for good,
+  and every page, active or reopened, hides it, once any receipt has ever been observed on
+  the invoice. That holds whatever became of the receipt: invalid, reversed or netting to
+  zero. v1 defines no verified replacement code for the remaining amount. Mixed receipts
+  still count.
+  - **Only a necessary guard:** `originalBolt11Allowed(invoice)` is true only while no receipt
+    was ever observed. Showing the code also needs fresh provider-verified evidence that it
+    is usable, unexpired and not yet paid, which the API wrapper must check. A page can never
+    infer it from totals.
+  - **Core view only:** `privateStatus` returns the core view: totals, payable address,
+    addresses and receipts. The endpoint wrapper, still to come, adds
+    `accounting: "receipt-v1"`, `expires` in seconds, the `lightning` value and the guarded
+    `bolt11`. The core view isn't the endpoint's reply.
 - **`/donations/onchain`** keeps its legacy reply. Its `sats` is the provider's amount at
   issuance, not a reusable amount later.
 - **`receipts`:** newest first, bounded by `STATUS_PAGE_SIZE`.
@@ -412,8 +445,10 @@ OBL's Worker calls `history(request, donor, visitor)`. The body is exactly `{}` 
 ### Decay
 
 Decay is removed from the new design entirely, whether or not issuance is on. There is no
-decay path, no `PILE_EAT_PER_HOUR`, and no fallback legacy-decay branch. The Worker deployed
-today stays unchanged until it is replaced.
+decay path, no `PILE_EAT_PER_HOUR`, and no fallback legacy-decay branch. `PILE_START` is no
+longer read either: no configured starting level is ever adopted. The Worker deployed today
+stays unchanged until it is replaced. In code: [`worker/pile.mjs`](../worker/pile.mjs),
+tested in `tests/pile.test.mjs`.
 
 ### Cutover anchor
 
@@ -426,9 +461,68 @@ operator's reconciled level, the preserved evidence and a reason.
   - Prior consumption is never revived.
   - Decay that elapsed after the saved `at` was never written down. Code never guesses
     it; the operator's reconciliation decides it.
+- **No checkpoint at all.** When the old code never saved a pile, the expected checkpoint is
+  `null`, and the pile is still pending until the anchor. No row is invented.
 - **Credit while blocked.** Until the anchor exists, the stored checkpoint is left
   untouched. Every credit and reversal goes into a durable pile-delta ledger, and is
   applied on top of the anchor.
+  - **Keyed for good:** each delta has a sequence and a permanent source key, such as
+    `donation:<invoice id>`. It never depends on the finished marks the retention purge
+    removes, so an old donation can't add twice.
+  - **The boundary:** the anchor names a delta sequence, which must already exist (0 for
+    none). Its reviewed level already includes every delta up to and including it, and
+    every later delta is added on top. A queued credit is therefore counted exactly once,
+    whichever side of the cutover it falls on.
+  - **Idempotent:** applying the same anchor again is a harmless duplicate. Any different
+    anchor once one exists is refused, as is one whose expected checkpoint no longer
+    matches, or whose boundary isn't a delta that exists. A gap in the sequence doesn't
+    count as one.
+  - **Efficient:** each delta stores the running total up to it, checked when it is written,
+    so the pile is read from two rows however long the history.
+  - **Already in the checkpoint:** donations the old code had added are fenced from the
+    finished marks retained when the new code first starts, so they never add again after
+    the marks are purged. A donation the old code wrote to D1 but never finished carries no
+    provenance, so it is unproven: it is held, with a manual import and any other unproven
+    row, pending a reviewed reconciliation, and no credit is restored implicitly. Only a
+    write whose durable provenance token matches the new code's own settlement finishes
+    automatically.
+  - **Unproven D1 rows:** a settlement credits an existing D1 row only when the row carries
+    the provenance token the settlement saved before its insert (migration 0009). Any other
+    existing row is refused and recorded as an exception for review: an older row, a manual
+    import, or a pre-cutover write left unfinished by a crash. Timestamps are never proof.
+    Nothing is credited, D1 and the lifetime figures stay unchanged, no donation event is
+    sent, and pages get the pile's review state at once. Retrying records nothing new.
+  - **The archive:** before its pending request is removed, in the same transaction, the
+    settlement is archived privately in the object's `quarantined` table, so a payment that
+    may belong to someone other than the D1 row's donor isn't lost. It keeps:
+    - its handle, message and sats;
+    - the signed-in account id and login, when there were any;
+    - the method and the frozen price, receipt time and banana count;
+    - its provenance token;
+    - the D1 row it collided with.
+
+    The request token is kept only as its SHA-256, and no network or owner evidence is
+    invented. The archive is never purged, never overwritten by a retry or a racing notice,
+    and never published.
+  - **A safe false positive:** a pending request the old code left after finishing it (a
+    crash between its pile credit and removing the request) also has no token. If it is
+    retried, it is quarantined rather than credited, even though its credit is already in
+    the checkpoint. That is harmless: nothing is added, and review shows it. It isn't told
+    apart by timestamps.
+  - **A conflicting delta:** the same delta source again with the same amount is a retry. With
+    a different amount it is a conflict: the first amount stands, it is recorded as
+    `delta-conflict`, and the pile reports review to every page.
+  - **A reused invoice id:** an id the object already knows (credited, in the checkpoint,
+    held for review, or still marked finished) is refused before any QR is shown. An id only
+    D1 remembers is caught at payment by the provenance check.
+- **Signed and exact.** Corrections may be negative.
+  - An anchor whose level would be negative or unrepresentable is refused.
+  - After the anchor, such a level is published as `bananas: null` with
+    `reconciliation: "review"`, never clamped and never shown as healthy.
+  - A running total that leaves the safe range blocks the pile in the same way, and is
+    recorded as an exception.
+- **Lifetime figures are separate.** Donations while pending still count in the tally and
+  board at once. Only the current pile waits for the anchor.
 - **The pending pile, published until then:**
 
   ```json
@@ -445,6 +539,9 @@ operator's reconciled level, the preserved evidence and a reason.
     "uncertain": { "sats": 0, "bananas": 0 } }
   ```
 
+  Until receipt accounting is wired in, the anchored pile reports `"reconciliation": "off"`,
+  with `uncertain` at zero: only legacy credits feed it.
+
   - **`basis: "credits"`** means the anchor, plus credits, minus reversals. It is not a
     verified wallet balance.
   - **`uncertain`** counts `review` receipts that still hold credit.
@@ -453,7 +550,10 @@ operator's reconciled level, the preserved evidence and a reason.
 - **Rollout blockers:**
   - The OBL page that handles `bananas: null` must be live before this Worker is deployed.
   - How the operator applies the anchor is undecided. The only constraint so far is that it
-    adds no new public endpoint and nothing the relay can reach.
+    adds no new public endpoint and nothing the relay can reach. `applyPileAnchor` works on
+    the object's storage, and nothing in the Worker or the object routes to it.
+  - The reviewed level is the operator's. Code picks no starting inventory, treasury
+    boundary or spend valuation, and never infers decay that elapsed under the old code.
 
 ## Provider normalization (relay line v1, two maintainers)
 

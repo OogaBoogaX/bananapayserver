@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { BOARD_SIZE, DonationsObject, PRICE_RETRY_MS } from "../worker/object.mjs";
 import { PRICE_SOCKET, PRICE_URL } from "../worker/price.mjs";
+import { applyPileAnchor } from "../worker/pile.mjs";
 import { fakeCtx, fakeD1, fakePlatform } from "./helpers/cloudflare.mjs";
 import { bolt11For, INVOICE } from "./helpers/values.mjs";
 import { donor, EXPIRES, world } from "./helpers/world.mjs";
@@ -161,33 +162,29 @@ for (const login of [null, "unpriced-donor"]) {
   });
 }
 
-test("everyone sees one pile: it starts full, the Oogas eat at a fixed rate, and donations add to it", async () => {
+test("everyone sees one pile: pending with no number until its anchor, and it never decays", async () => {
+  // Old decay settings are ignored, and no configured start is adopted.
   const w = await world({ PILE_START: "1000", PILE_EAT_PER_HOUR: "60" });
   const relay = await w.connectRelay();
   const first = await w.connectPage();
-  assert.deepEqual(typed(first, "pile"), [{ type: "pile", bananas: 1000, at: w.platform.now(), eatPerHour: 60 }]);
-
-  w.platform.advance(HOUR / 2);
-  const second = await w.connectPage();
-  assert.equal(typed(second, "pile")[0].bananas, 970, "half an hour of eating");
-
+  assert.deepEqual(typed(first, "pile"), [{ type: "pile", bananas: null, at: null, eatPerHour: 0, revision: 0,
+    basis: "credits", cutover: "pending", reconciliation: "review", uncertain: null }]);
   await donate(w, relay, 10_000);
-  for (const page of [first, second]) {
-    const [{ bananas }] = typed(page, "pile").slice(-1);
-    assert.equal(bananas, 980, "970 left, plus 10 bananas for 10,000 sats at $100,000");
-  }
-
+  assert.deepEqual([typed(first, "pile").at(-1).bananas, typed(first, "pile").at(-1).revision], [null, 1], "credited, still pending");
+  assert.equal(w.ctx.storage.sql.exec("SELECT count(*) AS n FROM pile").one().n, 0, "no saved row is invented");
+  assert.equal(applyPileAnchor(w.ctx.storage, { anchor: "cutover-1", expected: null, milli: 0, boundary: 0,
+    reason: "synthetic: no saved pile", evidence: "synthetic review" }, w.platform.now()).ok, true);
   w.platform.advance(100 * HOUR);
-  const late = await w.connectPage();
-  assert.equal(typed(late, "pile")[0].bananas, 0, "an empty pile stays empty");
-  await donate(w, relay, 2_500);
-  assert.equal(typed(late, "pile").at(-1).bananas, 2.5, "and fills again from zero");
+  const later = await w.connectPage();
+  assert.equal(typed(later, "pile")[0].bananas, 10, "the queued credit after the boundary, and no eating");
+  assert.equal(typed(later, "pile")[0].eatPerHour, 0);
 });
 
 test("the pile keeps fractions, so small donations add up", async () => {
-  const w = await world({ PILE_START: "0", PILE_EAT_PER_HOUR: "0" });
+  const w = await world();
   const relay = await w.connectRelay();
   const page = await w.connectPage();
+  applyPileAnchor(w.ctx.storage, { anchor: "cutover-1", expected: null, milli: 0, boundary: 0, reason: "synthetic", evidence: "synthetic" }, w.platform.now());
   for (let i = 0; i < 3; i++) await donate(w, relay, 500);
   assert.equal(typed(page, "pile").at(-1).bananas, 1.5);
 });
@@ -255,14 +252,15 @@ test("an object made before the stats gets the new columns and tables in place",
   new DonationsObject(ctx, env, fakePlatform());
   const row = ctx.storage.sql.exec("SELECT request, github_id, price_cents, milli FROM pending").one();
   assert.deepEqual({ ...row }, { request: "r", github_id: null, price_cents: null, milli: null });
-  assert.equal(ctx.storage.sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 8);
+  assert.equal(ctx.storage.sql.exec("SELECT value FROM meta WHERE key = 'schema'").one().value, 11);
   new DonationsObject(ctx, env, fakePlatform());
   assert.equal(ctx.storage.sql.exec("SELECT COUNT(*) AS n FROM pending").one().n, 1, "a second start changes nothing");
 });
 
 test("a donation D1 recorded before the object stopped is still pushed and piled, once", async () => {
-  const w = await world({ PILE_START: "0", PILE_EAT_PER_HOUR: "0" });
+  const w = await world();
   const relay = await w.connectRelay();
+  applyPileAnchor(w.ctx.storage, { anchor: "cutover-1", expected: null, milli: 0, boundary: 0, reason: "synthetic", evidence: "synthetic" }, w.platform.now());
   const page = await w.connectPage();
   await w.invoice(relay, { sats: 10_000 }, () => ({ id: INVOICE, bolt11: bolt11For(10_000), expires: EXPIRES }));
 
@@ -284,18 +282,6 @@ test("a donation D1 recorded before the object stopped is still pushed and piled
   assert.equal(typed(page, "pile").at(-1).bananas, 10, "and piled");
   await w.relaySays(relay, { type: "paid", invoice: INVOICE, sats: 10_000, method: "lightning" });
   assert.equal(typed(page, "pile").at(-1).bananas, 10, "but only once");
-});
-
-test("the pile's clock never runs backwards when notices finish out of order", () => {
-  const ctx = fakeCtx();
-  const platform = fakePlatform();
-  const object = new DonationsObject(ctx, { DB: fakeD1(), PILE_START: "1000", PILE_EAT_PER_HOUR: "3600" }, platform);
-  const start = platform.now();
-  object.pileMessage(start);
-  assert.equal(object.addToPile(0, start + 10_000).bananas, 990, "a banana a second, for ten seconds");
-  const late = object.addToPile(5_000, start);
-  assert.equal(late.at, start + 10_000);
-  assert.equal(late.bananas, 995, "those ten seconds are eaten once, not twice");
 });
 
 test("an older leaderboard read that answers last doesn't replace a newer one", async () => {

@@ -5,13 +5,16 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { fakeStorage } from "./helpers/cloudflare.mjs";
-import { canonicalAddress, hashRequest, originalBolt11Allowed, PolicyRequired, qrAmount, ReceiptLedger, verifyAddress } from "../worker/receipts.mjs";
+import { canonicalAddress, hashRequest, PolicyRequired, qrAmount, ReceiptLedger, verifyAddress } from "../worker/receipts.mjs";
 import { MAX_SATS } from "../shared/protocol.mjs";
 
 const LINE = "line-1";
 const GEN = "0123456789abcdef";
 const FRESH = 60_000;
-const POLICY = { editWindow: "first-observation", messageRule: "once" };
+// The reviewed policy test invoices are issued under. policy-1 is the confirmation policy the
+// synthetic provider reads report.
+const REVIEWED = { pricingRecovery: "stale-candidate", confirmationPolicy: "policy-1", version: "policy-test-1" };
+const POLICY = { editWindow: "first-observation", messageRule: "once", ...REVIEWED };
 const TX = (n) => n.toString(16).padStart(2, "0").repeat(32);
 const HASH = (n) => (n + 0x80).toString(16).padStart(2, "0").repeat(32);
 const PRICE = { cents: 10_000_000, at: 1_000 }; // $100,000: 1,000 sats a banana
@@ -79,7 +82,7 @@ function setup({ policy = POLICY, storage = fakeStorage(), failpoint, freshnessM
   let n = 0;
   const make = (overrides = {}) => new ReceiptLedger({
     storage, now: () => time.now, randomHex: () => (++n).toString(16).padStart(32, "0"),
-    policy, failpoint, freshnessMs, ...overrides,
+    issuance: true, policy: { ...REVIEWED, ...policy }, failpoint, freshnessMs, ...overrides,
   });
   return { ledger: make(), storage, time, make };
 }
@@ -137,7 +140,7 @@ const pick = ({ received, credited, review, left, state }) => ({ received, credi
 test("the schema lives in its own tables, migrates once and survives a restart", () => {
   const { storage, make } = setup();
   make();
-  assert.equal(storage.sql.exec("SELECT value FROM meta WHERE key = 'receipt_schema'").one().value, 1);
+  assert.equal(storage.sql.exec("SELECT value FROM meta WHERE key = 'receipt_schema'").one().value, 3);
   assert.equal(storage.sql.exec("SELECT count(*) AS n FROM sqlite_master WHERE name = 'pending' OR name = 'donations'").one().n, 0);
   make();
 });
@@ -631,14 +634,37 @@ test("pricing intent is durable before the lookup; a restart never samples again
   assert.equal(restarted.beginPricing(second), false);
   assert.throws(() => restarted.freezePrice(first, PRICE));
   assert.deepEqual(restarted.interruptedPricing(), [first, second]);
-  assert.throws(() => restarted.recoverPricing(first), PolicyRequired);
-  restarted.recoverPricing(first, "stale-candidate");
-  restarted.recoverPricing(second, "review");
+  // The outcome is the invoice's saved rule; a startup argument can't choose it.
+  assert.throws(() => restarted.recoverPricing(first, "review"));
+  restarted.recoverPricing(first);
+  restarted.recoverPricing(second);
   const [a, b] = receipts(restarted, invoice);
   assert.deepEqual([a.price_cents, a.price_stale, a.state], [9_000_000, 1, "credited"]);
-  assert.deepEqual([b.price_state, restarted.holds(b.id), b.state], ["intent", ["pricing-interrupted"], "review"]);
+  assert.deepEqual([b.price_cents, b.price_stale, b.state], [9_000_000, 1, "credited"]);
   ledger.freezePrice(first, PRICE);
   assert.equal(receipts(restarted, invoice)[0].price_cents, 9_000_000, "the late answer can't overwrite the recovery");
+});
+
+test("an interrupted lookup is recovered by the rule its invoice was issued under, whatever is configured now", async () => {
+  const { ledger, make } = setup({ policy: { ...POLICY, pricingRecovery: "review" } });
+  const quarantined = await issue(ledger);
+  await ledger.bindAddress(quarantined, ADDR(1));
+  const [held] = snap(ledger, quarantined, [onchain({})], { price: "skip" }).priced;
+  // Restarted with the opposite rule configured, and with issuance off.
+  const restarted = make({ issuance: false, policy: { ...POLICY, pricingRecovery: "stale-candidate" } });
+  restarted.recoverPricing(held);
+  assert.deepEqual([receipts(restarted, quarantined)[0].price_state, restarted.holds(held), restarted.totals(quarantined).credited],
+    ["intent", ["pricing-interrupted"], 0]);
+  // And the other way round.
+  const frozen = await make({ policy: { ...POLICY, pricingRecovery: "stale-candidate" } }).issueInvoice({
+    invoice: "STALERULE1", network: "regtest", provider: "btcpay", store: "store-a", owner: null, login: null,
+    handle: "x", messageMinSats: 1000, due: 10_000, requestHash: await hashRequest("stale-rule"),
+  });
+  assert.equal(frozen.invoice, "STALERULE1");
+  await restarted.bindAddress("STALERULE1", ADDR(2));
+  const [stale] = snap(make(), "STALERULE1", [onchain({ txid: TX(2), destination: ADDR(2) })], { price: "skip" }).priced;
+  make({ issuance: false, policy: { ...POLICY, pricingRecovery: "review" } }).recoverPricing(stale);
+  assert.deepEqual([restarted.holds(stale), receipts(restarted, "STALERULE1")[0].state], [[], "credited"]);
 });
 
 test("a crash after the lookup but before the freeze commits can't lead to a second sample", async () => {
@@ -656,7 +682,7 @@ test("a crash after the lookup but before the freeze commits can't lead to a sec
   assert.equal(ledger.beginPricing(id), false);
   assert.throws(() => ledger.freezePrice(id, PRICE));
   assert.deepEqual(ledger.interruptedPricing(), [id]);
-  ledger.recoverPricing(id, "stale-candidate");
+  ledger.recoverPricing(id);
   assert.deepEqual([receipts(ledger, invoice)[0].price_stale, ledger.totals(invoice).credited], [1, 1000]);
 });
 
@@ -702,20 +728,85 @@ test("a failed lookup freezes the stored candidate as stale, or an explicit no-p
 // --- Policy and attribution -----------------------------------------------------------------
 
 test("unsettled policy and configuration are never defaulted", async () => {
-  const { ledger } = setup({ policy: {} });
+  const { ledger, make } = setup();
   const invoice = await issue(ledger);
-  const read = ledger.beginRead(invoice, { line: LINE, generation: GEN });
-  assert.throws(() => ledger.applySnapshot({ invoice, line: LINE, generation: GEN, sequence: read.sequence, frames: framesOf(begin(), []) }), PolicyRequired);
-  assert.equal(ledger.row("SELECT status FROM ra_reads").status, "outstanding");
+  // Issuance needs a whole reviewed policy, and is off unless enabled.
+  const base = { network: "regtest", provider: "btcpay", store: "store-a", handle: "x", messageMinSats: 1000, due: 100 };
+  for (const policy of [{}, { editWindow: "settlement", messageRule: "once" }, { editWindow: "settlement", version: "v1" },
+    { messageRule: "once", version: "v1" }, { editWindow: "always", messageRule: "once", version: "v1" }, { editWindow: "settlement", messageRule: "once", version: "has space" },
+    { ...POLICY, pricingRecovery: undefined }, { ...POLICY, pricingRecovery: "guess" },
+    { ...POLICY, confirmationPolicy: undefined }, { ...POLICY, confirmationPolicy: "not a reference" }]) {
+    assert.throws(() => make({ policy }).issueInvoice({ ...base, invoice: "UNSETTLED1", requestHash: "a".repeat(64) }), PolicyRequired, JSON.stringify(policy));
+  }
+  assert.equal(make({ issuance: undefined }).issueInvoice({ ...base, invoice: "UNSETTLED1", requestHash: "a".repeat(64) }).error, "closed");
+  assert.equal(ledger.modeOf("UNSETTLED1"), null);
   const unbounded = setup({ freshnessMs: null }).ledger;
   assert.throws(() => unbounded.health(), PolicyRequired);
   assert.throws(() => ledger.feedAfter(0, {}), PolicyRequired);
   assert.throws(() => ledger.privateStatus(invoice, { donorId: 4242 }), PolicyRequired);
-  assert.throws(() => ledger.recoverPricing("r1", "guess"), PolicyRequired);
+  assert.throws(() => ledger.recoverPricing("r1", "guess"), /takes no policy/);
 });
 
-test("a missing or invalid message rule refuses every crediting operation, atomically", async () => {
-  for (const messageRule of [undefined, "first-only", ""]) {
+test("each invoice keeps the reviewed policy it was issued under, across restarts and configuration changes", async () => {
+  const { ledger, make } = setup({ policy: { editWindow: "first-observation", messageRule: "once", version: "reviewed-1" } });
+  const first = await issue(ledger);
+  const firstToken = await hashRequest(`request-${first}`);
+  // A restart with issuance off and a different policy configured: no new invoices, and the
+  // issued one is still processed exactly as it was issued.
+  const disabled = make({ issuance: false, policy: { editWindow: "settlement", messageRule: "each-qualifying", version: "reviewed-2" } });
+  assert.equal(disabled.issueInvoice({ invoice: "REFUSED001", network: "regtest", provider: "btcpay", store: "store-a",
+    handle: "x", messageMinSats: 1000, due: 100, requestHash: "b".repeat(64) }).error, "closed");
+  await disabled.bindAddress(first, ADDR(1));
+  snap(disabled, first, [onchain({ txid: TX(1), providerId: "a", sats: 2000, state: "observed" })]);
+  assert.equal(disabled.updateNote(firstToken, { handle: "late" }).error, "unknown", "first-observation, as issued, locked edits");
+  // And an instance with no policy at all, after another restart.
+  const bare = make({ issuance: false, policy: {} });
+  snap(bare, first, [onchain({ txid: TX(1), providerId: "a", sats: 2000 }), onchain({ txid: TX(2), providerId: "b", sats: 3000 })]);
+  assert.deepEqual(receipts(bare, first).map((r) => bare.publicReceipt(r.id).message), ["for the cave", ""], "once, as issued");
+  // A newly reviewed policy applies only to invoices issued under it.
+  const next = make({ policy: { ...REVIEWED, editWindow: "settlement", messageRule: "each-qualifying", version: "reviewed-2" } });
+  const second = await issue(next);
+  const secondToken = await hashRequest(`request-${second}`);
+  await next.bindAddress(second, ADDR(2));
+  snap(make({ issuance: false, policy: {} }), second, [onchain({ txid: TX(3), providerId: "c", sats: 2000, destination: ADDR(2), state: "observed" })]);
+  assert.equal(next.updateNote(secondToken, { handle: "still-open" }).ok, true, "settlement, as issued, keeps edits open");
+  const last = make({ issuance: false, policy: {} });
+  snap(last, second, [onchain({ txid: TX(3), providerId: "c", sats: 2000, destination: ADDR(2) }), onchain({ txid: TX(4), providerId: "d", sats: 3000, destination: ADDR(2) })]);
+  assert.deepEqual(receipts(last, second).map((r) => last.publicReceipt(r.id).message), ["for the cave", "for the cave"], "each-qualifying, as issued");
+  assert.equal(last.publicReceipt(receipts(last, second)[0].id).handle, "still-open");
+  assert.deepEqual(last.rows("SELECT invoice, edit_window, message_rule, policy_version FROM ra_invoices ORDER BY created, invoice").map((r) => ({ ...r })), [
+    { invoice: first, edit_window: "first-observation", message_rule: "once", policy_version: "reviewed-1" },
+    { invoice: second, edit_window: "settlement", message_rule: "each-qualifying", policy_version: "reviewed-2" },
+  ]);
+});
+
+test("a settlement reported under another confirmation policy is quarantined, not credited", async () => {
+  const { ledger } = setup({ policy: { editWindow: "settlement", messageRule: "once" } });
+  for (const reported of ["policy-2", null]) {
+    const invoice = await issue(ledger);
+    const token = await hashRequest(`request-${invoice}`);
+    await ledger.bindAddress(invoice, ADDR(reported ? 1 : 2));
+    const pay = onchain({ txid: TX(reported ? 1 : 2), destination: ADDR(reported ? 1 : 2) });
+    snap(ledger, invoice, [pay], { begin: { policyVersion: reported } });
+    const [r] = receipts(ledger, invoice);
+    assert.deepEqual([r.state, ledger.holds(r.id), r.credit], ["review", ["confirmation-policy"], 0], String(reported));
+    assert.equal(ledger.updateNote(token, { handle: "still-open" }).ok, true, "an untrusted settlement captures nothing");
+    // A later read under the reviewed policy doesn't silently clear the quarantine.
+    snap(ledger, invoice, [pay]);
+    assert.deepEqual([receipts(ledger, invoice)[0].state, ledger.totals(invoice).credited], ["review", 0]);
+    assert.equal(ledger.releaseHold(r.id, "confirmation-policy", "reviewed against the provider").ok, true);
+    assert.deepEqual([receipts(ledger, invoice)[0].state, ledger.totals(invoice).credited], ["credited", 1000]);
+    assert.equal(ledger.publicReceipt(r.id).handle, "still-open");
+  }
+  // An observed payment under another policy is only confirming; nothing to quarantine yet.
+  const observed = await issue(ledger);
+  await ledger.bindAddress(observed, ADDR(3));
+  snap(ledger, observed, [onchain({ txid: TX(3), destination: ADDR(3), state: "observed" })], { begin: { policyVersion: "policy-2" } });
+  assert.deepEqual(ledger.holds(receipts(ledger, observed)[0].id), []);
+});
+
+test("an invoice whose saved rule is missing or unknown refuses every crediting operation, atomically", async () => {
+  for (const messageRule of [null, "first-only", ""]) {
     const { ledger, make } = setup();
     const invoice = await issue(ledger);
     await ledger.bindAddress(invoice, ADDR(1));
@@ -725,27 +816,32 @@ test("a missing or invalid message rule refuses every crediting operation, atomi
     const heldId = receipts(ledger, invoice)[1].id;
     const tables = ["ra_receipts", "ra_ledger", "ra_feed", "ra_outbox", "ra_evidence", "ra_holds", "ra_reads"];
     const state = () => [tables.map((t) => count(ledger, t)), receipts(ledger, invoice).map((r) => ({ ...r }))];
+    // The saved row loses its rule, as one from before policy capture would lack it; its edit
+    // window stays valid, so only the message rule is missing. The instance's own policy is
+    // whole, and doesn't stand in for the invoice's.
+    const saved = (rule) => ledger.sql.exec("UPDATE ra_invoices SET message_rule = ? WHERE invoice = ?", rule, invoice);
+    saved(messageRule);
     const before = state();
-    // A valid edit window, so only the message rule is missing.
-    const unruled = make({ policy: { editWindow: "first-observation", messageRule } });
+    const unruled = make();
     const read = unruled.beginRead(invoice, { line: LINE, generation: GEN });
     const afterRead = state();
     assert.throws(() => unruled.applySnapshot({ invoice, line: LINE, generation: GEN, sequence: read.sequence,
       frames: framesOf(begin(), [onchain({ txid: TX(1), providerId: "a" })]), candidate: PRICE }), PolicyRequired);
     assert.deepEqual(state(), afterRead, "nothing applied");
     assert.equal(unruled.row("SELECT status FROM ra_reads WHERE sequence = ?", read.sequence).status, "outstanding");
-    assert.throws(() => unruled.recoverPricing(id, "stale-candidate"), PolicyRequired);
+    assert.throws(() => unruled.recoverPricing(id), PolicyRequired);
     assert.throws(() => unruled.releaseHold(heldId, "amount-changed", "reviewed"), PolicyRequired);
     assert.deepEqual(state()[1], before[1], "no credit, attribution or evidence lost");
     assert.equal(receipts(ledger, invoice)[0].price_state, "intent", "the intent survives for a properly configured recovery");
     // A lookup already in flight isn't consumed by a refused freeze.
+    saved("once");
     const ruled = make();
     ruled.abandonReads();
     const [fresh] = snap(ruled, invoice, [onchain({ txid: TX(3), providerId: "c" })], { price: "skip" }).priced;
     assert.ok(ruled.beginPricing(fresh));
-    ruled.policy.messageRule = null;
+    saved(messageRule);
     assert.throws(() => ruled.freezePrice(fresh, PRICE), PolicyRequired);
-    ruled.policy.messageRule = "once";
+    saved("once");
     ruled.freezePrice(fresh, PRICE);
     assert.equal(receipts(ruled, invoice).find((r) => r.id === fresh).state, "credited");
   }
@@ -826,7 +922,7 @@ for (const [phase, point] of FAILPOINTS) {
     const restarted = make();
     restarted.abandonReads();
     snap(restarted, invoice, [onchain({})]);
-    for (const id of restarted.interruptedPricing()) restarted.recoverPricing(id, "stale-candidate");
+    for (const id of restarted.interruptedPricing()) restarted.recoverPricing(id);
     assert.equal(count(restarted, "ra_receipts"), 1);
     assert.equal(count(restarted, "ra_ledger"), 1);
     assert.equal(ledgerNet(restarted, receipts(restarted, invoice)[0].id), 1000);
@@ -1099,24 +1195,31 @@ test("a reply older than the freshness bound from its read's start is refused", 
   assert.equal(ledger.health(), "behind");
 });
 
-test("the original full-target BOLT11 is withdrawn once anything is received", async () => {
-  const { ledger } = setup();
+test("the original full-target BOLT11 is withdrawn for good once any receipt is observed", async () => {
+  const { ledger, make } = setup();
   const invoice = await issue(ledger);
   await ledger.bindAddress(invoice, ADDR(1));
-  assert.equal(originalBolt11Allowed(ledger.totals(invoice)), true);
+  assert.equal(ledger.originalBolt11Allowed(invoice), true, "necessary, not sufficient: the wrapper still checks the provider");
+  assert.equal(ledger.originalBolt11Allowed("NOSUCHINV1"), false);
   snap(ledger, invoice, [onchain({ sats: 100, state: "observed" })]);
-  assert.equal(originalBolt11Allowed(ledger.totals(invoice)), false, "a confirming partial");
+  assert.equal(ledger.originalBolt11Allowed(invoice), false, "a confirming partial");
   const held = await issue(ledger);
   snap(ledger, held, [lightning({ paymentHash: null })]);
-  assert.deepEqual([ledger.totals(held).received, ledger.totals(held).review], [1000, 1000]);
-  assert.equal(originalBolt11Allowed(ledger.totals(held)), false, "a receipt in review");
+  assert.equal(ledger.originalBolt11Allowed(held), false, "a receipt in review");
+  // Invalid before any credit: nothing received, yet the code stays withdrawn.
+  const invalid = await issue(ledger);
+  await ledger.bindAddress(invalid, ADDR(3));
+  snap(ledger, invalid, [onchain({ txid: TX(3), destination: ADDR(3), state: "invalid" })]);
+  assert.deepEqual(pick(ledger.totals(invalid)), { received: 0, credited: 0, review: 0, left: null, state: "unpaid" });
+  assert.equal(ledger.originalBolt11Allowed(invalid), false, "an invalid receipt was still observed");
+  // Credited, then reversed to net zero: still withdrawn, across a restart.
   const reversed = await issue(ledger);
   await ledger.bindAddress(reversed, ADDR(2));
   snap(ledger, reversed, [onchain({ txid: TX(2), destination: ADDR(2) })]);
   snap(ledger, reversed, [onchain({ txid: TX(2), destination: ADDR(2), state: "invalid" })]);
   ledger.reverse(receipts(ledger, reversed)[0].id, "double spend");
   assert.deepEqual(pick(ledger.totals(reversed)), { received: 0, credited: 0, review: 0, left: null, state: "unpaid" });
-  assert.equal(originalBolt11Allowed(ledger.totals(reversed)), true, "nothing left received after a full reversal");
+  assert.equal(make().originalBolt11Allowed(reversed), false, "a full reversal never brings it back");
 });
 
 // --- Health ---------------------------------------------------------------------------------
