@@ -43,9 +43,7 @@ export function readSettings(env) {
     network,
     invoiceTimeoutMs: positiveInt(env.INVOICE_TIMEOUT_MS) ?? 10_000,
     pendingDays: positiveInt(env.PENDING_DAYS) ?? 7,
-    // The global pile: where it starts, and how many bananas the Oogas eat an hour. Both are
-    // the team's to tune; these are placeholders.
-    pileStart: wholeNumber(env.PILE_START) ?? 1_000,
-    pileEatPerHour: wholeNumber(env.PILE_EAT_PER_HOUR) ?? 60,
+    // The pile has no settings: it doesn't decay, and it starts only from an audited anchor,
+    // never from a configured level. PILE_START and PILE_EAT_PER_HOUR are ignored.
   };
 }

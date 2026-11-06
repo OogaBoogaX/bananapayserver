@@ -24,6 +24,11 @@ export class Donations extends DurableObject {
     return this.object.fetch(request);
   }
 
+  // RPC from PageApi only; the object's fetch routes nothing to it.
+  pileSnapshot() {
+    return this.object.pileSnapshot();
+  }
+
   webSocketMessage(ws, message) {
     return this.object.webSocketMessage(ws, message);
   }
@@ -56,8 +61,21 @@ export class PageApi extends WorkerEntrypoint {
     return pageApi(this.env).onchain(request, visitor);
   }
 
+  status(request, donor, visitor) {
+    return pageApi(this.env).status(request, donor, visitor);
+  }
+
+  history(request, donor, visitor) {
+    return pageApi(this.env).history(request, donor, visitor);
+  }
+
   fetch(request) {
     return pageApi(this.env).fetch(request);
+  }
+
+  // The pile aggregate for OBL's host: no arguments, no visitor, no public route.
+  pileSnapshot() {
+    return this.env.DONATIONS.get(this.env.DONATIONS.idFromName("donations")).pileSnapshot();
   }
 }
 
