@@ -89,7 +89,13 @@ test("the endpoint vectors are the real replies, with the agreed keys and status
     [{ status: 503, body: { error: "closed" } }, { status: 503, body: { error: "closed" } }]);
   // A genuine first credit heard live by an already-connected socket: after its marker, not
   // replayed, and the one frame whose seq is the receipt's first credit.
-  const live = v["socket.liveFirstCredit"];
+  // The receipt frames, then the pile they moved: the credit reaches the authoritative pile's
+  // journal with them, and the pile is still pending, with no number, until its anchor.
+  const heard = v["socket.liveFirstCredit"];
+  const live = heard.filter((m) => m.type !== "pile");
+  assert.deepEqual(heard.map((m) => m.type), [...live.map((m) => m.type), "pile"], "receipt frames, then the pile");
+  assert.deepEqual(heard.at(-1), { type: "pile", bananas: null, at: null, eatPerHour: 0, revision: heard.at(-1).revision, basis: "credits",
+    cutover: "pending", reconciliation: "review", uncertain: null });
   const marker = v["socket.firstConnect"].find((m) => m.type === "replay");
   assert.ok(live.length > 0 && live.every((m) => m.replay === false && m.seq > marker.through));
   const credits = live.filter((m) => m.type === "receipt" && m.receipt.state === "credited" && m.seq === m.receipt.firstCreditedSeq);
@@ -147,7 +153,56 @@ test("the payable vectors are the real positive path: a verified payable address
   assert.equal(payable.scope, "read-endpoints-payable");
   const v = payable.vectors;
   assert.deepEqual(Object.keys(v), ["socket.payableLive", "status.payable", "history.payable", "socket.freshnessWithdrawn", "status.withdrawn",
-    "history.withdrawn", "socket.gapMarker", "socket.currentReconnect", "socket.expired", "status.expired", "history.expired"]);
+    "history.withdrawn", "socket.gapMarker", "socket.currentReconnect", "socket.expired", "status.expired", "history.expired",
+    "socket.initialConnect", "socket.requests", "socket.earlyConnect", "socket.earlyLive", "socket.earlyGap", "socket.earlyCurrent",
+    "status.atEarlyGap", "history.atEarlyGap"]);
+  // The reachable gap. A page connects with no cursor, as a page with nothing yet does, and its
+  // marker names no position. It hears seq 1 live and goes away; its cursor is what it heard.
+  const earlyRequest = (path) => ({ method: "GET", path, upgrade: "websocket" });
+  const marker = (name) => v[name].messages.find((m) => m.type === "replay");
+  assert.deepEqual(v["socket.earlyConnect"].request, earlyRequest("/donations/socket"));
+  assert.deepEqual(marker("socket.earlyConnect"), { type: "replay", after: null, through: null, complete: true });
+  assert.deepEqual(v["socket.earlyLive"].map((m) => [m.type, m.seq, m.replay]), [["receipt", 1, false]], "one live frame, then gone");
+  // Back after the expiry with receipts=1: more frames wait than the saved bound of 2, so a gap
+  // marker and no frames, with the high-water mark to resume from.
+  assert.deepEqual(v["socket.earlyGap"].request, earlyRequest("/donations/socket?receipts=1"));
+  const gapped = marker("socket.earlyGap");
+  assert.deepEqual([gapped.after, gapped.complete], [1, false]);
+  assert.ok(gapped.through - gapped.after > 2, "genuinely more than the bound");
+  assert.equal(gapped.through, v["socket.expired"].at(-1).seq, "through the expiry's frame");
+  assert.ok(v["socket.earlyGap"].messages.every((m) => m.type !== "receipt" && m.type !== "invoiceStatus"), "no frames replayed");
+  // From that mark: complete, nothing to replay.
+  assert.deepEqual(v["socket.earlyCurrent"].request, earlyRequest(`/donations/socket?receipts=${gapped.through}`));
+  assert.deepEqual(marker("socket.earlyCurrent"), { type: "replay", after: gapped.through, through: gapped.through, complete: true });
+  for (const name of ["socket.earlyConnect", "socket.earlyGap", "socket.earlyCurrent"]) {
+    assert.deepEqual(v[name].messages.slice(0, 1).map((m) => m.type), ["status"], name);
+  }
+  // The private replies at the same point: the expired invoice, its history kept.
+  assert.equal(v["status.atEarlyGap"].body.invoice.lightning, "expired");
+  assert.equal(v["status.atEarlyGap"].body.invoice.revision, v["socket.expired"].at(-1).invoice.revision);
+  assert.deepEqual(v["history.atEarlyGap"].body.invoices.map((i) => i.id), ["PayableInv1"]);
+  // The requests the socket vectors' connects actually sent through PageApi: none with a cursor
+  // first, then receipts=0 for the gap, then the gap marker's own high-water mark.
+  const requests = v["socket.requests"];
+  const socketRequest = (path) => ({ method: "GET", path, upgrade: "websocket" });
+  assert.deepEqual(requests, {
+    "socket.initialConnect": socketRequest("/donations/socket"),
+    "socket.gapMarker": socketRequest("/donations/socket?receipts=0"),
+    "socket.currentReconnect": socketRequest(`/donations/socket?receipts=${v["socket.gapMarker"].at(-1).through}`),
+  });
+  // The first page's connect, before any read or payment: everything it was sent, in order.
+  const initial = v["socket.initialConnect"];
+  assert.deepEqual(initial.request, requests["socket.initialConnect"]);
+  assert.deepEqual(initial.messages.map((m) => m.type), ["status", "pile", "board", "tally", "recent", "recentReceipts", "replay", "tally"]);
+  assert.deepEqual(initial.messages[0].accounting, { version: 1, issuance: false, receipts: true, history: true, coverage: "invoice", spends: false,
+    reconciliation: initial.messages[0].accounting.reconciliation });
+  assert.notEqual(initial.messages[0].accounting.reconciliation, "current");
+  assert.deepEqual(initial.messages.find((m) => m.type === "recentReceipts"), { type: "recentReceipts", entries: [] });
+  // No cursor and an empty feed: the marker names no position yet, and is complete.
+  assert.deepEqual(initial.messages.find((m) => m.type === "replay"), { type: "replay", after: null, through: null, complete: true });
+  assert.ok(initial.messages.every((m) => m.type !== "receipt" && m.type !== "invoiceStatus"), "nothing live before the first read");
+  // The first live frame the open page heard came after that marker.
+  assert.equal(v["socket.payableLive"][0].seq, 1);
   const statusKeys = ["invoice", "payableAddress", "addresses", "nextAddress", "receipts", "next"];
   const invoiceKeys = ["id", "accounting", "due", "received", "credited", "review", "left", "state", "revision", "expires", "lightning", "bolt11"];
   for (const name of ["status.payable", "status.withdrawn", "status.expired"]) {
@@ -198,10 +253,51 @@ test("the payable vectors are the real positive path: a verified payable address
   assert.equal(JSON.stringify(v).includes("4242"), false);
 });
 
+test("the anchored pile vectors: receipts move the level once each, health is honest, and a stopped object's pile still reaches its page", async () => {
+  const { pile } = await buildVectors();
+  assert.equal(pile.scope, "anchored-pile");
+  const v = pile.vectors;
+  assert.deepEqual(Object.keys(v), ["pile.connect", "pile.creditBehind", "pile.creditCurrent", "pile.reviewUncertain", "pile.reversal",
+    "pile.reconfirmation", "pile.beforeRestart", "pile.restartRecovery", "pile.reconnect"]);
+  const keys = ["type", "bananas", "at", "eatPerHour", "revision", "basis", "cutover", "reconciliation", "uncertain"];
+  const heard = Object.entries(v).filter(([name]) => name !== "pile.reconnect").flatMap(([, piles]) => piles);
+  for (const p of [...heard, ...v["pile.reconnect"]]) {
+    assert.deepEqual(Object.keys(p), keys);
+    assert.deepEqual([p.type, p.eatPerHour, p.basis, p.cutover], ["pile", 0, "credits", "done"]);
+    assert.ok(["behind", "current", "review"].includes(p.reconciliation), "never off once receipts feed it");
+  }
+  // The page hears each revision once, in order.
+  assert.deepEqual(heard.map((p) => p.revision), [...heard.map((p) => p.revision)].sort((a, b) => a - b));
+  assert.equal(new Set(heard.map((p) => p.revision)).size, heard.length);
+  const last = (name) => v[name].at(-1);
+  // The anchor's reviewed 10 bananas, before any receipt: behind, since no read is verified.
+  assert.deepEqual([last("pile.connect").bananas, last("pile.connect").reconciliation], [10, "behind"]);
+  // One credit of 1,000 sats at 1,000 sats a banana: +1, behind until verified, then current.
+  assert.deepEqual(v["pile.creditBehind"].map((p) => [p.bananas, p.reconciliation]), [[11, "behind"]]);
+  assert.deepEqual(v["pile.creditCurrent"].map((p) => [p.bananas, p.reconciliation]), [[11, "current"]], "a new revision for health alone");
+  // Held for review: its credit stays in the level and is counted uncertain.
+  assert.deepEqual([last("pile.reviewUncertain").bananas, last("pile.reviewUncertain").reconciliation, last("pile.reviewUncertain").uncertain],
+    [11, "review", { sats: 1000, bananas: 1 }]);
+  // Reversed, it leaves the level once; reconfirmed at its frozen price, it returns once.
+  assert.deepEqual([last("pile.reversal").bananas, last("pile.reversal").reconciliation, last("pile.reversal").uncertain], [10, "current", { sats: 0, bananas: 0 }]);
+  assert.deepEqual([last("pile.reconfirmation").bananas, last("pile.reconfirmation").reconciliation], [11, "current"]);
+  for (const name of ["pile.creditBehind", "pile.creditCurrent", "pile.reviewUncertain", "pile.reversal", "pile.reconfirmation"]) {
+    assert.ok(v[name].every((p) => p.reconciliation !== "current" || p.uncertain.sats === 0), `${name}: current only with nothing uncertain`);
+  }
+  // A second credit of 2,500 sats reached the pile before a stop; the page heard nothing then,
+  // and hears the newer pile from the next start, without any further payment.
+  assert.deepEqual(v["pile.beforeRestart"], []);
+  assert.ok(v["pile.restartRecovery"].length > 0);
+  assert.equal(last("pile.restartRecovery").bananas, 13.5);
+  assert.ok(last("pile.restartRecovery").revision > last("pile.reconfirmation").revision);
+  // A page connecting afterwards gets exactly the current pile.
+  assert.deepEqual(v["pile.reconnect"], [last("pile.restartRecovery")]);
+});
+
 test("the vectors are deterministic, and every section before payable is unchanged by it", async () => {
   const [a, b] = [serialize(await buildVectors()), serialize(await buildVectors())];
   assert.equal(a, b, "two builds, the same bytes");
-  assert.deepEqual(Object.keys(JSON.parse(a)), ["contract", "scope", "note", "vectors", "endpoints", "projection", "payable"]);
+  assert.deepEqual(Object.keys(JSON.parse(a)), ["contract", "scope", "note", "vectors", "endpoints", "projection", "payable", "pile"]);
 });
 
 test("the OBL donation fixture is untouched by these vectors", () => {

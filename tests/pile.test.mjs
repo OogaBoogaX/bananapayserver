@@ -179,7 +179,7 @@ test("donations already in the checkpoint are fenced at the cutover, and never a
   const w = await world();
   const sql = w.ctx.storage.sql;
   // The object as the old code left it: schema 8, a saved checkpoint, and finished marks.
-  sql.exec("DROP TABLE pile_deltas; DROP TABLE pile_anchor; DROP TABLE pile_legacy; DROP TABLE pile_exceptions; ALTER TABLE pending DROP COLUMN d1_token; DROP TABLE quarantined;");
+  sql.exec("DROP TABLE pile_deltas; DROP TABLE pile_anchor; DROP TABLE pile_legacy; DROP TABLE pile_exceptions; ALTER TABLE pending DROP COLUMN d1_token; DROP TABLE quarantined; DROP TABLE pile_shown;");
   sql.exec("UPDATE meta SET value = 8 WHERE key = 'schema'");
   savedCheckpoint(w, 9_000, w.platform.now() - HOUR);
   sql.exec("INSERT INTO finished (invoice, at) VALUES ('InCheckpt1', 1), ('InCheckpt2', 2)");

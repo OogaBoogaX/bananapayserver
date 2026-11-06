@@ -266,6 +266,9 @@ const SCHEMA = [
     at INTEGER NOT NULL,
     resolved_at INTEGER
   );`,
+  // The receipts held for review, so the pile's uncertain amount reads only those, however long
+  // the history.
+  `CREATE INDEX ra_receipts_review ON ra_receipts (id) WHERE state = 'review';`,
 ];
 
 const LIGHTNING = ["available", "limit", "unavailable"];
@@ -1531,7 +1534,38 @@ export class ReceiptLedger {
     );
   }
 
-  // The pile's change from receipts, pending a cutover anchor. Never applied to the legacy pile.
+  // The receipt pile journal for the object's bridge to the authoritative pile: entries after a
+  // ledger sequence, oldest first, each with its permanent identity, (receipt, transition), and
+  // its invoice. Bounded by the caller.
+  pileEntriesAfter(seq, limit) {
+    if (!isPositive(limit)) throw new PolicyRequired("pile bridge batch size");
+    return this.rows(
+      "SELECT d.ledger_seq AS seq, l.receipt, l.transition, r.invoice, d.sats, d.milli, d.at FROM ra_pile_deltas d " +
+      "JOIN ra_ledger l ON l.seq = d.ledger_seq JOIN ra_receipts r ON r.id = l.receipt WHERE d.ledger_seq > ? ORDER BY d.ledger_seq LIMIT ?",
+      seq, limit,
+    );
+  }
+
+  pileEntryHighWater() {
+    return this.row("SELECT max(ledger_seq) AS seq FROM ra_pile_deltas").seq ?? 0;
+  }
+
+  // What receipts held for review still credit: the pile's uncertain amount, in sats and banana
+  // thousandths. Null if a sum can't be represented exactly.
+  reviewCredit() {
+    let sats = 0, milli = 0;
+    for (const r of this.rows("SELECT sats, credit, milli FROM ra_receipts INDEXED BY ra_receipts_review WHERE state = 'review'")) {
+      if (r.credit <= 0) continue;
+      const s = sats + r.credit, m = milli + (r.milli ?? 0);
+      if (!Number.isSafeInteger(s) || !Number.isSafeInteger(m)) return null;
+      sats = s;
+      milli = m;
+    }
+    return { sats, milli };
+  }
+
+  // The pile's change from receipts, summed over the whole journal. For checks only; the object
+  // bridges entries to the authoritative pile one at a time, by their identity.
   pileDelta() {
     let sats = 0, milli = 0;
     for (const row of this.rows("SELECT sats, milli FROM ra_pile_deltas")) {

@@ -56,16 +56,42 @@ the receipt core, through `PageApi.status` and `PageApi.history`.
 
     Each socket vector is the messages received at a stated point, so no later message can
     leak in.
-  - **Two more sections, generated the same way:**
+  - **Three more sections, generated the same way:**
     - **`projection`:** what an open socket hears when the D1 projection publishes lifetime
       figures, through a first credit, a restart, a repeated refresh, a reversal and a
       reconfirmation.
+    - **`pile`:** what an open page hears of the anchored pile as receipts move it. The anchor
+      is applied through `applyPileAnchor` on storage, as an operator would. It covers:
+      - credit, review with an uncertain amount, reversal and reconfirmation;
+      - health from `behind` to `current` and `review`;
+      - a pile bridged before a stop, heard by the surviving page from the next start's alarm;
+      - a later reconnect.
     - **`payable`:** the positive payable path, from a complete synthetic snapshot read with
       destination capability. It covers:
       - a status naming a bound regtest payable address, with a fresh remainder;
       - its live withdrawal once stale, and the invoice's expiry, with the history kept;
       - a real gap marker from a reconnect further behind than that world's saved replay bound
-        of 2, and a complete current reconnect.
+        of 2, and a complete current reconnect;
+      - the first page's whole connect output before any read or payment
+        (`socket.initialConnect`);
+      - the request the connect of `socket.initialConnect`, `socket.gapMarker` and
+        `socket.currentReconnect` each actually sent through `PageApi` (`socket.requests`);
+      - a gap a page can actually reach, from a second page's point of view:
+        1. it connects with no cursor (`socket.earlyConnect`);
+        2. it hears seq 1 live and goes away before the next frame (`socket.earlyLive`);
+        3. after the expiry it comes back with `receipts=1`, the cursor it heard. More frames
+           wait than the saved bound of 2, so it gets a gap marker and no frames
+           (`socket.earlyGap`);
+        4. it reconnects from that marker's high-water mark and is complete
+           (`socket.earlyCurrent`).
+
+        Each comes with the request it sent, and the private status and history at the same
+        point.
+
+      With no cursor and an empty feed, the connect's marker is `{ after: null, through: null,
+      complete: true }`. It names no position, not 0. A page that has heard nothing reconnects
+      with no cursor, so `socket.gapMarker`'s `receipts=0` request is the producer's own
+      cursor-0 check, not a step a page reaches from that marker.
 
       Lightning is never available there, since no provider has verified the original code.
   - **What they don't prove:** provider ingestion, reconciliation (health is never `current` in
@@ -642,12 +668,87 @@ operator's reconciled level, the preserved evidence and a reason.
     "uncertain": { "sats": 0, "bananas": 0 } }
   ```
 
-  Until receipt accounting is wired in, the anchored pile reports `"reconciliation": "off"`,
-  with `uncertain` at zero: only legacy credits feed it.
+  While no receipt-mode mapping exists, the anchored pile reports `"reconciliation": "off"`,
+  with `uncertain` at zero: only legacy credits feed it, exactly as before.
 
   - **`basis: "credits"`** means the anchor, plus credits, minus reversals. It is not a
     verified wallet balance.
-  - **`uncertain`** counts `review` receipts that still hold credit.
+  - **`uncertain`** counts `review` receipts that still hold credit, in sats and bananas. Their
+    credit stays in the level until a reversal takes it out.
+- **Receipts into the pile.** Each receipt ledger entry, a credit or a reversal, becomes one
+  pile delta:
+  - **Keyed for good:** by `receipt:<receipt id>:<transition>`, the entry's permanent identity.
+    It counts once, on whichever side of the anchor's boundary it falls, like
+    `donation:<invoice id>`.
+  - **Ordered and atomic:** the object moves entries from the receipt journal in ledger order,
+    from a durable mark. Each delta and the mark's move are one transaction, so a stop at any
+    point repeats or skips nothing.
+  - **When it runs:** whenever receipt frames are pushed, on every alarm, and at every start.
+    So a page that reconnects after a crash is sent a pile that already holds every committed
+    entry.
+  - **Pages that stay connected across a stop:** the pile revision last sent to pages is kept
+    durably.
+    - **On start:** if pages are connected and the pile has a newer revision, the alarm is set
+      at once.
+    - **The alarm:** it sends that revision through the normal path, so no new payment is
+      needed to heal a stale page.
+    - **Marked sent only after the attempt:** the mark moves only after `ws.send` was tried
+      for every open page and none of them failed. That proves the pile was handed to each
+      socket (an enqueue), not that any page received it. Nothing here hears back from a page.
+      - **Pages going away:** a page closing or closed is skipped, and one that closes during
+        the send fails in the ordinary way. Neither blocks the mark.
+      - **Any other failure:** when an open page fails to take it, the mark stays where it was
+        and the failure is raised. A connected page already keeps an alarm set, so that alarm
+        sends it again, in the same instance, with no new payment.
+      - **Backstop:** a failed send also brings the alarm forward to one price-check cadence
+        away, never sooner.
+      - **A failing alarm:** an alarm whose own work fails still sets the next one.
+    - **At least once:** a page may hear a revision twice, and deduplicates by revision.
+    - **No loop:** once sent, nothing more is scheduled for it.
+  - **Bounded:** each step moves at most the saved replay bound of entries. The alarm finishes
+    a longer backlog.
+  - **Never both ways:** an entry for an invoice the pile knows as a legacy donation (finished,
+    in the checkpoint, credited or held) is not added. It is held as `legacy-and-receipt`.
+  - **Never rounded:** an entry whose amount or time can't be represented exactly is held as
+    `unrepresentable-entry`.
+  - **Entries from before the bridge existed:** the first run notes how far the receipt
+    journal already went.
+    - If no anchor existed then, those entries are added like any queued credit. The operator
+      reviews them with the anchor's boundary.
+    - If an anchor already existed, nobody can say whether its reviewed level included them, so
+      each is held as `receipt-before-bridge`, never added or guessed.
+  - **A held receipt stays held as a whole:** once any entry of a receipt is held, every later
+    entry of the same receipt is held as `receipt-lineage-held`.
+    - **Why:** a reversal would otherwise take away a credit the pile never took. A
+      reconfirmation would add it without settling whether the anchor already had it.
+    - **Other receipts:** they go on as usual.
+  - **Held entries:** every held entry is a pile exception, so the pile reports `review`.
+    Resolving one is the same open operator step as for the legacy exceptions.
+  - **No anchor over a waiting journal:** in a store with receipt entries, the anchor is
+    refused (`bridge`) while any entry hasn't reached the pile's deltas. This covers a journal
+    the bridge has never started on.
+    - **Why:** only then can the boundary name exactly what the reviewed level includes.
+      Nothing is assumed about entries that haven't arrived.
+    - **Unchanged:** an existing anchor's replies, duplicate or `anchored`, and stores without
+      receipt entries.
+  - **Lifetime figures are separate:** the D1 lifetime figures are projected separately (see
+    [D1 projection](#d1-projection)) and never read the pile. No spending exists, and none is
+    fabricated.
+- **The anchored pile once receipt-mode mappings exist.** `reconciliation` is the receipt side's
+  own health, never better than the bridge:
+  - **`behind`:** while bridge entries wait, or while any read, price or projection lags. With
+    no provider ingestion, no read is ever verified complete, so a real deployment never gets
+    past `behind`.
+  - **`review`:** while any receipt or projection review, or any pile exception, exists.
+  - **`current`:** only when every read is verified complete and fresh, D1 holds every revision,
+    and the bridge is done.
+
+  The pile's `revision` also moves when only this health or the uncertain amount changes, so
+  pages that deduplicate by revision see it. Coverage stays invoice-only.
+- **`behind` on the pile:** an anchored pile may report `"reconciliation": "behind"`, the same
+  value the status message already uses for receipt accounting. Pages show the level as not
+  yet reconciled. The shared fixture's `pile` section shows what an open page hears through
+  credit, review, reversal, reconfirmation and a restart.
   - **`revision`** always increases.
   - **`eatPerHour`** stays at 0 so legacy pages stop extrapolating.
 - **Rollout blockers:**
@@ -880,6 +981,32 @@ Built in [`worker/projection.mjs`](../worker/projection.mjs) and migration
 ### Pages
 
 Broadcasts are at least once, after commit. Pages deduplicate by revision.
+
+**Live receipt and invoiceStatus frames, per page:**
+
+- **Position:** each page has its own position in the feed, kept in its socket's attachment,
+  so it survives hibernation and a restart.
+  - It starts at the high-water mark its connect captured. Anything at or below that was its
+    snapshot or replay, and never arrives as live.
+  - It moves to a frame's `seq` only once `ws.send` took that frame for the page without
+    failing.
+- **What "sent" means here:** an enqueue on the socket, not proof that the page received it.
+  Nothing here hears back from a page.
+- **In order:** a page is sent frames in feed order, at most the saved replay bound per step.
+  A page left behind gets the rest from the alarm, at once.
+- **Closing and closed pages:** skipped. A page that closes during its send fails the ordinary
+  way. Neither holds back other pages or the mark.
+- **A failure on an open page:**
+  - the page stops at that frame, so it never gets a later frame first;
+  - it is tried again no sooner than one price-check cadence later, never in a tight loop;
+  - its retry time is kept with its position, and the alarm comes back for it;
+  - healthy pages go on as before.
+- **After a stop:** a start finds open pages that are behind, and the alarm sends them what
+  they missed, with no new receipt needed.
+- **Duplicates:** a frame may reach a page twice, across a failure or a stop, or also in its
+  replay. Pages deduplicate by revision, so a first credit animates once.
+- **`receipt_broadcast`:** the lowest position of any open page, or the feed's high-water mark
+  when none is open.
 
 ### Uniqueness is not atomicity
 

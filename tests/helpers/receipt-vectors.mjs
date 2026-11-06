@@ -11,7 +11,7 @@
 import { fakeCtx, fakeD1, fakePlatform, fakeStorage } from "./cloudflare.mjs";
 import { syntheticAddress } from "./synthetic-address.mjs";
 import { DonationsObject, PRICE_FRESH_MS } from "../../worker/object.mjs";
-import { applyPileAnchor, pileView, recordPileDelta } from "../../worker/pile.mjs";
+import { applyPileAnchor, pileView, recordPileDelta, savedPileSnapshot } from "../../worker/pile.mjs";
 import { hashRequest, ReceiptLedger } from "../../worker/receipts.mjs";
 import { pay, provider, read, READ, RECEIPT_SETTINGS, seed, TOKEN } from "./receipt-seed.mjs";
 import { world } from "./world.mjs";
@@ -271,8 +271,32 @@ async function payableVectors() {
     const response = await w.post(path, body, { donor });
     return { status: response.status, body: await response.json() };
   };
+  // Every socket request exactly as it reached PageApi: its method, path and query, and its
+  // upgrade header. The visitor header is left out; it only groups rate limits.
+  const sockets = [];
+  const fetch = w.page.fetch.bind(w.page);
+  w.page.fetch = (request) => {
+    const url = new URL(request.url);
+    if (url.pathname === "/donations/socket") sockets.push({ method: request.method, path: url.pathname + url.search, upgrade: request.headers.get("Upgrade") });
+    return fetch(request);
+  };
   const page = await w.connectPage();
   await w.ctx.settle();
+  // Everything the first page received on connecting, before any read or payment: its status
+  // with the accounting capability, the pile, board and tally, recent receipts and the marker.
+  const initialConnect = { request: sockets[0], messages: page.messages() };
+  // A second page that connects the same way, hears the first live frame, and goes away before
+  // the next: as a page closing its socket would, so later sends find it closed. What it last
+  // heard, seq 1, is the cursor it reconnects with.
+  const early = await w.connectPage(undefined, "visitor-early");
+  await w.ctx.settle();
+  const earlyConnect = { request: sockets.at(-1), messages: early.messages() };
+  const earlyFrom = early.messages().length;
+  const sendEarly = early.send.bind(early);
+  early.send = (text) => {
+    sendEarly(text);
+    if (["receipt", "invoiceStatus"].includes(JSON.parse(text).type)) early.readyState = 3;
+  };
   const kinds = new Set(["receipt", "invoiceStatus", "replay", "recentReceipts"]);
   const live = (from) => page.messages().slice(from).filter((m) => kinds.has(m.type));
   // A complete snapshot: one partial payment to the first bound address, and the provider
@@ -297,8 +321,10 @@ async function payableVectors() {
   // 2, so a gap marker and no frames. A reconnect from the current mark replays nothing and is
   // complete.
   const gap = await w.connectPage(undefined, "visitor-gap", 0);
+  const gapRequest = sockets.at(-1);
   const socketGap = gap.messages().filter((m) => kinds.has(m.type));
   const current = await w.connectPage(undefined, "visitor-current", w.object.receipts.feedHighWater());
+  const currentRequest = sockets.at(-1);
   const socketCurrent = current.messages().filter((m) => kinds.has(m.type));
   // Past the original invoice's expiry: the alarm commits it live, Lightning reads expired, and
   // the history keeps the invoice.
@@ -308,6 +334,18 @@ async function payableVectors() {
   const socketExpired = live(mark);
   const statusExpired = await call("/donations/status", { request: token });
   const historyExpired = await call("/donations/history", {}, owner);
+  // The early page, back after the expiry with the cursor it last heard: more frames now wait
+  // after it than the saved bound of 2, so a gap marker and no frames. Then a reconnect from that
+  // marker's high-water mark, which is complete. The private replies at the same point.
+  const earlyLive = early.messages().slice(earlyFrom);
+  const cursor = earlyLive.at(-1).seq;
+  const earlyGapPage = await w.connectPage(undefined, "visitor-early", cursor);
+  const earlyGap = { request: sockets.at(-1), messages: earlyGapPage.messages() };
+  const earlyThrough = earlyGap.messages.find((m) => m.type === "replay").through;
+  const earlyCurrentPage = await w.connectPage(undefined, "visitor-early", earlyThrough);
+  const earlyCurrent = { request: sockets.at(-1), messages: earlyCurrentPage.messages() };
+  const statusAtEarlyGap = await call("/donations/status", { request: token });
+  const historyAtEarlyGap = await call("/donations/history", {}, owner);
   return {
     "socket.payableLive": socketPayable,
     "status.payable": statusPayable,
@@ -320,6 +358,78 @@ async function payableVectors() {
     "socket.expired": socketExpired,
     "status.expired": statusExpired,
     "history.expired": historyExpired,
+    "socket.initialConnect": initialConnect,
+    // The request each socket vector's connect sent, in order.
+    "socket.requests": { "socket.initialConnect": sockets[0], "socket.gapMarker": gapRequest, "socket.currentReconnect": currentRequest },
+    // The reachable gap: a page connecting with no cursor, hearing seq 1 live, going away, and
+    // coming back with the cursor it heard, after more than the saved bound of frames.
+    "socket.earlyConnect": earlyConnect,
+    "socket.earlyLive": earlyLive,
+    "socket.earlyGap": earlyGap,
+    "socket.earlyCurrent": earlyCurrent,
+    "status.atEarlyGap": statusAtEarlyGap,
+    "history.atEarlyGap": historyAtEarlyGap,
+  };
+}
+
+// What an open page hears of the anchored pile as receipts move it, through the real object: the
+// anchor applied through applyPileAnchor on the object's storage, as an operator would, with no
+// endpoint. Each vector is the pile messages the page heard from a stated point, once the
+// object's background work has finished.
+async function anchoredPileVectors() {
+  const w = await world(RECEIPT_SETTINGS);
+  const ledger = provider(w);
+  const sql = w.ctx.storage.sql;
+  const anchored = applyPileAnchor(w.ctx.storage, { anchor: "synthetic-anchor-2", expected: savedPileSnapshot(sql), milli: 10_000, boundary: 0,
+    reason: "synthetic vector", evidence: "synthetic vector" }, w.platform.now());
+  if (!anchored.ok) throw new Error("the synthetic anchor was refused");
+  const { invoice } = await seed(w, ledger, { invoice: "PileInv0001", token: TOKEN(0xe1), addresses: [1] });
+  const page = await w.connectPage();
+  await w.ctx.settle();
+  const piles = (from) => page.messages().slice(from).filter((m) => m.type === "pile");
+  const step = async (change) => {
+    const mark = page.messages().length;
+    change();
+    w.object.pushReceiptFrames();
+    await w.ctx.settle();
+    return piles(mark);
+  };
+  const complete = { capabilities: { complete: true } };
+  const connect = piles(0);
+  // A credit from a read nobody verified complete: in the level, and behind.
+  const creditBehind = await step(() => read(w, ledger, invoice, [pay(1)]));
+  // The same credit, now read verified complete, with D1 drained and the bridge done: current,
+  // at a new revision though the level is unchanged.
+  const creditCurrent = await step(() => read(w, ledger, invoice, [pay(1)], complete));
+  // The provider calls it invalid: held for review, its credit still in the level, uncertain.
+  const reviewUncertain = await step(() => read(w, ledger, invoice, [pay(1, "invalid")], complete));
+  const [receipt] = sql.exec("SELECT id FROM ra_receipts WHERE invoice = ? ORDER BY ord", invoice).toArray();
+  const reversal = await step(() => ledger.reverse(receipt.id, "synthetic double spend"));
+  const reconfirmation = await step(() => read(w, ledger, invoice, [pay(1)], complete));
+  // A second credit reaches the pile, and the object stops before the page hears it. The next
+  // start's alarm sends the newer pile to the page that stayed connected.
+  let mark = page.messages().length;
+  read(w, ledger, invoice, [pay(1), pay(2, "settled", 2500)], complete);
+  w.object.bridgeReceipts();
+  const beforeRestart = piles(mark);
+  w.object = new DonationsObject(w.ctx, w.env, w.platform);
+  await w.ctx.settle();
+  mark = page.messages().length;
+  await w.fireAlarm();
+  await w.ctx.settle();
+  const restartRecovery = piles(mark);
+  // A page that connects now is sent the current pile at once.
+  const reconnect = (await w.connectPage(undefined, "visitor-pile")).messages().filter((m) => m.type === "pile");
+  return {
+    "pile.connect": connect,
+    "pile.creditBehind": creditBehind,
+    "pile.creditCurrent": creditCurrent,
+    "pile.reviewUncertain": reviewUncertain,
+    "pile.reversal": reversal,
+    "pile.reconfirmation": reconfirmation,
+    "pile.beforeRestart": beforeRestart,
+    "pile.restartRecovery": restartRecovery,
+    "pile.reconnect": reconnect,
   };
 }
 
@@ -362,6 +472,18 @@ export async function buildVectors() {
         "has verified the original BOLT11, so Lightning is never available here. Does not prove provider ingestion, " +
         "real runtime behaviour or any consumer's parsing.",
       vectors: await payableVectors(),
+    },
+    pile: {
+      scope: "anchored-pile",
+      note: "What an open page hears of the anchored pile as receipts move it, through the real object, with the anchor " +
+        "applied through applyPileAnchor on the object's storage, as an operator would; no endpoint applies it. Each vector " +
+        "is the pile messages heard from the stated point once background work has finished: on connect; a credit from an " +
+        "unverified read (behind); the same credit read verified complete (current, a new revision at the same level); the " +
+        "receipt held for review (its credit uncertain); its reversal; its reconfirmation; a second credit bridged before a " +
+        "stop, heard by the surviving page from the next start's alarm; and a page connecting after. basis: credits is the " +
+        "anchor plus credits minus reversals, not a wallet balance. Does not prove provider ingestion, real runtime " +
+        "behaviour, any consumer's parsing, or how an operator applies an anchor. Issuance is off.",
+      vectors: await anchoredPileVectors(),
     },
   };
 }

@@ -1241,6 +1241,17 @@
             "revision": 15
           },
           "replay": false
+        },
+        {
+          "type": "pile",
+          "bananas": null,
+          "at": null,
+          "eatPerHour": 0,
+          "revision": 4,
+          "basis": "credits",
+          "cutover": "pending",
+          "reconciliation": "review",
+          "uncertain": null
         }
       ],
       "status.metadataClosed": {
@@ -2221,7 +2232,710 @@
           ],
           "next": null
         }
+      },
+      "socket.initialConnect": {
+        "request": {
+          "method": "GET",
+          "path": "/donations/socket",
+          "upgrade": "websocket"
+        },
+        "messages": [
+          {
+            "type": "status",
+            "open": false,
+            "network": "regtest",
+            "limits": {
+              "minSats": 69,
+              "maxSats": 2100000000000000,
+              "lightningMaxSats": 100000,
+              "messageMinSats": 1000
+            },
+            "accounting": {
+              "version": 1,
+              "issuance": false,
+              "receipts": true,
+              "history": true,
+              "coverage": "invoice",
+              "spends": false,
+              "reconciliation": "behind"
+            }
+          },
+          {
+            "type": "pile",
+            "bananas": null,
+            "at": null,
+            "eatPerHour": 0,
+            "revision": 0,
+            "basis": "credits",
+            "cutover": "pending",
+            "reconciliation": "review",
+            "uncertain": null
+          },
+          {
+            "type": "board",
+            "entries": [],
+            "satsEntries": []
+          },
+          {
+            "type": "tally",
+            "count": 0,
+            "sats": 0,
+            "bananas": 0,
+            "last": null,
+            "hours": [],
+            "rate": null
+          },
+          {
+            "type": "recent",
+            "entries": []
+          },
+          {
+            "type": "recentReceipts",
+            "entries": []
+          },
+          {
+            "type": "replay",
+            "after": null,
+            "through": null,
+            "complete": true
+          },
+          {
+            "type": "tally",
+            "count": 0,
+            "sats": 0,
+            "bananas": 0,
+            "last": null,
+            "hours": [],
+            "rate": {
+              "usdPerBtc": 100000,
+              "satsPerBanana": 1000,
+              "at": 1790856000000,
+              "stale": false
+            }
+          }
+        ]
+      },
+      "socket.requests": {
+        "socket.initialConnect": {
+          "method": "GET",
+          "path": "/donations/socket",
+          "upgrade": "websocket"
+        },
+        "socket.gapMarker": {
+          "method": "GET",
+          "path": "/donations/socket?receipts=0",
+          "upgrade": "websocket"
+        },
+        "socket.currentReconnect": {
+          "method": "GET",
+          "path": "/donations/socket?receipts=3",
+          "upgrade": "websocket"
+        }
+      },
+      "socket.earlyConnect": {
+        "request": {
+          "method": "GET",
+          "path": "/donations/socket",
+          "upgrade": "websocket"
+        },
+        "messages": [
+          {
+            "type": "status",
+            "open": false,
+            "network": "regtest",
+            "limits": {
+              "minSats": 69,
+              "maxSats": 2100000000000000,
+              "lightningMaxSats": 100000,
+              "messageMinSats": 1000
+            },
+            "accounting": {
+              "version": 1,
+              "issuance": false,
+              "receipts": true,
+              "history": true,
+              "coverage": "invoice",
+              "spends": false,
+              "reconciliation": "behind"
+            }
+          },
+          {
+            "type": "pile",
+            "bananas": null,
+            "at": null,
+            "eatPerHour": 0,
+            "revision": 0,
+            "basis": "credits",
+            "cutover": "pending",
+            "reconciliation": "review",
+            "uncertain": null
+          },
+          {
+            "type": "board",
+            "entries": [],
+            "satsEntries": []
+          },
+          {
+            "type": "tally",
+            "count": 0,
+            "sats": 0,
+            "bananas": 0,
+            "last": null,
+            "hours": [],
+            "rate": {
+              "usdPerBtc": 100000,
+              "satsPerBanana": 1000,
+              "at": 1790856000000,
+              "stale": false
+            }
+          },
+          {
+            "type": "recent",
+            "entries": []
+          },
+          {
+            "type": "recentReceipts",
+            "entries": []
+          },
+          {
+            "type": "replay",
+            "after": null,
+            "through": null,
+            "complete": true
+          }
+        ]
+      },
+      "socket.earlyLive": [
+        {
+          "type": "receipt",
+          "seq": 1,
+          "receipt": {
+            "id": "r00000000000000000000000000001001",
+            "invoice": "PayableInv1",
+            "method": "onchain",
+            "sats": 4000,
+            "credit": 0,
+            "state": "confirming",
+            "revision": 1,
+            "at": 1790856000000,
+            "firstCreditedSeq": null,
+            "handle": "",
+            "message": "",
+            "verified": false,
+            "pricing": null
+          },
+          "invoice": {
+            "id": "PayableInv1",
+            "due": 10000,
+            "received": 4000,
+            "credited": 0,
+            "review": 0,
+            "left": 6000,
+            "state": "partial",
+            "revision": 6
+          },
+          "replay": false
+        }
+      ],
+      "socket.earlyGap": {
+        "request": {
+          "method": "GET",
+          "path": "/donations/socket?receipts=1",
+          "upgrade": "websocket"
+        },
+        "messages": [
+          {
+            "type": "status",
+            "open": false,
+            "network": "regtest",
+            "limits": {
+              "minSats": 69,
+              "maxSats": 2100000000000000,
+              "lightningMaxSats": 100000,
+              "messageMinSats": 1000
+            },
+            "accounting": {
+              "version": 1,
+              "issuance": false,
+              "receipts": true,
+              "history": true,
+              "coverage": "invoice",
+              "spends": false,
+              "reconciliation": "behind"
+            }
+          },
+          {
+            "type": "pile",
+            "bananas": null,
+            "at": null,
+            "eatPerHour": 0,
+            "revision": 1,
+            "basis": "credits",
+            "cutover": "pending",
+            "reconciliation": "review",
+            "uncertain": null
+          },
+          {
+            "type": "board",
+            "entries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 4,
+                "sats": 4000
+              }
+            ],
+            "satsEntries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 4,
+                "sats": 4000
+              }
+            ]
+          },
+          {
+            "type": "tally",
+            "count": 1,
+            "sats": 4000,
+            "bananas": 4,
+            "last": 4000,
+            "hours": [
+              [
+                1790856000000,
+                4000,
+                4
+              ]
+            ],
+            "rate": {
+              "usdPerBtc": 100000,
+              "satsPerBanana": 1000,
+              "at": 1790856960001,
+              "stale": false
+            }
+          },
+          {
+            "type": "recent",
+            "entries": []
+          },
+          {
+            "type": "recentReceipts",
+            "entries": [
+              {
+                "id": "r00000000000000000000000000001001",
+                "invoice": "PayableInv1",
+                "method": "onchain",
+                "sats": 4000,
+                "credit": 4000,
+                "state": "credited",
+                "revision": 2,
+                "at": 1790856000000,
+                "firstCreditedSeq": 2,
+                "handle": "ooga-dev",
+                "message": "for the cave",
+                "verified": true,
+                "pricing": {
+                  "receivedAt": 1790856000000,
+                  "rate": {
+                    "usdPerBtc": 100000,
+                    "satsPerBanana": 1000,
+                    "at": 1790856000000,
+                    "stale": false
+                  },
+                  "bananas": {
+                    "exact": 4,
+                    "rounded": 4
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "replay",
+            "after": 1,
+            "through": 4,
+            "complete": false
+          }
+        ]
+      },
+      "socket.earlyCurrent": {
+        "request": {
+          "method": "GET",
+          "path": "/donations/socket?receipts=4",
+          "upgrade": "websocket"
+        },
+        "messages": [
+          {
+            "type": "status",
+            "open": false,
+            "network": "regtest",
+            "limits": {
+              "minSats": 69,
+              "maxSats": 2100000000000000,
+              "lightningMaxSats": 100000,
+              "messageMinSats": 1000
+            },
+            "accounting": {
+              "version": 1,
+              "issuance": false,
+              "receipts": true,
+              "history": true,
+              "coverage": "invoice",
+              "spends": false,
+              "reconciliation": "behind"
+            }
+          },
+          {
+            "type": "pile",
+            "bananas": null,
+            "at": null,
+            "eatPerHour": 0,
+            "revision": 1,
+            "basis": "credits",
+            "cutover": "pending",
+            "reconciliation": "review",
+            "uncertain": null
+          },
+          {
+            "type": "board",
+            "entries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 4,
+                "sats": 4000
+              }
+            ],
+            "satsEntries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 4,
+                "sats": 4000
+              }
+            ]
+          },
+          {
+            "type": "tally",
+            "count": 1,
+            "sats": 4000,
+            "bananas": 4,
+            "last": 4000,
+            "hours": [
+              [
+                1790856000000,
+                4000,
+                4
+              ]
+            ],
+            "rate": {
+              "usdPerBtc": 100000,
+              "satsPerBanana": 1000,
+              "at": 1790856960001,
+              "stale": false
+            }
+          },
+          {
+            "type": "recent",
+            "entries": []
+          },
+          {
+            "type": "recentReceipts",
+            "entries": [
+              {
+                "id": "r00000000000000000000000000001001",
+                "invoice": "PayableInv1",
+                "method": "onchain",
+                "sats": 4000,
+                "credit": 4000,
+                "state": "credited",
+                "revision": 2,
+                "at": 1790856000000,
+                "firstCreditedSeq": 2,
+                "handle": "ooga-dev",
+                "message": "for the cave",
+                "verified": true,
+                "pricing": {
+                  "receivedAt": 1790856000000,
+                  "rate": {
+                    "usdPerBtc": 100000,
+                    "satsPerBanana": 1000,
+                    "at": 1790856000000,
+                    "stale": false
+                  },
+                  "bananas": {
+                    "exact": 4,
+                    "rounded": 4
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "replay",
+            "after": 4,
+            "through": 4,
+            "complete": true
+          }
+        ]
+      },
+      "status.atEarlyGap": {
+        "status": 200,
+        "body": {
+          "invoice": {
+            "id": "PayableInv1",
+            "accounting": "receipt-v1",
+            "due": 10000,
+            "received": 4000,
+            "credited": 4000,
+            "review": 0,
+            "left": null,
+            "state": "partial",
+            "revision": 9,
+            "expires": 1790856900,
+            "lightning": "expired",
+            "bolt11": null
+          },
+          "payableAddress": null,
+          "addresses": [
+            {
+              "address": "bcrt1qqgpqyqszqgpqyqszqgpqyqszqgpqyqszazmwwa",
+              "issuedAt": 1790856000000
+            },
+            {
+              "address": "bcrt1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpvxat9t",
+              "issuedAt": 1790856000000
+            }
+          ],
+          "nextAddress": null,
+          "receipts": [
+            {
+              "id": "r00000000000000000000000000001001",
+              "invoice": "PayableInv1",
+              "method": "onchain",
+              "sats": 4000,
+              "credit": 4000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 2,
+              "handle": "ooga-dev",
+              "message": "for the cave",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 4,
+                  "rounded": 4
+                }
+              }
+            }
+          ],
+          "next": null
+        }
+      },
+      "history.atEarlyGap": {
+        "status": 200,
+        "body": {
+          "revision": 9,
+          "invoices": [
+            {
+              "id": "PayableInv1",
+              "accounting": "receipt-v1",
+              "createdAt": 1790856000000,
+              "handle": "ooga-dev",
+              "due": 10000,
+              "received": 4000,
+              "credited": 4000,
+              "review": 0,
+              "left": null,
+              "state": "partial",
+              "revision": 9,
+              "expires": 1790856900
+            }
+          ],
+          "next": null
+        }
       }
+    }
+  },
+  "pile": {
+    "scope": "anchored-pile",
+    "note": "What an open page hears of the anchored pile as receipts move it, through the real object, with the anchor applied through applyPileAnchor on the object's storage, as an operator would; no endpoint applies it. Each vector is the pile messages heard from the stated point once background work has finished: on connect; a credit from an unverified read (behind); the same credit read verified complete (current, a new revision at the same level); the receipt held for review (its credit uncertain); its reversal; its reconfirmation; a second credit bridged before a stop, heard by the surviving page from the next start's alarm; and a page connecting after. basis: credits is the anchor plus credits minus reversals, not a wallet balance. Does not prove provider ingestion, real runtime behaviour, any consumer's parsing, or how an operator applies an anchor. Issuance is off.",
+    "vectors": {
+      "pile.connect": [
+        {
+          "type": "pile",
+          "bananas": 10,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 1,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "behind",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        }
+      ],
+      "pile.creditBehind": [
+        {
+          "type": "pile",
+          "bananas": 11,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 2,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "behind",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        }
+      ],
+      "pile.creditCurrent": [
+        {
+          "type": "pile",
+          "bananas": 11,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 3,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "current",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        }
+      ],
+      "pile.reviewUncertain": [
+        {
+          "type": "pile",
+          "bananas": 11,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 4,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "review",
+          "uncertain": {
+            "sats": 1000,
+            "bananas": 1
+          }
+        }
+      ],
+      "pile.reversal": [
+        {
+          "type": "pile",
+          "bananas": 10,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 5,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "behind",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        },
+        {
+          "type": "pile",
+          "bananas": 10,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 6,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "current",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        }
+      ],
+      "pile.reconfirmation": [
+        {
+          "type": "pile",
+          "bananas": 11,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 7,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "behind",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        },
+        {
+          "type": "pile",
+          "bananas": 11,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 8,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "current",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        }
+      ],
+      "pile.beforeRestart": [],
+      "pile.restartRecovery": [
+        {
+          "type": "pile",
+          "bananas": 13.5,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 9,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "behind",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        },
+        {
+          "type": "pile",
+          "bananas": 13.5,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 10,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "current",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        }
+      ],
+      "pile.reconnect": [
+        {
+          "type": "pile",
+          "bananas": 13.5,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 10,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "current",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        }
+      ]
     }
   }
 }
