@@ -198,12 +198,28 @@ chooses On-chain. See [decision 0025](decisions/0025-no-onchain-donation-cap.md)
 
 ## The pile and the leaderboard
 
-**The pile** is one for every visitor, kept by the object. Each donation adds its bananas
-exactly once, even if the object stops halfway and the relay sends the notice again, and the
-Oogas eat at a fixed rate, so every page can tell the level from the last state it was sent.
-Its clock never runs backwards. The pile can be rebuilt from the donations in D1: start at the
-starting level, then take the donations in order, each at the later of its own time and the
-last one's. See [decision 0012](decisions/0012-global-pile.md).
+**The pile** is one for every visitor, kept by the object. It no longer decays, and it is not
+rebuilt from D1's donations: past eating can't be reconstructed from them.
+
+- **The checkpoint:** the level the old code saved, which already reflects past eating, is
+  kept exactly as it was.
+- **Deltas:** each donation since then adds its bananas exactly once, as a permanent delta
+  keyed by its invoice, even if the object stops halfway and the relay sends the notice
+  again. Donations already in the checkpoint are fenced when the new code first starts, so
+  they never add twice.
+- **Provenance:** a settlement credits a D1 row only if it can prove it wrote that row
+  itself, by the provenance token it saved before the insert. An existing row it can't prove
+  is held for review, never added: an older row, a manual import, or a write from before a
+  crash under the old code. Timestamps are never taken as proof. An invoice id the object
+  already knows is refused before any QR is shown.
+- **Pending until anchored:** until one audited anchor, reviewed by an operator against the
+  saved checkpoint, says what the pile is, pages get a pending pile with no number. After
+  it, the pile is the anchor's level plus every later delta, read from a running total.
+- **Review:** a negative or unrepresentable level shows as review, never as a number.
+- **Not a wallet balance:** spending isn't counted, and no starting inventory is assumed.
+
+See [decision 0012](decisions/0012-global-pile.md) for the one pile, and
+[`receipt-accounting-v1.md`](receipt-accounting-v1.md#cutover-anchor) for the cutover.
 
 **The leaderboard** has the top 20 entered handles by recorded fractional bananas, and
 independently the top 20 by exact sats. Each entry carries both totals. D1's `handle_totals`

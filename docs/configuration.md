@@ -39,8 +39,7 @@ regtest.
 | `NETWORK` | variable | `mainnet`, `testnet`, `signet` or `regtest`; invoices and addresses for any other are refused. Set in each config file |
 | `INVOICE_TIMEOUT_MS` | optional | How long a page waits for the relay before hearing donations are closed; 10,000 when unset |
 | `PENDING_DAYS` | optional | How long a request is kept while unpaid; 7 when unset |
-| `PILE_START` | optional | Where the global pile starts, in bananas; 1,000 when unset, a placeholder for the team. It applies only when the pile is first made |
-| `PILE_EAT_PER_HOUR` | optional | How many bananas the Oogas eat an hour; 60 when unset, a placeholder for the team |
+| `PILE_START`, `PILE_EAT_PER_HOUR` | ignored | No longer read. The pile doesn't decay, and starts only from an audited cutover anchor, never from a configured level; see [`receipt-accounting-v1.md`](receipt-accounting-v1.md#cutover-anchor) |
 
 On-chain donations have no application maximum. Amounts must still be positive whole sats,
 meet `MIN_SATS`, and fit Bitcoin's supply bound (21 million BTC). The advertised `maxSats`
@@ -74,6 +73,11 @@ pair or change thresholds as a substitute for this stop/deploy/start sequence. F
 stop the relay before changing either component and resume only a matching pair. The legacy
 account totals are historical after 0007; rolling back to an account-based leaderboard does
 not make it current. Existing `MAX_SATS` values cease limiting on-chain amounts after upgrade.
+These rollback steps apply only to Workers from before the no-decay pile. Once a Worker with
+the pile migration (object schema step 9) has started, never roll back to a decaying Worker,
+or reset `PILE_START` or `PILE_EAT_PER_HOUR` expecting them to take effect. A downgrade past
+that point needs a separate reviewed reconciliation; see
+[`receipt-accounting-v1.md`](receipt-accounting-v1.md#fences).
 This feature needs two-maintainer review; it changes no credentials and exposes no listener.
 
 Notes already have a separate counter from invoice work. Set `NOTE_RATE_PER_IP` for the site's
@@ -92,7 +96,7 @@ Into the account OBL's Workers use. Staging deploys through a manually dispatche
 Action, from the selected branch ([decision 0018](decisions/0018-staging-github-action.md));
 production deploys by hand, and only from `rock`. [`cloudflare.md`](cloudflare.md) has the
 steps for both environments, and for OBL's side of the binding. A setting that isn't in the
-config file, such as `PILE_START`, is set with `wrangler secret put`: a deploy removes plain
+config file, such as `PENDING_DAYS`, is set with `wrangler secret put`: a deploy removes plain
 variables set in the dashboard. The Worker's own log lines, such as the price service's
 failures, can be read in Cloudflare's dashboard. Cloudflare's invocation logs are off, because
 they would keep each request's headers, and so visitors' addresses and the relay's, for days.

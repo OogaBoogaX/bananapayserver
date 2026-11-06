@@ -1,0 +1,2941 @@
+{
+  "contract": "receipt-accounting-v1",
+  "scope": "core-only",
+  "note": "Emitted by worker/receipts.mjs and worker/pile.mjs from a synthetic scenario. Core output, not endpoint replies: those are under endpoints. Feed frames are shown as replayed (replay: true); live frames carry replay: false.",
+  "vectors": {
+    "receipt.pricingPending": {
+      "type": "receipt",
+      "seq": 1,
+      "receipt": {
+        "id": "r00000000000000000000000000000001",
+        "invoice": "VectorInv001",
+        "method": "onchain",
+        "sats": 4000,
+        "credit": 0,
+        "state": "confirming",
+        "revision": 1,
+        "at": 1790000000000,
+        "firstCreditedSeq": null,
+        "handle": "",
+        "message": "",
+        "verified": false,
+        "pricing": null
+      },
+      "invoice": {
+        "id": "VectorInv001",
+        "due": 10000,
+        "received": 4000,
+        "credited": 0,
+        "review": 0,
+        "left": 6300,
+        "state": "partial",
+        "revision": 7
+      },
+      "replay": true
+    },
+    "receipt.priceFrozen": {
+      "type": "receipt",
+      "seq": 2,
+      "receipt": {
+        "id": "r00000000000000000000000000000001",
+        "invoice": "VectorInv001",
+        "method": "onchain",
+        "sats": 4000,
+        "credit": 0,
+        "state": "confirming",
+        "revision": 2,
+        "at": 1790000001000,
+        "firstCreditedSeq": null,
+        "handle": "",
+        "message": "",
+        "verified": false,
+        "pricing": {
+          "receivedAt": 1790000000000,
+          "rate": {
+            "usdPerBtc": 100000,
+            "satsPerBanana": 1000,
+            "at": 1790000001000,
+            "stale": false
+          },
+          "bananas": {
+            "exact": 4,
+            "rounded": 4
+          }
+        }
+      },
+      "invoice": {
+        "id": "VectorInv001",
+        "due": 10000,
+        "received": 4000,
+        "credited": 0,
+        "review": 0,
+        "left": 6300,
+        "state": "partial",
+        "revision": 8
+      },
+      "replay": true
+    },
+    "receipt.credited": {
+      "type": "receipt",
+      "seq": 3,
+      "receipt": {
+        "id": "r00000000000000000000000000000001",
+        "invoice": "VectorInv001",
+        "method": "onchain",
+        "sats": 4000,
+        "credit": 4000,
+        "state": "credited",
+        "revision": 3,
+        "at": 1790000002000,
+        "firstCreditedSeq": 3,
+        "handle": "ooga-dev",
+        "message": "for the cave",
+        "verified": true,
+        "pricing": {
+          "receivedAt": 1790000000000,
+          "rate": {
+            "usdPerBtc": 100000,
+            "satsPerBanana": 1000,
+            "at": 1790000001000,
+            "stale": false
+          },
+          "bananas": {
+            "exact": 4,
+            "rounded": 4
+          }
+        }
+      },
+      "invoice": {
+        "id": "VectorInv001",
+        "due": 10000,
+        "received": 4000,
+        "credited": 4000,
+        "review": 0,
+        "left": 6300,
+        "state": "partial",
+        "revision": 9
+      },
+      "replay": true
+    },
+    "receipt.reversed": {
+      "type": "receipt",
+      "seq": 6,
+      "receipt": {
+        "id": "r00000000000000000000000000000001",
+        "invoice": "VectorInv001",
+        "method": "onchain",
+        "sats": 4000,
+        "credit": 0,
+        "state": "reversed",
+        "revision": 5,
+        "at": 1790000004000,
+        "firstCreditedSeq": 3,
+        "handle": "ooga-dev",
+        "message": "for the cave",
+        "verified": true,
+        "pricing": {
+          "receivedAt": 1790000000000,
+          "rate": {
+            "usdPerBtc": 100000,
+            "satsPerBanana": 1000,
+            "at": 1790000001000,
+            "stale": false
+          },
+          "bananas": {
+            "exact": 4,
+            "rounded": 4
+          }
+        }
+      },
+      "invoice": {
+        "id": "VectorInv001",
+        "due": 10000,
+        "received": 0,
+        "credited": 0,
+        "review": 0,
+        "left": 6000,
+        "state": "unpaid",
+        "revision": 12
+      },
+      "replay": true
+    },
+    "invoiceStatus": {
+      "type": "invoiceStatus",
+      "seq": 4,
+      "invoice": {
+        "id": "VectorInv001",
+        "due": 10000,
+        "received": 4000,
+        "credited": 4000,
+        "review": 0,
+        "left": 6000,
+        "state": "partial",
+        "revision": 10
+      },
+      "replay": true
+    },
+    "replay.complete": {
+      "frames": [
+        {
+          "type": "receipt",
+          "seq": 5,
+          "receipt": {
+            "id": "r00000000000000000000000000000001",
+            "invoice": "VectorInv001",
+            "method": "onchain",
+            "sats": 4000,
+            "credit": 4000,
+            "state": "review",
+            "revision": 4,
+            "at": 1790000004000,
+            "firstCreditedSeq": 3,
+            "handle": "ooga-dev",
+            "message": "for the cave",
+            "verified": true,
+            "pricing": {
+              "receivedAt": 1790000000000,
+              "rate": {
+                "usdPerBtc": 100000,
+                "satsPerBanana": 1000,
+                "at": 1790000001000,
+                "stale": false
+              },
+              "bananas": {
+                "exact": 4,
+                "rounded": 4
+              }
+            }
+          },
+          "invoice": {
+            "id": "VectorInv001",
+            "due": 10000,
+            "received": 4000,
+            "credited": 4000,
+            "review": 4000,
+            "left": 6000,
+            "state": "review",
+            "revision": 11
+          },
+          "replay": true
+        },
+        {
+          "type": "receipt",
+          "seq": 6,
+          "receipt": {
+            "id": "r00000000000000000000000000000001",
+            "invoice": "VectorInv001",
+            "method": "onchain",
+            "sats": 4000,
+            "credit": 0,
+            "state": "reversed",
+            "revision": 5,
+            "at": 1790000004000,
+            "firstCreditedSeq": 3,
+            "handle": "ooga-dev",
+            "message": "for the cave",
+            "verified": true,
+            "pricing": {
+              "receivedAt": 1790000000000,
+              "rate": {
+                "usdPerBtc": 100000,
+                "satsPerBanana": 1000,
+                "at": 1790000001000,
+                "stale": false
+              },
+              "bananas": {
+                "exact": 4,
+                "rounded": 4
+              }
+            }
+          },
+          "invoice": {
+            "id": "VectorInv001",
+            "due": 10000,
+            "received": 0,
+            "credited": 0,
+            "review": 0,
+            "left": 6000,
+            "state": "unpaid",
+            "revision": 12
+          },
+          "replay": true
+        }
+      ],
+      "after": 4,
+      "through": 6,
+      "complete": true
+    },
+    "replay.gap": {
+      "frames": [],
+      "after": 0,
+      "through": 6,
+      "complete": false
+    },
+    "replay.firstConnect": {
+      "frames": [],
+      "after": null,
+      "through": 6,
+      "complete": true
+    },
+    "privateStatus.core": {
+      "invoice": {
+        "id": "VectorInv001",
+        "due": 10000,
+        "received": 4000,
+        "credited": 4000,
+        "review": 0,
+        "left": 6000,
+        "state": "partial",
+        "revision": 10
+      },
+      "payableAddress": "bcrt1qqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcruj60yu",
+      "addresses": [
+        {
+          "address": "bcrt1qqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcruj60yu",
+          "issuedAt": 1790000000000
+        },
+        {
+          "address": "bcrt1qqgpqyqszqgpqyqszqgpqyqszqgpqyqszazmwwa",
+          "issuedAt": 1790000000000
+        }
+      ],
+      "nextAddress": "a.10.2.1790000003000.58737fed",
+      "receipts": [
+        {
+          "id": "r00000000000000000000000000000001",
+          "invoice": "VectorInv001",
+          "method": "onchain",
+          "sats": 4000,
+          "credit": 4000,
+          "state": "credited",
+          "revision": 3,
+          "at": 1790000002000,
+          "firstCreditedSeq": 3,
+          "handle": "ooga-dev",
+          "message": "for the cave",
+          "verified": true,
+          "pricing": {
+            "receivedAt": 1790000000000,
+            "rate": {
+              "usdPerBtc": 100000,
+              "satsPerBanana": 1000,
+              "at": 1790000001000,
+              "stale": false
+            },
+            "bananas": {
+              "exact": 4,
+              "rounded": 4
+            }
+          }
+        }
+      ],
+      "next": null
+    },
+    "privateStatus.core.addressPage": {
+      "invoice": {
+        "id": "VectorInv001",
+        "due": 10000,
+        "received": 4000,
+        "credited": 4000,
+        "review": 0,
+        "left": 6000,
+        "state": "partial",
+        "revision": 10
+      },
+      "payableAddress": "bcrt1qqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcruj60yu",
+      "addresses": [
+        {
+          "address": "bcrt1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpvxat9t",
+          "issuedAt": 1790000000000
+        }
+      ],
+      "nextAddress": null,
+      "receipts": [
+        {
+          "id": "r00000000000000000000000000000001",
+          "invoice": "VectorInv001",
+          "method": "onchain",
+          "sats": 4000,
+          "credit": 4000,
+          "state": "credited",
+          "revision": 3,
+          "at": 1790000002000,
+          "firstCreditedSeq": 3,
+          "handle": "ooga-dev",
+          "message": "for the cave",
+          "verified": true,
+          "pricing": {
+            "receivedAt": 1790000000000,
+            "rate": {
+              "usdPerBtc": 100000,
+              "satsPerBanana": 1000,
+              "at": 1790000001000,
+              "stale": false
+            },
+            "bananas": {
+              "exact": 4,
+              "rounded": 4
+            }
+          }
+        }
+      ],
+      "next": null
+    },
+    "pile.pending": {
+      "type": "pile",
+      "bananas": null,
+      "at": null,
+      "eatPerHour": 0,
+      "revision": 0,
+      "basis": "credits",
+      "cutover": "pending",
+      "reconciliation": "review",
+      "uncertain": null
+    },
+    "pile.anchored": {
+      "type": "pile",
+      "bananas": 12.5,
+      "at": 1790856000000,
+      "eatPerHour": 0,
+      "revision": 2,
+      "basis": "credits",
+      "cutover": "done",
+      "reconciliation": "off",
+      "uncertain": {
+        "sats": 0,
+        "bananas": 0
+      }
+    },
+    "pile.anchoredReview": {
+      "type": "pile",
+      "bananas": null,
+      "at": null,
+      "eatPerHour": 0,
+      "revision": 3,
+      "basis": "credits",
+      "cutover": "done",
+      "reconciliation": "review",
+      "uncertain": null
+    }
+  },
+  "endpoints": {
+    "scope": "read-endpoints",
+    "note": "What POST /donations/status, POST /donations/history, POST /donations/invoice with accounting: 1, the socket's connect sequence and its live broadcast send, through the real front door and object, for synthetic receipt-mode mappings seeded through the core. Each reply is { status, body }; socket vectors are the messages received at the stated point. Proves the producer's real shapes, cursors, statuses and live/replay framing. Does not prove provider ingestion, D1 projection, reconciliation (health is never current here) or any consumer's parsing. Issuance is off.",
+    "vectors": {
+      "status.byToken": {
+        "status": 200,
+        "body": {
+          "invoice": {
+            "id": "ReceiptInv1",
+            "accounting": "receipt-v1",
+            "due": 10000,
+            "received": 3000,
+            "credited": 3000,
+            "review": 0,
+            "left": 7000,
+            "state": "partial",
+            "revision": 12,
+            "expires": 1790856900,
+            "lightning": "unavailable",
+            "bolt11": null
+          },
+          "payableAddress": null,
+          "addresses": [
+            {
+              "address": "bcrt1qqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcruj60yu",
+              "issuedAt": 1790856000000
+            },
+            {
+              "address": "bcrt1qqgpqyqszqgpqyqszqgpqyqszqgpqyqszazmwwa",
+              "issuedAt": 1790856000000
+            }
+          ],
+          "nextAddress": "a.12.2.1790856000000.d08ed2e9",
+          "receipts": [
+            {
+              "id": "r00000000000000000000000000001003",
+              "invoice": "ReceiptInv1",
+              "method": "onchain",
+              "sats": 1000,
+              "credit": 1000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 6,
+              "handle": "ooga-dev",
+              "message": "",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 1,
+                  "rounded": 1
+                }
+              }
+            },
+            {
+              "id": "r00000000000000000000000000001002",
+              "invoice": "ReceiptInv1",
+              "method": "onchain",
+              "sats": 1000,
+              "credit": 1000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 5,
+              "handle": "ooga-dev",
+              "message": "",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 1,
+                  "rounded": 1
+                }
+              }
+            }
+          ],
+          "next": "r.12.2.1790856000000.0e137240"
+        }
+      },
+      "status.addressPage": {
+        "status": 200,
+        "body": {
+          "invoice": {
+            "id": "ReceiptInv1",
+            "accounting": "receipt-v1",
+            "due": 10000,
+            "received": 3000,
+            "credited": 3000,
+            "review": 0,
+            "left": 7000,
+            "state": "partial",
+            "revision": 12,
+            "expires": 1790856900,
+            "lightning": "unavailable",
+            "bolt11": null
+          },
+          "payableAddress": null,
+          "addresses": [
+            {
+              "address": "bcrt1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpvxat9t",
+              "issuedAt": 1790856000000
+            }
+          ],
+          "nextAddress": null,
+          "receipts": [
+            {
+              "id": "r00000000000000000000000000001003",
+              "invoice": "ReceiptInv1",
+              "method": "onchain",
+              "sats": 1000,
+              "credit": 1000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 6,
+              "handle": "ooga-dev",
+              "message": "",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 1,
+                  "rounded": 1
+                }
+              }
+            },
+            {
+              "id": "r00000000000000000000000000001002",
+              "invoice": "ReceiptInv1",
+              "method": "onchain",
+              "sats": 1000,
+              "credit": 1000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 5,
+              "handle": "ooga-dev",
+              "message": "",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 1,
+                  "rounded": 1
+                }
+              }
+            }
+          ],
+          "next": "r.12.2.1790856000000.0e137240"
+        }
+      },
+      "status.unknown": {
+        "status": 404,
+        "body": {
+          "error": "unknown"
+        }
+      },
+      "status.cursor": {
+        "status": 400,
+        "body": {
+          "error": "cursor"
+        }
+      },
+      "status.resync": {
+        "status": 409,
+        "body": {
+          "error": "resync"
+        }
+      },
+      "history.page": {
+        "status": 200,
+        "body": {
+          "revision": 16,
+          "invoices": [
+            {
+              "id": "ReceiptInv1",
+              "accounting": "receipt-v1",
+              "createdAt": 1790856000000,
+              "handle": "ooga-dev",
+              "due": 10000,
+              "received": 3000,
+              "credited": 3000,
+              "review": 0,
+              "left": 7000,
+              "state": "partial",
+              "revision": 12,
+              "expires": 1790856900
+            },
+            {
+              "id": "ReceiptInv2",
+              "accounting": "receipt-v1",
+              "createdAt": 1790856000000,
+              "handle": "ooga-dev",
+              "due": 10000,
+              "received": 0,
+              "credited": 0,
+              "review": 0,
+              "left": null,
+              "state": "unpaid",
+              "revision": 2,
+              "expires": 1790856900
+            }
+          ],
+          "next": "h.16.2.1790856000000.d797fec8"
+        }
+      },
+      "history.signedOut": {
+        "status": 401,
+        "body": {
+          "error": "signin"
+        }
+      },
+      "invoice.receiptModeClosed": {
+        "status": 503,
+        "body": {
+          "error": "closed"
+        }
+      },
+      "socket.firstConnect": [
+        {
+          "type": "status",
+          "open": false,
+          "network": "regtest",
+          "limits": {
+            "minSats": 69,
+            "maxSats": 2100000000000000,
+            "lightningMaxSats": 100000,
+            "messageMinSats": 1000
+          },
+          "accounting": {
+            "version": 1,
+            "issuance": false,
+            "receipts": true,
+            "history": true,
+            "coverage": "invoice",
+            "spends": false,
+            "reconciliation": "behind"
+          }
+        },
+        {
+          "type": "recentReceipts",
+          "entries": [
+            {
+              "id": "r00000000000000000000000000001003",
+              "invoice": "ReceiptInv1",
+              "method": "onchain",
+              "sats": 1000,
+              "credit": 1000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 6,
+              "handle": "ooga-dev",
+              "message": "",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 1,
+                  "rounded": 1
+                }
+              }
+            },
+            {
+              "id": "r00000000000000000000000000001002",
+              "invoice": "ReceiptInv1",
+              "method": "onchain",
+              "sats": 1000,
+              "credit": 1000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 5,
+              "handle": "ooga-dev",
+              "message": "",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 1,
+                  "rounded": 1
+                }
+              }
+            },
+            {
+              "id": "r00000000000000000000000000001001",
+              "invoice": "ReceiptInv1",
+              "method": "onchain",
+              "sats": 1000,
+              "credit": 1000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 4,
+              "handle": "ooga-dev",
+              "message": "for the cave",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 1,
+                  "rounded": 1
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "replay",
+          "after": null,
+          "through": 6,
+          "complete": true
+        }
+      ],
+      "socket.replayFromZero": [
+        {
+          "type": "recentReceipts",
+          "entries": [
+            {
+              "id": "r00000000000000000000000000001003",
+              "invoice": "ReceiptInv1",
+              "method": "onchain",
+              "sats": 1000,
+              "credit": 1000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 6,
+              "handle": "ooga-dev",
+              "message": "",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 1,
+                  "rounded": 1
+                }
+              }
+            },
+            {
+              "id": "r00000000000000000000000000001002",
+              "invoice": "ReceiptInv1",
+              "method": "onchain",
+              "sats": 1000,
+              "credit": 1000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 5,
+              "handle": "ooga-dev",
+              "message": "",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 1,
+                  "rounded": 1
+                }
+              }
+            },
+            {
+              "id": "r00000000000000000000000000001001",
+              "invoice": "ReceiptInv1",
+              "method": "onchain",
+              "sats": 1000,
+              "credit": 1000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 4,
+              "handle": "ooga-dev",
+              "message": "for the cave",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 1,
+                  "rounded": 1
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "receipt",
+          "seq": 1,
+          "receipt": {
+            "id": "r00000000000000000000000000001001",
+            "invoice": "ReceiptInv1",
+            "method": "onchain",
+            "sats": 1000,
+            "credit": 0,
+            "state": "confirming",
+            "revision": 1,
+            "at": 1790856000000,
+            "firstCreditedSeq": null,
+            "handle": "",
+            "message": "",
+            "verified": false,
+            "pricing": null
+          },
+          "invoice": {
+            "id": "ReceiptInv1",
+            "due": 10000,
+            "received": 3000,
+            "credited": 0,
+            "review": 0,
+            "left": 7000,
+            "state": "partial",
+            "revision": 9
+          },
+          "replay": true
+        },
+        {
+          "type": "receipt",
+          "seq": 2,
+          "receipt": {
+            "id": "r00000000000000000000000000001002",
+            "invoice": "ReceiptInv1",
+            "method": "onchain",
+            "sats": 1000,
+            "credit": 0,
+            "state": "confirming",
+            "revision": 1,
+            "at": 1790856000000,
+            "firstCreditedSeq": null,
+            "handle": "",
+            "message": "",
+            "verified": false,
+            "pricing": null
+          },
+          "invoice": {
+            "id": "ReceiptInv1",
+            "due": 10000,
+            "received": 3000,
+            "credited": 0,
+            "review": 0,
+            "left": 7000,
+            "state": "partial",
+            "revision": 9
+          },
+          "replay": true
+        },
+        {
+          "type": "receipt",
+          "seq": 3,
+          "receipt": {
+            "id": "r00000000000000000000000000001003",
+            "invoice": "ReceiptInv1",
+            "method": "onchain",
+            "sats": 1000,
+            "credit": 0,
+            "state": "confirming",
+            "revision": 1,
+            "at": 1790856000000,
+            "firstCreditedSeq": null,
+            "handle": "",
+            "message": "",
+            "verified": false,
+            "pricing": null
+          },
+          "invoice": {
+            "id": "ReceiptInv1",
+            "due": 10000,
+            "received": 3000,
+            "credited": 0,
+            "review": 0,
+            "left": 7000,
+            "state": "partial",
+            "revision": 9
+          },
+          "replay": true
+        },
+        {
+          "type": "receipt",
+          "seq": 4,
+          "receipt": {
+            "id": "r00000000000000000000000000001001",
+            "invoice": "ReceiptInv1",
+            "method": "onchain",
+            "sats": 1000,
+            "credit": 1000,
+            "state": "credited",
+            "revision": 2,
+            "at": 1790856000000,
+            "firstCreditedSeq": 4,
+            "handle": "ooga-dev",
+            "message": "for the cave",
+            "verified": true,
+            "pricing": {
+              "receivedAt": 1790856000000,
+              "rate": {
+                "usdPerBtc": 100000,
+                "satsPerBanana": 1000,
+                "at": 1790856000000,
+                "stale": false
+              },
+              "bananas": {
+                "exact": 1,
+                "rounded": 1
+              }
+            }
+          },
+          "invoice": {
+            "id": "ReceiptInv1",
+            "due": 10000,
+            "received": 3000,
+            "credited": 1000,
+            "review": 0,
+            "left": 7000,
+            "state": "partial",
+            "revision": 10
+          },
+          "replay": true
+        },
+        {
+          "type": "receipt",
+          "seq": 5,
+          "receipt": {
+            "id": "r00000000000000000000000000001002",
+            "invoice": "ReceiptInv1",
+            "method": "onchain",
+            "sats": 1000,
+            "credit": 1000,
+            "state": "credited",
+            "revision": 2,
+            "at": 1790856000000,
+            "firstCreditedSeq": 5,
+            "handle": "ooga-dev",
+            "message": "",
+            "verified": true,
+            "pricing": {
+              "receivedAt": 1790856000000,
+              "rate": {
+                "usdPerBtc": 100000,
+                "satsPerBanana": 1000,
+                "at": 1790856000000,
+                "stale": false
+              },
+              "bananas": {
+                "exact": 1,
+                "rounded": 1
+              }
+            }
+          },
+          "invoice": {
+            "id": "ReceiptInv1",
+            "due": 10000,
+            "received": 3000,
+            "credited": 2000,
+            "review": 0,
+            "left": 7000,
+            "state": "partial",
+            "revision": 11
+          },
+          "replay": true
+        },
+        {
+          "type": "receipt",
+          "seq": 6,
+          "receipt": {
+            "id": "r00000000000000000000000000001003",
+            "invoice": "ReceiptInv1",
+            "method": "onchain",
+            "sats": 1000,
+            "credit": 1000,
+            "state": "credited",
+            "revision": 2,
+            "at": 1790856000000,
+            "firstCreditedSeq": 6,
+            "handle": "ooga-dev",
+            "message": "",
+            "verified": true,
+            "pricing": {
+              "receivedAt": 1790856000000,
+              "rate": {
+                "usdPerBtc": 100000,
+                "satsPerBanana": 1000,
+                "at": 1790856000000,
+                "stale": false
+              },
+              "bananas": {
+                "exact": 1,
+                "rounded": 1
+              }
+            }
+          },
+          "invoice": {
+            "id": "ReceiptInv1",
+            "due": 10000,
+            "received": 3000,
+            "credited": 3000,
+            "review": 0,
+            "left": 7000,
+            "state": "partial",
+            "revision": 12
+          },
+          "replay": true
+        },
+        {
+          "type": "replay",
+          "after": 0,
+          "through": 6,
+          "complete": true
+        }
+      ],
+      "status.receiptPage": {
+        "status": 200,
+        "body": {
+          "invoice": {
+            "id": "ReceiptInv1",
+            "accounting": "receipt-v1",
+            "due": 10000,
+            "received": 3000,
+            "credited": 3000,
+            "review": 0,
+            "left": 7000,
+            "state": "partial",
+            "revision": 12,
+            "expires": 1790856900,
+            "lightning": "unavailable",
+            "bolt11": null
+          },
+          "payableAddress": null,
+          "addresses": [
+            {
+              "address": "bcrt1qqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcruj60yu",
+              "issuedAt": 1790856000000
+            },
+            {
+              "address": "bcrt1qqgpqyqszqgpqyqszqgpqyqszqgpqyqszazmwwa",
+              "issuedAt": 1790856000000
+            }
+          ],
+          "nextAddress": "a.12.2.1790856000000.d08ed2e9",
+          "receipts": [
+            {
+              "id": "r00000000000000000000000000001001",
+              "invoice": "ReceiptInv1",
+              "method": "onchain",
+              "sats": 1000,
+              "credit": 1000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 4,
+              "handle": "ooga-dev",
+              "message": "for the cave",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 1,
+                  "rounded": 1
+                }
+              }
+            }
+          ],
+          "next": null
+        }
+      },
+      "history.nextPage": {
+        "status": 200,
+        "body": {
+          "revision": 16,
+          "invoices": [
+            {
+              "id": "ReceiptInv3",
+              "accounting": "receipt-v1",
+              "createdAt": 1790856000000,
+              "handle": "ooga-dev",
+              "due": 10000,
+              "received": 0,
+              "credited": 0,
+              "review": 0,
+              "left": null,
+              "state": "unpaid",
+              "revision": 2,
+              "expires": 1790856900
+            }
+          ],
+          "next": null
+        }
+      },
+      "socket.liveFirstCredit": [
+        {
+          "type": "receipt",
+          "seq": 7,
+          "receipt": {
+            "id": "r00000000000000000000000000001004",
+            "invoice": "ReceiptInv1",
+            "method": "onchain",
+            "sats": 1000,
+            "credit": 0,
+            "state": "confirming",
+            "revision": 1,
+            "at": 1790856000000,
+            "firstCreditedSeq": null,
+            "handle": "",
+            "message": "",
+            "verified": false,
+            "pricing": null
+          },
+          "invoice": {
+            "id": "ReceiptInv1",
+            "due": 10000,
+            "received": 4000,
+            "credited": 3000,
+            "review": 0,
+            "left": 6000,
+            "state": "partial",
+            "revision": 14
+          },
+          "replay": false
+        },
+        {
+          "type": "receipt",
+          "seq": 8,
+          "receipt": {
+            "id": "r00000000000000000000000000001004",
+            "invoice": "ReceiptInv1",
+            "method": "onchain",
+            "sats": 1000,
+            "credit": 1000,
+            "state": "credited",
+            "revision": 2,
+            "at": 1790856000000,
+            "firstCreditedSeq": 8,
+            "handle": "ooga-dev",
+            "message": "",
+            "verified": true,
+            "pricing": {
+              "receivedAt": 1790856000000,
+              "rate": {
+                "usdPerBtc": 100000,
+                "satsPerBanana": 1000,
+                "at": 1790856000000,
+                "stale": false
+              },
+              "bananas": {
+                "exact": 1,
+                "rounded": 1
+              }
+            }
+          },
+          "invoice": {
+            "id": "ReceiptInv1",
+            "due": 10000,
+            "received": 4000,
+            "credited": 4000,
+            "review": 0,
+            "left": 6000,
+            "state": "partial",
+            "revision": 15
+          },
+          "replay": false
+        },
+        {
+          "type": "pile",
+          "bananas": null,
+          "at": null,
+          "eatPerHour": 0,
+          "revision": 4,
+          "basis": "credits",
+          "cutover": "pending",
+          "reconciliation": "review",
+          "uncertain": null
+        }
+      ],
+      "status.metadataClosed": {
+        "status": 503,
+        "body": {
+          "error": "closed"
+        }
+      },
+      "history.metadataClosed": {
+        "status": 503,
+        "body": {
+          "error": "closed"
+        }
+      }
+    }
+  },
+  "projection": {
+    "scope": "projection-publication",
+    "note": "What an open page's socket hears when the D1 projection publishes lifetime figures, through the real object and the D1 stand-in, after the object's background work has finished: the receipt, tally and board messages from the stated point, and d1, the lifetime tally D1 holds afterwards. A first credit; a restart after a durable batch whose outbox row wasn't removed; a refresh repeated after a stop between sending and noting it sent, which credits nothing; a reversal; and a reconfirmation at the frozen price. Proves the producer's publication order and that every refresh is D1's figure. Does not prove real D1, Durable Object or socket runtime behaviour, provider ingestion, or any consumer's parsing. Issuance is off.",
+    "vectors": {
+      "projection.firstCredit": {
+        "messages": [
+          {
+            "type": "receipt",
+            "seq": 1,
+            "receipt": {
+              "id": "r00000000000000000000000000001001",
+              "invoice": "ProjectInv1",
+              "method": "onchain",
+              "sats": 1000,
+              "credit": 0,
+              "state": "confirming",
+              "revision": 1,
+              "at": 1790856000000,
+              "firstCreditedSeq": null,
+              "handle": "",
+              "message": "",
+              "verified": false,
+              "pricing": null
+            },
+            "invoice": {
+              "id": "ProjectInv1",
+              "due": 10000,
+              "received": 1000,
+              "credited": 0,
+              "review": 0,
+              "left": null,
+              "state": "partial",
+              "revision": 4
+            },
+            "replay": false
+          },
+          {
+            "type": "receipt",
+            "seq": 2,
+            "receipt": {
+              "id": "r00000000000000000000000000001001",
+              "invoice": "ProjectInv1",
+              "method": "onchain",
+              "sats": 1000,
+              "credit": 1000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 2,
+              "handle": "ooga-dev",
+              "message": "for the cave",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 1,
+                  "rounded": 1
+                }
+              }
+            },
+            "invoice": {
+              "id": "ProjectInv1",
+              "due": 10000,
+              "received": 1000,
+              "credited": 1000,
+              "review": 0,
+              "left": null,
+              "state": "partial",
+              "revision": 5
+            },
+            "replay": false
+          },
+          {
+            "type": "board",
+            "entries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 1,
+                "sats": 1000
+              }
+            ],
+            "satsEntries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 1,
+                "sats": 1000
+              }
+            ]
+          },
+          {
+            "type": "tally",
+            "count": 1,
+            "sats": 1000,
+            "bananas": 1,
+            "last": 1000,
+            "hours": [
+              [
+                1790856000000,
+                1000,
+                1
+              ]
+            ],
+            "rate": {
+              "usdPerBtc": 100000,
+              "satsPerBanana": 1000,
+              "at": 1790856000000,
+              "stale": false
+            }
+          }
+        ],
+        "d1": {
+          "count": 1,
+          "sats": 1000,
+          "milli": 1000,
+          "last": 1000
+        }
+      },
+      "projection.stoppedAfterBatch": {
+        "messages": [
+          {
+            "type": "receipt",
+            "seq": 3,
+            "receipt": {
+              "id": "r00000000000000000000000000001002",
+              "invoice": "ProjectInv1",
+              "method": "onchain",
+              "sats": 2500,
+              "credit": 0,
+              "state": "confirming",
+              "revision": 1,
+              "at": 1790856001000,
+              "firstCreditedSeq": null,
+              "handle": "",
+              "message": "",
+              "verified": false,
+              "pricing": null
+            },
+            "invoice": {
+              "id": "ProjectInv1",
+              "due": 10000,
+              "received": 3500,
+              "credited": 1000,
+              "review": 0,
+              "left": null,
+              "state": "partial",
+              "revision": 6
+            },
+            "replay": false
+          },
+          {
+            "type": "receipt",
+            "seq": 4,
+            "receipt": {
+              "id": "r00000000000000000000000000001002",
+              "invoice": "ProjectInv1",
+              "method": "onchain",
+              "sats": 2500,
+              "credit": 2500,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856001000,
+              "firstCreditedSeq": 4,
+              "handle": "ooga-dev",
+              "message": "",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856001000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856001000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 2.5,
+                  "rounded": 3
+                }
+              }
+            },
+            "invoice": {
+              "id": "ProjectInv1",
+              "due": 10000,
+              "received": 3500,
+              "credited": 3500,
+              "review": 0,
+              "left": null,
+              "state": "partial",
+              "revision": 7
+            },
+            "replay": false
+          }
+        ],
+        "d1": {
+          "count": 2,
+          "sats": 3500,
+          "milli": 3500,
+          "last": 2500
+        }
+      },
+      "projection.crashRecovery": {
+        "messages": [
+          {
+            "type": "board",
+            "entries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 3.5,
+                "sats": 3500
+              }
+            ],
+            "satsEntries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 3.5,
+                "sats": 3500
+              }
+            ]
+          },
+          {
+            "type": "tally",
+            "count": 2,
+            "sats": 3500,
+            "bananas": 3.5,
+            "last": 2500,
+            "hours": [
+              [
+                1790856000000,
+                3500,
+                3.5
+              ]
+            ],
+            "rate": {
+              "usdPerBtc": 100000,
+              "satsPerBanana": 1000,
+              "at": 1790856000000,
+              "stale": false
+            }
+          }
+        ],
+        "d1": {
+          "count": 2,
+          "sats": 3500,
+          "milli": 3500,
+          "last": 2500
+        }
+      },
+      "projection.duplicateRefresh": {
+        "messages": [
+          {
+            "type": "board",
+            "entries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 3.5,
+                "sats": 3500
+              }
+            ],
+            "satsEntries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 3.5,
+                "sats": 3500
+              }
+            ]
+          },
+          {
+            "type": "tally",
+            "count": 2,
+            "sats": 3500,
+            "bananas": 3.5,
+            "last": 2500,
+            "hours": [
+              [
+                1790856000000,
+                3500,
+                3.5
+              ]
+            ],
+            "rate": {
+              "usdPerBtc": 100000,
+              "satsPerBanana": 1000,
+              "at": 1790856000000,
+              "stale": false
+            }
+          }
+        ],
+        "d1": {
+          "count": 2,
+          "sats": 3500,
+          "milli": 3500,
+          "last": 2500
+        }
+      },
+      "projection.reversal": {
+        "messages": [
+          {
+            "type": "receipt",
+            "seq": 5,
+            "receipt": {
+              "id": "r00000000000000000000000000001002",
+              "invoice": "ProjectInv1",
+              "method": "onchain",
+              "sats": 2500,
+              "credit": 2500,
+              "state": "review",
+              "revision": 3,
+              "at": 1790856301001,
+              "firstCreditedSeq": 4,
+              "handle": "ooga-dev",
+              "message": "",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856001000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856001000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 2.5,
+                  "rounded": 3
+                }
+              }
+            },
+            "invoice": {
+              "id": "ProjectInv1",
+              "due": 10000,
+              "received": 3500,
+              "credited": 3500,
+              "review": 2500,
+              "left": null,
+              "state": "review",
+              "revision": 8
+            },
+            "replay": false
+          },
+          {
+            "type": "receipt",
+            "seq": 6,
+            "receipt": {
+              "id": "r00000000000000000000000000001002",
+              "invoice": "ProjectInv1",
+              "method": "onchain",
+              "sats": 2500,
+              "credit": 0,
+              "state": "reversed",
+              "revision": 4,
+              "at": 1790856301001,
+              "firstCreditedSeq": 4,
+              "handle": "ooga-dev",
+              "message": "",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856001000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856001000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 2.5,
+                  "rounded": 3
+                }
+              }
+            },
+            "invoice": {
+              "id": "ProjectInv1",
+              "due": 10000,
+              "received": 1000,
+              "credited": 1000,
+              "review": 0,
+              "left": null,
+              "state": "partial",
+              "revision": 9
+            },
+            "replay": false
+          },
+          {
+            "type": "board",
+            "entries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 1,
+                "sats": 1000
+              }
+            ],
+            "satsEntries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 1,
+                "sats": 1000
+              }
+            ]
+          },
+          {
+            "type": "tally",
+            "count": 1,
+            "sats": 1000,
+            "bananas": 1,
+            "last": 1000,
+            "hours": [
+              [
+                1790856000000,
+                1000,
+                1
+              ]
+            ],
+            "rate": {
+              "usdPerBtc": 100000,
+              "satsPerBanana": 1000,
+              "at": 1790856000000,
+              "stale": false
+            }
+          }
+        ],
+        "d1": {
+          "count": 1,
+          "sats": 1000,
+          "milli": 1000,
+          "last": 1000
+        }
+      },
+      "projection.reconfirmation": {
+        "messages": [
+          {
+            "type": "receipt",
+            "seq": 7,
+            "receipt": {
+              "id": "r00000000000000000000000000001002",
+              "invoice": "ProjectInv1",
+              "method": "onchain",
+              "sats": 2500,
+              "credit": 2500,
+              "state": "credited",
+              "revision": 5,
+              "at": 1790856301001,
+              "firstCreditedSeq": 4,
+              "handle": "ooga-dev",
+              "message": "",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856001000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856001000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 2.5,
+                  "rounded": 3
+                }
+              }
+            },
+            "invoice": {
+              "id": "ProjectInv1",
+              "due": 10000,
+              "received": 3500,
+              "credited": 3500,
+              "review": 0,
+              "left": null,
+              "state": "partial",
+              "revision": 10
+            },
+            "replay": false
+          },
+          {
+            "type": "board",
+            "entries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 3.5,
+                "sats": 3500
+              }
+            ],
+            "satsEntries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 3.5,
+                "sats": 3500
+              }
+            ]
+          },
+          {
+            "type": "tally",
+            "count": 2,
+            "sats": 3500,
+            "bananas": 3.5,
+            "last": 2500,
+            "hours": [
+              [
+                1790856000000,
+                3500,
+                3.5
+              ]
+            ],
+            "rate": {
+              "usdPerBtc": 100000,
+              "satsPerBanana": 1000,
+              "at": 1790856000000,
+              "stale": false
+            }
+          }
+        ],
+        "d1": {
+          "count": 2,
+          "sats": 3500,
+          "milli": 3500,
+          "last": 2500
+        }
+      }
+    }
+  },
+  "payable": {
+    "scope": "read-endpoints-payable",
+    "note": "The positive payable path through the real front door, object and socket. A complete synthetic snapshot, read through the supported ledger path with destination capability, names a regtest address already bound to the invoice and 6,000 sats left; the private status and history report them while fresh. Past the freshness bound the alarm withdraws both, live, and the replies say so at a newer revision; past the original invoice's expiry Lightning reads expired, and the history keeps the invoice. This world saves a replay bound of 2, so a reconnect from cursor 0 is genuinely too far behind and gets the gap marker. Issuance is off, and no provider has verified the original BOLT11, so Lightning is never available here. Does not prove provider ingestion, real runtime behaviour or any consumer's parsing.",
+    "vectors": {
+      "socket.payableLive": [
+        {
+          "type": "receipt",
+          "seq": 1,
+          "receipt": {
+            "id": "r00000000000000000000000000001001",
+            "invoice": "PayableInv1",
+            "method": "onchain",
+            "sats": 4000,
+            "credit": 0,
+            "state": "confirming",
+            "revision": 1,
+            "at": 1790856000000,
+            "firstCreditedSeq": null,
+            "handle": "",
+            "message": "",
+            "verified": false,
+            "pricing": null
+          },
+          "invoice": {
+            "id": "PayableInv1",
+            "due": 10000,
+            "received": 4000,
+            "credited": 0,
+            "review": 0,
+            "left": 6000,
+            "state": "partial",
+            "revision": 6
+          },
+          "replay": false
+        },
+        {
+          "type": "receipt",
+          "seq": 2,
+          "receipt": {
+            "id": "r00000000000000000000000000001001",
+            "invoice": "PayableInv1",
+            "method": "onchain",
+            "sats": 4000,
+            "credit": 4000,
+            "state": "credited",
+            "revision": 2,
+            "at": 1790856000000,
+            "firstCreditedSeq": 2,
+            "handle": "ooga-dev",
+            "message": "for the cave",
+            "verified": true,
+            "pricing": {
+              "receivedAt": 1790856000000,
+              "rate": {
+                "usdPerBtc": 100000,
+                "satsPerBanana": 1000,
+                "at": 1790856000000,
+                "stale": false
+              },
+              "bananas": {
+                "exact": 4,
+                "rounded": 4
+              }
+            }
+          },
+          "invoice": {
+            "id": "PayableInv1",
+            "due": 10000,
+            "received": 4000,
+            "credited": 4000,
+            "review": 0,
+            "left": 6000,
+            "state": "partial",
+            "revision": 7
+          },
+          "replay": false
+        }
+      ],
+      "status.payable": {
+        "status": 200,
+        "body": {
+          "invoice": {
+            "id": "PayableInv1",
+            "accounting": "receipt-v1",
+            "due": 10000,
+            "received": 4000,
+            "credited": 4000,
+            "review": 0,
+            "left": 6000,
+            "state": "partial",
+            "revision": 7,
+            "expires": 1790856900,
+            "lightning": "unavailable",
+            "bolt11": null
+          },
+          "payableAddress": "bcrt1qqgpqyqszqgpqyqszqgpqyqszqgpqyqszazmwwa",
+          "addresses": [
+            {
+              "address": "bcrt1qqgpqyqszqgpqyqszqgpqyqszqgpqyqszazmwwa",
+              "issuedAt": 1790856000000
+            },
+            {
+              "address": "bcrt1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpvxat9t",
+              "issuedAt": 1790856000000
+            }
+          ],
+          "nextAddress": null,
+          "receipts": [
+            {
+              "id": "r00000000000000000000000000001001",
+              "invoice": "PayableInv1",
+              "method": "onchain",
+              "sats": 4000,
+              "credit": 4000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 2,
+              "handle": "ooga-dev",
+              "message": "for the cave",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 4,
+                  "rounded": 4
+                }
+              }
+            }
+          ],
+          "next": null
+        }
+      },
+      "history.payable": {
+        "status": 200,
+        "body": {
+          "revision": 7,
+          "invoices": [
+            {
+              "id": "PayableInv1",
+              "accounting": "receipt-v1",
+              "createdAt": 1790856000000,
+              "handle": "ooga-dev",
+              "due": 10000,
+              "received": 4000,
+              "credited": 4000,
+              "review": 0,
+              "left": 6000,
+              "state": "partial",
+              "revision": 7,
+              "expires": 1790856900
+            }
+          ],
+          "next": null
+        }
+      },
+      "socket.freshnessWithdrawn": [
+        {
+          "type": "invoiceStatus",
+          "seq": 3,
+          "invoice": {
+            "id": "PayableInv1",
+            "due": 10000,
+            "received": 4000,
+            "credited": 4000,
+            "review": 0,
+            "left": null,
+            "state": "partial",
+            "revision": 8
+          },
+          "replay": false
+        }
+      ],
+      "status.withdrawn": {
+        "status": 200,
+        "body": {
+          "invoice": {
+            "id": "PayableInv1",
+            "accounting": "receipt-v1",
+            "due": 10000,
+            "received": 4000,
+            "credited": 4000,
+            "review": 0,
+            "left": null,
+            "state": "partial",
+            "revision": 8,
+            "expires": 1790856900,
+            "lightning": "unavailable",
+            "bolt11": null
+          },
+          "payableAddress": null,
+          "addresses": [
+            {
+              "address": "bcrt1qqgpqyqszqgpqyqszqgpqyqszqgpqyqszazmwwa",
+              "issuedAt": 1790856000000
+            },
+            {
+              "address": "bcrt1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpvxat9t",
+              "issuedAt": 1790856000000
+            }
+          ],
+          "nextAddress": null,
+          "receipts": [
+            {
+              "id": "r00000000000000000000000000001001",
+              "invoice": "PayableInv1",
+              "method": "onchain",
+              "sats": 4000,
+              "credit": 4000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 2,
+              "handle": "ooga-dev",
+              "message": "for the cave",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 4,
+                  "rounded": 4
+                }
+              }
+            }
+          ],
+          "next": null
+        }
+      },
+      "history.withdrawn": {
+        "status": 200,
+        "body": {
+          "revision": 8,
+          "invoices": [
+            {
+              "id": "PayableInv1",
+              "accounting": "receipt-v1",
+              "createdAt": 1790856000000,
+              "handle": "ooga-dev",
+              "due": 10000,
+              "received": 4000,
+              "credited": 4000,
+              "review": 0,
+              "left": null,
+              "state": "partial",
+              "revision": 8,
+              "expires": 1790856900
+            }
+          ],
+          "next": null
+        }
+      },
+      "socket.gapMarker": [
+        {
+          "type": "recentReceipts",
+          "entries": [
+            {
+              "id": "r00000000000000000000000000001001",
+              "invoice": "PayableInv1",
+              "method": "onchain",
+              "sats": 4000,
+              "credit": 4000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 2,
+              "handle": "ooga-dev",
+              "message": "for the cave",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 4,
+                  "rounded": 4
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "replay",
+          "after": 0,
+          "through": 3,
+          "complete": false
+        }
+      ],
+      "socket.currentReconnect": [
+        {
+          "type": "recentReceipts",
+          "entries": [
+            {
+              "id": "r00000000000000000000000000001001",
+              "invoice": "PayableInv1",
+              "method": "onchain",
+              "sats": 4000,
+              "credit": 4000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 2,
+              "handle": "ooga-dev",
+              "message": "for the cave",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 4,
+                  "rounded": 4
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "replay",
+          "after": 3,
+          "through": 3,
+          "complete": true
+        }
+      ],
+      "socket.expired": [
+        {
+          "type": "invoiceStatus",
+          "seq": 4,
+          "invoice": {
+            "id": "PayableInv1",
+            "due": 10000,
+            "received": 4000,
+            "credited": 4000,
+            "review": 0,
+            "left": null,
+            "state": "partial",
+            "revision": 9
+          },
+          "replay": false
+        }
+      ],
+      "status.expired": {
+        "status": 200,
+        "body": {
+          "invoice": {
+            "id": "PayableInv1",
+            "accounting": "receipt-v1",
+            "due": 10000,
+            "received": 4000,
+            "credited": 4000,
+            "review": 0,
+            "left": null,
+            "state": "partial",
+            "revision": 9,
+            "expires": 1790856900,
+            "lightning": "expired",
+            "bolt11": null
+          },
+          "payableAddress": null,
+          "addresses": [
+            {
+              "address": "bcrt1qqgpqyqszqgpqyqszqgpqyqszqgpqyqszazmwwa",
+              "issuedAt": 1790856000000
+            },
+            {
+              "address": "bcrt1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpvxat9t",
+              "issuedAt": 1790856000000
+            }
+          ],
+          "nextAddress": null,
+          "receipts": [
+            {
+              "id": "r00000000000000000000000000001001",
+              "invoice": "PayableInv1",
+              "method": "onchain",
+              "sats": 4000,
+              "credit": 4000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 2,
+              "handle": "ooga-dev",
+              "message": "for the cave",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 4,
+                  "rounded": 4
+                }
+              }
+            }
+          ],
+          "next": null
+        }
+      },
+      "history.expired": {
+        "status": 200,
+        "body": {
+          "revision": 9,
+          "invoices": [
+            {
+              "id": "PayableInv1",
+              "accounting": "receipt-v1",
+              "createdAt": 1790856000000,
+              "handle": "ooga-dev",
+              "due": 10000,
+              "received": 4000,
+              "credited": 4000,
+              "review": 0,
+              "left": null,
+              "state": "partial",
+              "revision": 9,
+              "expires": 1790856900
+            }
+          ],
+          "next": null
+        }
+      },
+      "socket.initialConnect": {
+        "request": {
+          "method": "GET",
+          "path": "/donations/socket",
+          "upgrade": "websocket"
+        },
+        "messages": [
+          {
+            "type": "status",
+            "open": false,
+            "network": "regtest",
+            "limits": {
+              "minSats": 69,
+              "maxSats": 2100000000000000,
+              "lightningMaxSats": 100000,
+              "messageMinSats": 1000
+            },
+            "accounting": {
+              "version": 1,
+              "issuance": false,
+              "receipts": true,
+              "history": true,
+              "coverage": "invoice",
+              "spends": false,
+              "reconciliation": "behind"
+            }
+          },
+          {
+            "type": "pile",
+            "bananas": null,
+            "at": null,
+            "eatPerHour": 0,
+            "revision": 0,
+            "basis": "credits",
+            "cutover": "pending",
+            "reconciliation": "review",
+            "uncertain": null
+          },
+          {
+            "type": "board",
+            "entries": [],
+            "satsEntries": []
+          },
+          {
+            "type": "tally",
+            "count": 0,
+            "sats": 0,
+            "bananas": 0,
+            "last": null,
+            "hours": [],
+            "rate": null
+          },
+          {
+            "type": "recent",
+            "entries": []
+          },
+          {
+            "type": "recentReceipts",
+            "entries": []
+          },
+          {
+            "type": "replay",
+            "after": null,
+            "through": null,
+            "complete": true
+          },
+          {
+            "type": "tally",
+            "count": 0,
+            "sats": 0,
+            "bananas": 0,
+            "last": null,
+            "hours": [],
+            "rate": {
+              "usdPerBtc": 100000,
+              "satsPerBanana": 1000,
+              "at": 1790856000000,
+              "stale": false
+            }
+          }
+        ]
+      },
+      "socket.requests": {
+        "socket.initialConnect": {
+          "method": "GET",
+          "path": "/donations/socket",
+          "upgrade": "websocket"
+        },
+        "socket.gapMarker": {
+          "method": "GET",
+          "path": "/donations/socket?receipts=0",
+          "upgrade": "websocket"
+        },
+        "socket.currentReconnect": {
+          "method": "GET",
+          "path": "/donations/socket?receipts=3",
+          "upgrade": "websocket"
+        }
+      },
+      "socket.earlyConnect": {
+        "request": {
+          "method": "GET",
+          "path": "/donations/socket",
+          "upgrade": "websocket"
+        },
+        "messages": [
+          {
+            "type": "status",
+            "open": false,
+            "network": "regtest",
+            "limits": {
+              "minSats": 69,
+              "maxSats": 2100000000000000,
+              "lightningMaxSats": 100000,
+              "messageMinSats": 1000
+            },
+            "accounting": {
+              "version": 1,
+              "issuance": false,
+              "receipts": true,
+              "history": true,
+              "coverage": "invoice",
+              "spends": false,
+              "reconciliation": "behind"
+            }
+          },
+          {
+            "type": "pile",
+            "bananas": null,
+            "at": null,
+            "eatPerHour": 0,
+            "revision": 0,
+            "basis": "credits",
+            "cutover": "pending",
+            "reconciliation": "review",
+            "uncertain": null
+          },
+          {
+            "type": "board",
+            "entries": [],
+            "satsEntries": []
+          },
+          {
+            "type": "tally",
+            "count": 0,
+            "sats": 0,
+            "bananas": 0,
+            "last": null,
+            "hours": [],
+            "rate": {
+              "usdPerBtc": 100000,
+              "satsPerBanana": 1000,
+              "at": 1790856000000,
+              "stale": false
+            }
+          },
+          {
+            "type": "recent",
+            "entries": []
+          },
+          {
+            "type": "recentReceipts",
+            "entries": []
+          },
+          {
+            "type": "replay",
+            "after": null,
+            "through": null,
+            "complete": true
+          }
+        ]
+      },
+      "socket.earlyLive": [
+        {
+          "type": "receipt",
+          "seq": 1,
+          "receipt": {
+            "id": "r00000000000000000000000000001001",
+            "invoice": "PayableInv1",
+            "method": "onchain",
+            "sats": 4000,
+            "credit": 0,
+            "state": "confirming",
+            "revision": 1,
+            "at": 1790856000000,
+            "firstCreditedSeq": null,
+            "handle": "",
+            "message": "",
+            "verified": false,
+            "pricing": null
+          },
+          "invoice": {
+            "id": "PayableInv1",
+            "due": 10000,
+            "received": 4000,
+            "credited": 0,
+            "review": 0,
+            "left": 6000,
+            "state": "partial",
+            "revision": 6
+          },
+          "replay": false
+        }
+      ],
+      "socket.earlyGap": {
+        "request": {
+          "method": "GET",
+          "path": "/donations/socket?receipts=1",
+          "upgrade": "websocket"
+        },
+        "messages": [
+          {
+            "type": "status",
+            "open": false,
+            "network": "regtest",
+            "limits": {
+              "minSats": 69,
+              "maxSats": 2100000000000000,
+              "lightningMaxSats": 100000,
+              "messageMinSats": 1000
+            },
+            "accounting": {
+              "version": 1,
+              "issuance": false,
+              "receipts": true,
+              "history": true,
+              "coverage": "invoice",
+              "spends": false,
+              "reconciliation": "behind"
+            }
+          },
+          {
+            "type": "pile",
+            "bananas": null,
+            "at": null,
+            "eatPerHour": 0,
+            "revision": 1,
+            "basis": "credits",
+            "cutover": "pending",
+            "reconciliation": "review",
+            "uncertain": null
+          },
+          {
+            "type": "board",
+            "entries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 4,
+                "sats": 4000
+              }
+            ],
+            "satsEntries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 4,
+                "sats": 4000
+              }
+            ]
+          },
+          {
+            "type": "tally",
+            "count": 1,
+            "sats": 4000,
+            "bananas": 4,
+            "last": 4000,
+            "hours": [
+              [
+                1790856000000,
+                4000,
+                4
+              ]
+            ],
+            "rate": {
+              "usdPerBtc": 100000,
+              "satsPerBanana": 1000,
+              "at": 1790856960001,
+              "stale": false
+            }
+          },
+          {
+            "type": "recent",
+            "entries": []
+          },
+          {
+            "type": "recentReceipts",
+            "entries": [
+              {
+                "id": "r00000000000000000000000000001001",
+                "invoice": "PayableInv1",
+                "method": "onchain",
+                "sats": 4000,
+                "credit": 4000,
+                "state": "credited",
+                "revision": 2,
+                "at": 1790856000000,
+                "firstCreditedSeq": 2,
+                "handle": "ooga-dev",
+                "message": "for the cave",
+                "verified": true,
+                "pricing": {
+                  "receivedAt": 1790856000000,
+                  "rate": {
+                    "usdPerBtc": 100000,
+                    "satsPerBanana": 1000,
+                    "at": 1790856000000,
+                    "stale": false
+                  },
+                  "bananas": {
+                    "exact": 4,
+                    "rounded": 4
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "replay",
+            "after": 1,
+            "through": 4,
+            "complete": false
+          }
+        ]
+      },
+      "socket.earlyCurrent": {
+        "request": {
+          "method": "GET",
+          "path": "/donations/socket?receipts=4",
+          "upgrade": "websocket"
+        },
+        "messages": [
+          {
+            "type": "status",
+            "open": false,
+            "network": "regtest",
+            "limits": {
+              "minSats": 69,
+              "maxSats": 2100000000000000,
+              "lightningMaxSats": 100000,
+              "messageMinSats": 1000
+            },
+            "accounting": {
+              "version": 1,
+              "issuance": false,
+              "receipts": true,
+              "history": true,
+              "coverage": "invoice",
+              "spends": false,
+              "reconciliation": "behind"
+            }
+          },
+          {
+            "type": "pile",
+            "bananas": null,
+            "at": null,
+            "eatPerHour": 0,
+            "revision": 1,
+            "basis": "credits",
+            "cutover": "pending",
+            "reconciliation": "review",
+            "uncertain": null
+          },
+          {
+            "type": "board",
+            "entries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 4,
+                "sats": 4000
+              }
+            ],
+            "satsEntries": [
+              {
+                "handle": "ooga-dev",
+                "bananas": 4,
+                "sats": 4000
+              }
+            ]
+          },
+          {
+            "type": "tally",
+            "count": 1,
+            "sats": 4000,
+            "bananas": 4,
+            "last": 4000,
+            "hours": [
+              [
+                1790856000000,
+                4000,
+                4
+              ]
+            ],
+            "rate": {
+              "usdPerBtc": 100000,
+              "satsPerBanana": 1000,
+              "at": 1790856960001,
+              "stale": false
+            }
+          },
+          {
+            "type": "recent",
+            "entries": []
+          },
+          {
+            "type": "recentReceipts",
+            "entries": [
+              {
+                "id": "r00000000000000000000000000001001",
+                "invoice": "PayableInv1",
+                "method": "onchain",
+                "sats": 4000,
+                "credit": 4000,
+                "state": "credited",
+                "revision": 2,
+                "at": 1790856000000,
+                "firstCreditedSeq": 2,
+                "handle": "ooga-dev",
+                "message": "for the cave",
+                "verified": true,
+                "pricing": {
+                  "receivedAt": 1790856000000,
+                  "rate": {
+                    "usdPerBtc": 100000,
+                    "satsPerBanana": 1000,
+                    "at": 1790856000000,
+                    "stale": false
+                  },
+                  "bananas": {
+                    "exact": 4,
+                    "rounded": 4
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "replay",
+            "after": 4,
+            "through": 4,
+            "complete": true
+          }
+        ]
+      },
+      "status.atEarlyGap": {
+        "status": 200,
+        "body": {
+          "invoice": {
+            "id": "PayableInv1",
+            "accounting": "receipt-v1",
+            "due": 10000,
+            "received": 4000,
+            "credited": 4000,
+            "review": 0,
+            "left": null,
+            "state": "partial",
+            "revision": 9,
+            "expires": 1790856900,
+            "lightning": "expired",
+            "bolt11": null
+          },
+          "payableAddress": null,
+          "addresses": [
+            {
+              "address": "bcrt1qqgpqyqszqgpqyqszqgpqyqszqgpqyqszazmwwa",
+              "issuedAt": 1790856000000
+            },
+            {
+              "address": "bcrt1qqyqszqgpqyqszqgpqyqszqgpqyqszqgpvxat9t",
+              "issuedAt": 1790856000000
+            }
+          ],
+          "nextAddress": null,
+          "receipts": [
+            {
+              "id": "r00000000000000000000000000001001",
+              "invoice": "PayableInv1",
+              "method": "onchain",
+              "sats": 4000,
+              "credit": 4000,
+              "state": "credited",
+              "revision": 2,
+              "at": 1790856000000,
+              "firstCreditedSeq": 2,
+              "handle": "ooga-dev",
+              "message": "for the cave",
+              "verified": true,
+              "pricing": {
+                "receivedAt": 1790856000000,
+                "rate": {
+                  "usdPerBtc": 100000,
+                  "satsPerBanana": 1000,
+                  "at": 1790856000000,
+                  "stale": false
+                },
+                "bananas": {
+                  "exact": 4,
+                  "rounded": 4
+                }
+              }
+            }
+          ],
+          "next": null
+        }
+      },
+      "history.atEarlyGap": {
+        "status": 200,
+        "body": {
+          "revision": 9,
+          "invoices": [
+            {
+              "id": "PayableInv1",
+              "accounting": "receipt-v1",
+              "createdAt": 1790856000000,
+              "handle": "ooga-dev",
+              "due": 10000,
+              "received": 4000,
+              "credited": 4000,
+              "review": 0,
+              "left": null,
+              "state": "partial",
+              "revision": 9,
+              "expires": 1790856900
+            }
+          ],
+          "next": null
+        }
+      }
+    }
+  },
+  "pile": {
+    "scope": "anchored-pile",
+    "note": "What an open page hears of the anchored pile as receipts move it, through the real object, with the anchor applied through applyPileAnchor on the object's storage, as an operator would; no endpoint applies it. Each vector is the pile messages heard from the stated point once background work has finished: on connect; a credit from an unverified read (behind); the same credit read verified complete (current, a new revision at the same level); the receipt held for review (its credit uncertain); its reversal; its reconfirmation; a second credit bridged before a stop, heard by the surviving page from the next start's alarm; and a page connecting after. basis: credits is the anchor plus credits minus reversals, not a wallet balance. Does not prove provider ingestion, real runtime behaviour, any consumer's parsing, or how an operator applies an anchor. Issuance is off.",
+    "vectors": {
+      "pile.connect": [
+        {
+          "type": "pile",
+          "bananas": 10,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 1,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "behind",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        }
+      ],
+      "pile.creditBehind": [
+        {
+          "type": "pile",
+          "bananas": 11,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 2,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "behind",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        }
+      ],
+      "pile.creditCurrent": [
+        {
+          "type": "pile",
+          "bananas": 11,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 3,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "current",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        }
+      ],
+      "pile.reviewUncertain": [
+        {
+          "type": "pile",
+          "bananas": 11,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 4,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "review",
+          "uncertain": {
+            "sats": 1000,
+            "bananas": 1
+          }
+        }
+      ],
+      "pile.reversal": [
+        {
+          "type": "pile",
+          "bananas": 10,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 5,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "behind",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        },
+        {
+          "type": "pile",
+          "bananas": 10,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 6,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "current",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        }
+      ],
+      "pile.reconfirmation": [
+        {
+          "type": "pile",
+          "bananas": 11,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 7,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "behind",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        },
+        {
+          "type": "pile",
+          "bananas": 11,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 8,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "current",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        }
+      ],
+      "pile.beforeRestart": [],
+      "pile.restartRecovery": [
+        {
+          "type": "pile",
+          "bananas": 13.5,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 9,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "behind",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        },
+        {
+          "type": "pile",
+          "bananas": 13.5,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 10,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "current",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        }
+      ],
+      "pile.reconnect": [
+        {
+          "type": "pile",
+          "bananas": 13.5,
+          "at": 1790856000000,
+          "eatPerHour": 0,
+          "revision": 10,
+          "basis": "credits",
+          "cutover": "done",
+          "reconciliation": "current",
+          "uncertain": {
+            "sats": 0,
+            "bananas": 0
+          }
+        }
+      ]
+    }
+  }
+}

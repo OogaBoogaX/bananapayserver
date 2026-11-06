@@ -24,6 +24,7 @@ export class Donations extends DurableObject {
     return this.object.fetch(request);
   }
 
+  // RPC from PageApi only; the object's fetch routes nothing to it.
   pileSnapshot() {
     return this.object.pileSnapshot();
   }
@@ -48,11 +49,6 @@ export class Donations extends DurableObject {
 // The page's calls, from OBL's Worker over its service binding. A named entrypoint is reachable
 // only through a binding, never from the internet. See docs/protocol.md.
 export class PageApi extends WorkerEntrypoint {
-  // Private aggregate read for OBL's host. No public route or visitor identity.
-  pileSnapshot() {
-    return this.env.DONATIONS.get(this.env.DONATIONS.idFromName("donations")).pileSnapshot();
-  }
-
   invoice(request, donor, visitor) {
     return pageApi(this.env).invoice(request, donor, visitor);
   }
@@ -65,8 +61,21 @@ export class PageApi extends WorkerEntrypoint {
     return pageApi(this.env).onchain(request, visitor);
   }
 
+  status(request, donor, visitor) {
+    return pageApi(this.env).status(request, donor, visitor);
+  }
+
+  history(request, donor, visitor) {
+    return pageApi(this.env).history(request, donor, visitor);
+  }
+
   fetch(request) {
     return pageApi(this.env).fetch(request);
+  }
+
+  // The pile aggregate for OBL's host: no arguments, no visitor, no public route.
+  pileSnapshot() {
+    return this.env.DONATIONS.get(this.env.DONATIONS.idFromName("donations")).pileSnapshot();
   }
 }
 
