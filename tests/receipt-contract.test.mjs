@@ -52,6 +52,56 @@ test("the vectors are core-only, synthetic and carry nothing private to the publ
   assert.notEqual(vectors["privateStatus.core"].nextAddress, null);
 });
 
+test("the endpoint vectors are the real replies, with the agreed keys and statuses", async () => {
+  const { endpoints } = await buildVectors();
+  assert.equal(endpoints.scope, "read-endpoints");
+  const v = endpoints.vectors;
+  assert.equal(v["status.byToken"].status, 200);
+  assert.deepEqual(Object.keys(v["status.byToken"].body), ["invoice", "payableAddress", "addresses", "nextAddress", "receipts", "next"]);
+  assert.deepEqual(Object.keys(v["status.byToken"].body.invoice),
+    ["id", "accounting", "due", "received", "credited", "review", "left", "state", "revision", "expires", "lightning", "bolt11"]);
+  assert.deepEqual([v["status.byToken"].body.invoice.lightning, v["status.byToken"].body.invoice.bolt11], ["unavailable", null], "no provider evidence");
+  assert.equal(v["status.addressPage"].status, 200);
+  assert.deepEqual([v["status.unknown"], v["status.cursor"], v["status.resync"]],
+    [{ status: 404, body: { error: "unknown" } }, { status: 400, body: { error: "cursor" } }, { status: 409, body: { error: "resync" } }]);
+  assert.deepEqual(Object.keys(v["history.page"].body), ["revision", "invoices", "next"]);
+  assert.deepEqual(v["history.signedOut"], { status: 401, body: { error: "signin" } });
+  assert.deepEqual(v["invoice.receiptModeClosed"], { status: 503, body: { error: "closed" } });
+  const connect = v["socket.firstConnect"].map((m) => m.type);
+  assert.deepEqual(connect, ["status", "recentReceipts", "replay"], "no frames replayed without a cursor");
+  assert.equal(v["socket.firstConnect"][0].accounting.issuance, false);
+  assert.ok(v["socket.replayFromZero"].filter((m) => m.type === "receipt" || m.type === "invoiceStatus").every((m) => m.replay === true));
+  assert.equal(v["socket.replayFromZero"].at(-1).type, "replay");
+  // A real second receipt page, and two history pages reached by the generated cursor.
+  assert.equal(v["status.receiptPage"].status, 200);
+  const firstIds = v["status.byToken"].body.receipts.map((r) => r.id);
+  const nextIds = v["status.receiptPage"].body.receipts.map((r) => r.id);
+  assert.ok(nextIds.length > 0 && nextIds.every((id) => !firstIds.includes(id)), "the next page continues, without overlap");
+  assert.deepEqual(v["history.page"].body.invoices.map((i) => i.id), ["ReceiptInv1", "ReceiptInv2"]);
+  assert.deepEqual(v["history.nextPage"].body.invoices.map((i) => i.id), ["ReceiptInv3"]);
+  assert.deepEqual([v["history.nextPage"].status, v["history.nextPage"].body.next], [200, null]);
+  assert.equal(v["history.nextPage"].body.revision, v["history.page"].body.revision);
+  for (const page of [v["history.page"], v["history.nextPage"]]) {
+    for (const entry of page.body.invoices) assert.ok(Number.isSafeInteger(entry.expires) && entry.expires > 0);
+  }
+  // The scoped metadata gate, as the endpoints answer it.
+  assert.deepEqual([v["status.metadataClosed"], v["history.metadataClosed"]],
+    [{ status: 503, body: { error: "closed" } }, { status: 503, body: { error: "closed" } }]);
+  // A genuine first credit heard live by an already-connected socket: after its marker, not
+  // replayed, and the one frame whose seq is the receipt's first credit.
+  const live = v["socket.liveFirstCredit"];
+  const marker = v["socket.firstConnect"].find((m) => m.type === "replay");
+  assert.ok(live.length > 0 && live.every((m) => m.replay === false && m.seq > marker.through));
+  const credits = live.filter((m) => m.type === "receipt" && m.receipt.state === "credited" && m.seq === m.receipt.firstCreditedSeq);
+  assert.equal(credits.length, 1, "exactly one animating frame");
+  assert.ok(!firstIds.includes(credits[0].receipt.id) && !nextIds.includes(credits[0].receipt.id), "a new receipt, not history");
+  assert.deepEqual(live.map((m) => m.seq), [...live.map((m) => m.seq)].sort((a, b) => a - b), "in feed order");
+  assert.ok(v["socket.replayFromZero"].every((m) => !(m.type === "receipt" && m.receipt.id === credits[0].receipt.id)), "never in an earlier snapshot");
+  // Nothing private in what pages receive on the socket.
+  const socketText = JSON.stringify([v["socket.firstConnect"], v["socket.replayFromZero"], live]);
+  for (const forbidden of ["bcrt1", "11".repeat(32), "btcpay", "store-a"]) assert.equal(socketText.includes(forbidden), false, forbidden);
+});
+
 test("the OBL donation fixture is untouched by these vectors", () => {
   // The donation event and its text rules stay pinned by obl-contract.test.mjs alone.
   assert.ok(existsSync(new URL("./fixtures/obl-donations.js", import.meta.url)));

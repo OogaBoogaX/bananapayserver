@@ -226,7 +226,57 @@ const SCHEMA = [
   // provider confirmation policy a settled observation must have been made under.
   `ALTER TABLE ra_invoices ADD COLUMN pricing_recovery TEXT;
   ALTER TABLE ra_invoices ADD COLUMN confirmation_policy TEXT;`,
+  // What the private status reports about the original invoice: its expiry in seconds, how
+  // Lightning was offered, the original code, and when the provider last verified that code
+  // is still usable (nothing sets it until provider ingestion exists). An order for history
+  // pages, and each account's history revision.
+  `ALTER TABLE ra_invoices ADD COLUMN expires INTEGER;
+  ALTER TABLE ra_invoices ADD COLUMN lightning TEXT;
+  ALTER TABLE ra_invoices ADD COLUMN bolt11 TEXT;
+  ALTER TABLE ra_invoices ADD COLUMN bolt11_verified_at INTEGER;
+  ALTER TABLE ra_invoices ADD COLUMN ord INTEGER;
+  UPDATE ra_invoices SET ord = rowid;
+  CREATE UNIQUE INDEX ra_invoices_ord ON ra_invoices (ord);
+  CREATE INDEX ra_invoices_owner_ord ON ra_invoices (owner, ord);
+  CREATE TABLE ra_accounts (owner INTEGER PRIMARY KEY, revision INTEGER NOT NULL);
+  INSERT INTO ra_accounts (owner, revision) SELECT owner, 1 FROM ra_invoices WHERE owner IS NOT NULL GROUP BY owner;`,
+  // The reviewed read settings, saved once before the first mapping is exposed, so reads never
+  // depend on configuration that can disappear. Whether an invoice's expiry has been committed
+  // as a revision, so expiring is a change pages hear rather than a silent one.
+  `CREATE TABLE ra_read_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    replay_max INTEGER NOT NULL CHECK (replay_max > 0),
+    status_page_size INTEGER NOT NULL CHECK (status_page_size BETWEEN 1 AND 100),
+    address_page_size INTEGER NOT NULL CHECK (address_page_size BETWEEN 1 AND 100),
+    history_page_size INTEGER NOT NULL CHECK (history_page_size BETWEEN 1 AND 100),
+    recent_size INTEGER NOT NULL CHECK (recent_size > 0),
+    cursor_ttl_ms INTEGER NOT NULL CHECK (cursor_ttl_ms > 0),
+    freshness_ms INTEGER NOT NULL CHECK (freshness_ms > 0),
+    saved_at INTEGER NOT NULL,
+    reason TEXT NOT NULL
+  );
+  ALTER TABLE ra_invoices ADD COLUMN expiry_committed INTEGER NOT NULL DEFAULT 0;`,
 ];
+
+const LIGHTNING = ["available", "limit", "unavailable"];
+const BOLT11 = /^ln[a-z0-9]{1,90}1[02-9ac-hj-np-z]{100,6000}$/;
+
+const READ_KEYS = ["replayMax", "statusPageSize", "addressPageSize", "historyPageSize", "recentSize", "cursorTtlMs", "freshnessMs"];
+// The wire bound on any private page, receipts, addresses or history: pages carry at most
+// this many rows, as agreed with the consumer. A protocol limit, not a deployment choice:
+// each deployment still sets its own sizes, at or under it.
+export const PRIVATE_PAGE_MAX = 100;
+const PAGE_KEYS = ["statusPageSize", "addressPageSize", "historyPageSize"];
+const validReadSettings = (s) => s !== null && typeof s === "object" &&
+  READ_KEYS.every((k) => Number.isSafeInteger(s[k]) && s[k] > 0) && PAGE_KEYS.every((k) => s[k] <= PRIVATE_PAGE_MAX);
+const sameReadSettings = (a, b) => READ_KEYS.every((k) => a[k] === b[k]);
+
+// Whether an invoice's original metadata is whole: an expiry, how Lightning was offered, and the
+// code exactly when it was offered. New mappings can't be made without it.
+const INCOMPLETE_METADATA = "(expires IS NULL OR expires <= 0 OR lightning IS NULL OR lightning NOT IN ('available', 'limit', 'unavailable') " +
+  "OR ((lightning = 'available') <> (bolt11 IS NOT NULL)))";
+const metadataComplete = (m) => Number.isSafeInteger(m.expires) && m.expires > 0 && LIGHTNING.includes(m.lightning) &&
+  (m.lightning === "available" ? typeof m.bolt11 === "string" && BOLT11.test(m.bolt11) : m.bolt11 === null);
 
 const POLICY_VERSION = /^[A-Za-z0-9._:-]{1,64}$/;
 const isReference = (v) => typeof v === "string" && POLICY_VERSION.test(v);
@@ -254,7 +304,12 @@ export class ReceiptLedger {
   // freshnessMs: how long a provider read stays current; deployment configuration, required by
   // everything that publishes totals or health. failpoint: called by name inside transactions,
   // so tests can stop the work at each boundary.
-  constructor({ storage, now, randomHex, issuance = false, policy = {}, freshnessMs = null, failpoint = () => {} }) {
+  // readSettings: the reviewed read bounds, { replayMax, statusPageSize, addressPageSize,
+  // historyPageSize, recentSize, cursorTtlMs, freshnessMs }, all required for issuance. The
+  // first issuance saves them durably, before any mapping exists; from then on reads use the
+  // saved copy, whatever later configuration says. freshnessMs alone is accepted for a ledger
+  // that never issues and has nothing saved yet.
+  constructor({ storage, now, randomHex, issuance = false, policy = {}, readSettings = null, freshnessMs = null, failpoint = () => {} }) {
     Object.assign(this, { storage, sql: storage.sql, now, randomHex, failpoint });
     this.issuance = issuance === true;
     this.policy = {
@@ -264,7 +319,8 @@ export class ReceiptLedger {
       confirmationPolicy: isReference(policy.confirmationPolicy) ? policy.confirmationPolicy : null,
       version: isReference(policy.version) ? policy.version : null,
     };
-    this.freshnessMs = Number.isSafeInteger(freshnessMs) && freshnessMs > 0 ? freshnessMs : null;
+    this.configuredRead = validReadSettings(readSettings) ? { ...readSettings } : null;
+    this.configuredFreshness = this.configuredRead?.freshnessMs ?? (isPositive(freshnessMs) ? freshnessMs : null);
     // Receipts this instance created, and lookups it started. A restart forgets both, so an
     // older intent can only be recovered, never priced from a new sample.
     this.fresh = new Set();
@@ -329,9 +385,46 @@ export class ReceiptLedger {
     return row ? this.invoicePolicy(row.invoice) : null;
   }
 
+  // The saved read settings, or null before the first issuance saved them.
+  readSettings() {
+    const r = this.row("SELECT * FROM ra_read_settings WHERE id = 1");
+    return r ? {
+      replayMax: r.replay_max, statusPageSize: r.status_page_size, addressPageSize: r.address_page_size,
+      historyPageSize: r.history_page_size, recentSize: r.recent_size, cursorTtlMs: r.cursor_ttl_ms, freshnessMs: r.freshness_ms,
+    } : null;
+  }
+
+  saveReadSettings(s, reason) {
+    this.sql.exec(
+      "INSERT INTO ra_read_settings (id, replay_max, status_page_size, address_page_size, history_page_size, recent_size, cursor_ttl_ms, freshness_ms, saved_at, reason) " +
+      "VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      s.replayMax, s.statusPageSize, s.addressPageSize, s.historyPageSize, s.recentSize, s.cursorTtlMs, s.freshnessMs, this.now(), reason,
+    );
+  }
+
+  // For mappings made before read settings were saved: an operator adopts a complete reviewed
+  // set once. Nothing here picks the values, and a saved set is never replaced.
+  adoptReadSettings(settings, reason) {
+    if (!validReadSettings(settings)) throw new PolicyRequired("read settings");
+    if (typeof reason !== "string" || !reason.trim()) throw new Error("adopting read settings needs a reason");
+    return this.mutate(() => {
+      if (this.readSettings()) return { error: "saved" };
+      this.saveReadSettings(settings, reason);
+      return { ok: true };
+    });
+  }
+
+  // How long a provider read stays fresh: the saved bound, so removing or changing configuration
+  // can't change what is current at an unchanged revision. Before anything is saved, the bound
+  // this instance was given, if any.
+  get freshnessMs() {
+    return this.readSettings()?.freshnessMs ?? this.configuredFreshness;
+  }
+
   freshness() {
-    if (this.freshnessMs === null) throw new PolicyRequired("freshness bound");
-    return this.freshnessMs;
+    const bound = this.freshnessMs;
+    if (bound === null) throw new PolicyRequired("freshness bound");
+    return bound;
   }
 
   // Every mutation runs here: one transaction, and before it commits, every receipt frame it
@@ -359,24 +452,81 @@ export class ReceiptLedger {
   }
 
   bump(invoice) {
-    this.sql.exec("UPDATE ra_invoices SET revision = revision + 1 WHERE invoice = ?", invoice);
+    this.revise(invoice);
     this.touch(invoice).bumped = true;
+  }
+
+  // Every invoice revision also moves its owner's history revision, so history cursors fence
+  // on any change to any of the account's invoices.
+  revise(invoice) {
+    this.sql.exec("UPDATE ra_invoices SET revision = revision + 1 WHERE invoice = ?", invoice);
+    this.reviseAccount(this.row("SELECT owner FROM ra_invoices WHERE invoice = ?", invoice)?.owner ?? null);
+  }
+
+  reviseAccount(owner) {
+    if (owner === null) return;
+    this.sql.exec(
+      "INSERT INTO ra_accounts (owner, revision) VALUES (?, 1) ON CONFLICT (owner) DO UPDATE SET revision = revision + 1",
+      owner,
+    );
   }
 
   // Withdraws a remaining amount or payable address that has outlived the freshness bound, as
   // a committed change with a newer revision, so no reader sees it change at an old revision.
+  // Without a configured bound nothing is withdrawn from storage; reads simply treat both as
+  // unknown until the bound is configured again.
+  // The invoice's own expiry is committed the same way, once, so the private status turns
+  // `expired` at a newer revision, never silently.
   expire(invoice) {
-    const inv = this.row("SELECT left_at, payable_at FROM ra_invoices WHERE invoice = ?", invoice);
+    const inv = this.row("SELECT left_at, payable_at, bolt11_verified_at, expires, expiry_committed FROM ra_invoices WHERE invoice = ?", invoice);
     let changed = false;
-    if (inv.left_at !== null && !this.isFresh(inv.left_at)) {
-      this.sql.exec("UPDATE ra_invoices SET left_sats = NULL, left_at = NULL WHERE invoice = ?", invoice);
+    if (inv.expires !== null && !inv.expiry_committed && this.now() >= inv.expires * 1000) {
+      this.sql.exec("UPDATE ra_invoices SET expiry_committed = 1 WHERE invoice = ?", invoice);
       changed = true;
     }
-    if (inv.payable_at !== null && !this.isFresh(inv.payable_at)) {
-      this.sql.exec("UPDATE ra_invoices SET payable_address = NULL, payable_at = NULL WHERE invoice = ?", invoice);
-      changed = true;
+    if (this.freshnessMs !== null) {
+      if (inv.left_at !== null && !this.isFresh(inv.left_at)) {
+        this.sql.exec("UPDATE ra_invoices SET left_sats = NULL, left_at = NULL WHERE invoice = ?", invoice);
+        changed = true;
+      }
+      if (inv.payable_at !== null && !this.isFresh(inv.payable_at)) {
+        this.sql.exec("UPDATE ra_invoices SET payable_address = NULL, payable_at = NULL WHERE invoice = ?", invoice);
+        changed = true;
+      }
+      if (inv.bolt11_verified_at !== null && !this.isFresh(inv.bolt11_verified_at)) {
+        this.sql.exec("UPDATE ra_invoices SET bolt11_verified_at = NULL WHERE invoice = ?", invoice);
+        changed = true;
+      }
     }
     if (changed) this.bump(invoice);
+  }
+
+  // Invoices holding something time has made stale, or whose expiry has passed uncommitted:
+  // only these need a commit, so the work stays bounded by what changed.
+  staleInvoices(owner = undefined) {
+    const now = this.now();
+    const bound = this.freshnessMs;
+    const cutoff = bound === null ? Number.MIN_SAFE_INTEGER : now - bound;
+    return this.rows(
+      "SELECT invoice FROM ra_invoices WHERE (? IS NULL OR owner = ?) AND (" +
+      "(left_at IS NOT NULL AND left_at < ?) OR (payable_at IS NOT NULL AND payable_at < ?) OR " +
+      "(bolt11_verified_at IS NOT NULL AND bolt11_verified_at < ?) OR " +
+      "(expires IS NOT NULL AND expiry_committed = 0 AND expires * 1000 <= ?))",
+      owner ?? null, owner ?? null, cutoff, cutoff, cutoff, now,
+    ).map((r) => r.invoice);
+  }
+
+  // When the next such change is due, in milliseconds, or null: for the object's alarm.
+  nextDeadline() {
+    const bound = this.freshnessMs;
+    const times = [];
+    if (bound !== null) {
+      const r = this.row("SELECT min(left_at) AS l, min(payable_at) AS p, min(bolt11_verified_at) AS b FROM ra_invoices");
+      for (const at of [r.l, r.p, r.b]) if (at !== null) times.push(at + bound + 1);
+    }
+    const e = this.row("SELECT min(expires) AS e FROM ra_invoices WHERE expires IS NOT NULL AND expiry_committed = 0").e;
+    if (e !== null) times.push(e * 1000);
+    return times.length ? Math.min(...times) : null;
   }
 
   finalize() {
@@ -395,7 +545,7 @@ export class ReceiptLedger {
       // totals is signalled once an invoice has receipts, so the page refreshes its private
       // status. The frame carries public totals only. A read that confirms nothing new is silent.
       if (!frames.length && observed && (bumped || visible !== published)) {
-        if (!bumped) this.sql.exec("UPDATE ra_invoices SET revision = revision + 1 WHERE invoice = ?", invoice);
+        if (!bumped) this.revise(invoice);
         const status = this.totals(invoice);
         const seq = this.sql.exec(
           "INSERT INTO ra_feed (kind, invoice, receipt, revision, at, payload) VALUES ('invoiceStatus', ?, NULL, ?, ?, '') RETURNING seq",
@@ -455,12 +605,21 @@ export class ReceiptLedger {
   // Saves the invoice's permanent record before anything reaches the page. owner is OBL's
   // stable account id with its login, or both null when signed out or anonymous; the handle
   // never stands in for either.
+  // expires (unix seconds), lightning ("available", "limit" or "unavailable") and the original
+  // bolt11 (exactly when Lightning was available) describe the provider's invoice as issued.
+  // All are required, so no mapping is ever exposed without them, and none is guessed.
   issueInvoice({ invoice, network, provider, store, owner = null, login = null, handle, message = "",
-    messageMinSats, requestHash, due }) {
+    messageMinSats, requestHash, due, expires = null, lightning = null, bolt11 = null }) {
     // New issuance is off unless this instance was told otherwise, and needs a whole reviewed
-    // policy. Neither affects invoices already issued.
+    // policy and the reviewed read settings. None of it affects invoices already issued.
     if (!this.issuance) return { error: "closed" };
     const policy = this.issuancePolicy();
+    const saved = this.readSettings();
+    if (!saved && !this.configuredRead) throw new PolicyRequired("read settings");
+    // Configured read settings that differ from the saved ones are a drift to review, never a
+    // silent change to how existing mappings are read.
+    if (saved && this.configuredRead && !sameReadSettings(saved, this.configuredRead)) return { error: "closed" };
+    if (!metadataComplete({ expires, lightning, bolt11 })) return { error: "invalid" };
     if (!INVOICE_ID.test(invoice) || !isNetwork(network) || !SCOPE.test(provider) || !SCOPE.test(store)) return { error: "invalid" };
     if (owner === null ? login !== null : !isPositive(owner) || typeof login !== "string" || !LOGIN.test(login)) return { error: "invalid" };
     if (!isPositive(due) || due > MAX_SATS || !Number.isSafeInteger(messageMinSats) || messageMinSats < 0) return { error: "invalid" };
@@ -471,14 +630,42 @@ export class ReceiptLedger {
     return this.mutate(() => {
       if (this.modeOf(invoice) !== null) return { error: "fenced" };
       if (this.row("SELECT 1 FROM ra_invoices WHERE request_hash = ?", requestHash)) return { error: "invalid" };
+      // The read settings are saved, in the same transaction, before the first mapping exists.
+      if (!this.readSettings()) this.saveReadSettings(this.configuredRead, "saved with the first receipt-mode issuance");
+      const ord = (this.row("SELECT max(ord) AS ord FROM ra_invoices").ord ?? 0) + 1;
       this.sql.exec(
         "INSERT INTO ra_invoices (invoice, mode, network, provider, store, owner, login, handle, message, message_min_sats, request_hash, due, created, " +
-        "edit_window, message_rule, pricing_recovery, confirmation_policy, policy_version) VALUES (?, 'receipt-v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "edit_window, message_rule, pricing_recovery, confirmation_policy, policy_version, expires, lightning, bolt11, ord) " +
+        "VALUES (?, 'receipt-v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         invoice, network, provider, store, owner, login,
         displayHandle(handle === undefined && owner !== null ? login : handle), text, messageMinSats, requestHash, due, this.now(),
         policy.editWindow, policy.messageRule, policy.pricingRecovery, policy.confirmationPolicy, policy.version,
+        expires, lightning, bolt11, ord,
       );
+      this.reviseAccount(owner);
       return { invoice, accounting: MODE };
+    });
+  }
+
+  // For a mapping made before its original metadata was required: an operator supplies the
+  // provider's reviewed expiry, Lightning offer and code, once. Until then that invoice's status,
+  // and its owner's history, are closed rather than shown with anything guessed. Metadata that
+  // is already whole is never replaced. Nothing in the Worker routes here.
+  reconcileInvoiceMetadata(invoice, { expires, lightning, bolt11 }, reason) {
+    if (typeof reason !== "string" || !reason.trim()) throw new Error("a reconciliation needs a reason");
+    if (!metadataComplete({ expires, lightning, bolt11 })) return { error: "invalid" };
+    return this.mutate(() => {
+      const row = this.row("SELECT expires, lightning, bolt11 FROM ra_invoices WHERE invoice = ?", invoice);
+      if (!row) return { error: "unknown" };
+      if (metadataComplete(row)) return { error: "complete" };
+      this.sql.exec(
+        "UPDATE ra_invoices SET expires = ?, lightning = ?, bolt11 = ?, expiry_committed = 0, bolt11_verified_at = NULL WHERE invoice = ?",
+        expires, lightning, bolt11, invoice,
+      );
+      this.sql.exec("INSERT INTO ra_reviews (invoice, reason, at, resolved_at, resolution) VALUES (?, 'metadata-reconciled', ?, ?, ?)",
+        invoice, this.now(), this.now(), reason);
+      this.bump(invoice);
+      return { ok: true };
     });
   }
 
@@ -887,7 +1074,7 @@ export class ReceiptLedger {
       state, credit, revision, now, first, r.id,
     );
     if (first === seq) this.firstCredit(r.id);
-    this.sql.exec("UPDATE ra_invoices SET revision = revision + 1 WHERE invoice = ?", r.invoice);
+    this.revise(r.invoice);
     this.failpoint("transition:feed");
     this.sql.exec("UPDATE ra_feed SET payload = ? WHERE seq = ?", JSON.stringify({ receipt: this.publicReceipt(r.id) }), seq);
     this.sql.exec("INSERT INTO ra_outbox (feed_seq, ledger_seq, created_at) VALUES (?, ?, ?)", seq, ledgerSeq, now);
@@ -1025,9 +1212,11 @@ export class ReceiptLedger {
   // Publishes what time alone changed: a remaining amount or payable address that is no longer
   // fresh is withdrawn, and pages hear it as an invoiceStatus frame.
   refreshFreshness() {
-    this.freshness();
+    // Only invoices holding something that has just gone stale or expired, so this stays
+    // bounded by what changed rather than by every invoice ever issued.
+    const stale = this.staleInvoices();
     return this.mutate(() => {
-      for (const { invoice } of this.rows("SELECT invoice FROM ra_invoices")) this.touch(invoice);
+      for (const invoice of stale) this.touch(invoice);
     });
   }
 
@@ -1050,8 +1239,10 @@ export class ReceiptLedger {
     };
   }
 
+  // Without a configured bound nothing counts as fresh: a remaining amount, payable address or
+  // usable BOLT11 is reported unknown, never assumed current.
   isFresh(at) {
-    return at !== null && this.now() - at <= this.freshness();
+    return at !== null && this.freshnessMs !== null && this.now() - at <= this.freshnessMs;
   }
 
   // The invoice's authoritative cumulative totals, summed with overflow checks. left is the
@@ -1099,11 +1290,11 @@ export class ReceiptLedger {
     for (const v of [receiptLimit, addressLimit, ttlMs]) {
       if (!isPositive(v)) throw new PolicyRequired("page size and cursor lifetime");
     }
+    if (receiptLimit > PRIVATE_PAGE_MAX || addressLimit > PRIVATE_PAGE_MAX) throw new RangeError(`a private page carries at most ${PRIVATE_PAGE_MAX} rows`);
     const principal = this.principal(invoice, { requestHash, donorId });
     if (!principal) return { error: "unknown" };
     // Only for an authorized reader: commit whatever time has withdrawn, with its revision and
     // feed signal, before reading the revision or judging any cursor against it.
-    this.freshness();
     this.mutate(() => this.touch(invoice));
     const { revision } = this.row("SELECT revision FROM ra_invoices WHERE invoice = ?", invoice);
     const scope = `${invoice}|${principal}`;
@@ -1133,6 +1324,110 @@ export class ReceiptLedger {
       receipts: receipts.items.map((row) => this.publicReceipt(row.id)),
       next: receipts.next,
     };
+  }
+
+  // The invoice a request token's hash belongs to, or null.
+  invoiceForRequest(requestHash) {
+    return typeof requestHash === "string" ? this.row("SELECT invoice FROM ra_invoices WHERE request_hash = ?", requestHash)?.invoice ?? null : null;
+  }
+
+  hasMappings() {
+    return this.row("SELECT 1 FROM ra_invoices") !== null;
+  }
+
+  // The endpoint's reply for POST /donations/status: the core status, with what the page needs
+  // about the original invoice. The original BOLT11 is offered only while no receipt has ever
+  // been observed, the invoice hasn't expired, and the provider has freshly verified the code
+  // is still usable; otherwise it is null and Lightning reads as unavailable or expired. Nothing
+  // is guessed: an invoice without whole saved metadata is answered 503 closed, for that invoice
+  // alone, until an operator reconciles it; expires is always the saved number.
+  statusReply(invoice, access) {
+    // Access first, so an unauthorized reader learns and changes nothing.
+    if (!this.principal(invoice, access)) return { error: "unknown" };
+    // A mapping without its whole original metadata is closed until reconciled.
+    if (!metadataComplete(this.row("SELECT expires, lightning, bolt11 FROM ra_invoices WHERE invoice = ?", invoice))) return { error: "closed" };
+    const core = this.privateStatus(invoice, access);
+    if (core.error) return core;
+    // Read after the core committed what time changed: expiry and the code's verification age
+    // are revisions, so they never differ at an unchanged revision.
+    const meta = this.row("SELECT expires, lightning, bolt11, bolt11_verified_at, expiry_committed FROM ra_invoices WHERE invoice = ?", invoice);
+    const usable = meta.lightning === "available" && this.originalBolt11Allowed(invoice) && this.isFresh(meta.bolt11_verified_at);
+    const lightning = meta.expiry_committed ? "expired" : meta.lightning === "limit" ? "limit" : usable ? "available" : "unavailable";
+    const t = core.invoice;
+    return {
+      invoice: {
+        id: t.id, accounting: MODE, due: t.due, received: t.received, credited: t.credited, review: t.review,
+        left: t.left, state: t.state, revision: t.revision, expires: meta.expires, lightning,
+        bolt11: lightning === "available" ? meta.bolt11 : null,
+      },
+      payableAddress: core.payableAddress,
+      addresses: core.addresses,
+      nextAddress: core.nextAddress,
+      receipts: core.receipts,
+      next: core.next,
+    };
+  }
+
+  // A signed-in account's own receipt-mode invoices, newest first, by stable account id only.
+  // The cursor is bound to the account and its history revision, which moves with any change to
+  // any of its invoices; a stale one is `resync`. No request token or address appears.
+  accountHistory(owner, { cursor = null, limit, ttlMs }) {
+    if (!isPositive(limit) || !isPositive(ttlMs)) throw new PolicyRequired("page size and cursor lifetime");
+    if (limit > PRIVATE_PAGE_MAX) throw new RangeError(`a private page carries at most ${PRIVATE_PAGE_MAX} rows`);
+    if (!isPositive(owner)) return { error: "unknown" };
+    // Commit what time has withdrawn from this account's invoices first, touching only the
+    // stale ones, so entries never change at an old revision.
+    const stale = this.staleInvoices(owner);
+    if (stale.length) this.mutate(() => { for (const invoice of stale) this.touch(invoice); });
+    const revision = this.row("SELECT revision FROM ra_accounts WHERE owner = ?", owner)?.revision ?? 0;
+    const scope = `account:${owner}`;
+    let before = Number.MAX_SAFE_INTEGER;
+    if (cursor !== null) {
+      const c = readCursor(cursor, "history", scope, this.now(), ttlMs);
+      if (c.error) return c;
+      if (c.revision !== revision) return { error: "resync" };
+      before = c.position;
+    }
+    const rows = this.rows("SELECT invoice, ord, created, handle, expires, lightning, bolt11 FROM ra_invoices WHERE owner = ? AND ord < ? ORDER BY ord DESC LIMIT ?", owner, before, limit + 1);
+    const page = rows.slice(0, limit);
+    // A mapping made without its whole original metadata can't be shown as agreed. Only the page
+    // holding it is closed, until it is reconciled: it is never omitted, and its expiry is never
+    // filled in by a guess. Other pages, and their cursors, are unaffected.
+    if (page.some((r) => !metadataComplete(r))) return { error: "closed" };
+    return {
+      revision,
+      invoices: page.map((r) => {
+        const t = this.totals(r.invoice);
+        return { id: r.invoice, accounting: MODE, createdAt: r.created, handle: r.handle, due: t.due, received: t.received,
+          credited: t.credited, review: t.review, left: t.left, state: t.state, revision: t.revision, expires: r.expires };
+      }),
+      next: rows.length > limit ? makeCursor("history", scope, revision, page.at(-1).ord, this.now()) : null,
+    };
+  }
+
+  // The newest receipts that have been credited, still credited or held for review since, for
+  // a page that connects. Ordered by when each was first observed, its first feed frame, which
+  // never changes, so a late credit or a correction can't push a newer receipt out. Never
+  // animated.
+  recentReceipts(limit) {
+    if (!isPositive(limit)) throw new PolicyRequired("recent receipts size");
+    return this.rows(
+      "SELECT r.id FROM ra_receipts r JOIN ra_feed f ON f.receipt = r.id AND f.revision = 1 " +
+      "WHERE r.first_credited_seq IS NOT NULL AND r.state IN ('credited', 'review') ORDER BY f.seq DESC LIMIT ?",
+      limit,
+    ).map((r) => this.publicReceipt(r.id));
+  }
+
+  // Up to limit feed frames committed after seq, oldest first, as stored; for the object's live
+  // broadcast, which resumes from its own durable mark.
+  feedSince(seq, limit) {
+    if (!isPositive(limit)) throw new PolicyRequired("broadcast batch size");
+    return this.rows("SELECT seq, payload FROM ra_feed WHERE seq > ? ORDER BY seq LIMIT ?", seq, limit)
+      .map((r) => ({ seq: r.seq, frame: JSON.parse(r.payload) }));
+  }
+
+  feedHighWater() {
+    return this.row("SELECT max(seq) AS seq FROM ra_feed").seq ?? 0;
   }
 
   // Receipt and invoiceStatus frames after a cursor, bounded, against the high-water mark taken
@@ -1178,11 +1473,15 @@ export class ReceiptLedger {
   // Truthful health: off with no receipt-mode invoice; review while anything is quarantined;
   // current only when every invoice's latest read applied, was verified complete and is still
   // fresh, and nothing waits; otherwise behind.
+  // Without a configured freshness bound, nothing can be current: behind.
   health() {
-    const bound = this.freshness();
     if (!this.row("SELECT 1 FROM ra_invoices")) return "off";
     if (this.row("SELECT 1 FROM ra_reviews WHERE resolved_at IS NULL") || this.row("SELECT 1 FROM ra_holds WHERE resolved_at IS NULL") ||
         this.row("SELECT 1 FROM ra_receipts WHERE state = 'review'")) return "review";
+    // Mappings without saved read settings or whole metadata wait on an operator's reconciliation.
+    if (!this.readSettings() || this.row(`SELECT 1 FROM ra_invoices WHERE ${INCOMPLETE_METADATA}`)) return "review";
+    const bound = this.freshnessMs;
+    if (bound === null) return "behind";
     const now = this.now();
     const lagging = this.row(
       "SELECT 1 FROM ra_invoices i WHERE verified_complete = 0 OR applied_at IS NULL OR ? - applied_at > ? OR " +
@@ -1408,8 +1707,8 @@ const hex = (bytes) => [...bytes].map((byte) => byte.toString(16).padStart(2, "0
 
 // Opaque to pages: kind, revision, position, issue time and a check binding it to one scope,
 // well under 128 characters. Not a secret: access is checked on every call regardless.
-const KINDS = { receipts: "r", addresses: "a" };
-const CURSOR = /^([ra])\.(\d{1,16})\.(\d{1,16})\.(\d{1,16})\.([0-9a-f]{8})$/;
+const KINDS = { receipts: "r", addresses: "a", history: "h" };
+const CURSOR = /^([rah])\.(\d{1,16})\.(\d{1,16})\.(\d{1,16})\.([0-9a-f]{8})$/;
 
 function scopeCheck(kind, scope) {
   let hash = 0x811c9dc5;

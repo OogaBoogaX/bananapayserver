@@ -31,7 +31,95 @@ verified claims.
   is refused, never defaulted.
 
 **Phase 2, first step:** the no-decay pile is in the runtime ([`worker/pile.mjs`](../worker/pile.mjs));
-see [Cutover anchor](#cutover-anchor). The receipt core is still not called by the Worker.
+see [Cutover anchor](#cutover-anchor).
+
+**Phase 2, second step: the read side is wired.** The object serves `POST /donations/status`,
+`POST /donations/history`, and the socket's `recentReceipts`, receipt replay and marker from
+the receipt core, through `PageApi.status` and `PageApi.history`.
+
+- **Still not built:**
+  - **Issuance:** receipt-mode issuance is off in this build. `accounting: 1` is answered 503
+    `closed` before any provider call, and any other value is 400 `invalid`.
+  - **Provider ingestion:** nothing creates a mapping or reads the provider yet.
+  - **D1 projection:** the projection outbox is never drained, so health is never `current`.
+- **Real outputs:** the endpoint and socket outputs are in the shared fixture's `endpoints`
+  section; see `tests/receipt-contract.test.mjs`.
+  - **What they prove:** the producer's real shapes, statuses and cursors, generated through
+    the actual front door, object and broadcast. They cover:
+    - a status page and its next receipt and address pages;
+    - two history pages reached through the generated cursor;
+    - the cursor, unknown, resync and scoped metadata-closed errors;
+    - the connect sequence and a replay from zero;
+    - a genuine new first credit heard live, `replay: false`, by an already-connected socket.
+
+    Each socket vector is the messages received at a stated point, so no later message can
+    leak in.
+  - **What they don't prove:** provider ingestion, the D1 projection, reconciliation (health is
+    never `current` here), or that any consumer parses them. That needs the consumer's own run
+    against these bytes.
+- **Page bound:** a private page (status receipts, addresses, history) carries at most 100 rows.
+  This is a wire bound agreed with the consumer, not a deployment choice. Read settings above it
+  are refused when saved or adopted, the saved row's checks refuse it too, and the core never
+  cuts a larger page. Each deployment still chooses its own sizes, at or under it.
+- **How it behaves:**
+  - **Read settings are saved, not configured.** The seven read bounds (replay bound, status,
+    address and history page sizes, recent-receipts size, cursor lifetime and freshness) are a
+    reviewed set. The first issuance saves them durably, in the same transaction as the first
+    mapping, so no mapping exists without them. From then on every read uses the saved set.
+    Removing or changing Worker configuration never closes reads, and never changes what is
+    fresh at an unchanged revision. An issuer configured differently from the saved set refuses
+    to issue, rather than drift. No values are chosen in code.
+  - **Original metadata is required.** A new mapping needs its whole original metadata: the
+    expiry in seconds, the Lightning offer, and the code exactly when Lightning was offered.
+    `expires` in a status reply is always a number. Nothing is guessed, and the original target
+    is never used as a remaining amount.
+  - **`lightning` and `bolt11`:** `lightning` is `available`, with the original `bolt11`, only
+    while no receipt has ever been observed and the provider has freshly verified the code. Nothing
+    records that verification yet, so it is `unavailable`, `limit` or `expired`, with `bolt11`
+    null.
+  - **Time-driven changes are committed revisions.** The code's verification ageing out and the
+    invoice's expiry are committed like a stale remaining amount or payable address: a newer
+    revision and an invoiceStatus signal, before any cursor is judged. An unauthorized reader
+    changes nothing.
+  - **The alarm keeps time.** It is due at the earliest of the price check and the next receipt
+    deadline, so an amount-bearing QR is withdrawn on time while pages are open. With none
+    open, the next authorized read commits it.
+  - **`recentReceipts`:** receipts that have been credited, whether still credited or now in
+    review, newest first by when each was first observed. A late credit or a correction never
+    displaces a newer receipt.
+  - **Live frames:**
+    - **Bounded batches:** they go out in batches of the saved replay bound, from a durable
+      mark, and the alarm continues a backlog at once, so nothing loads unbounded and nothing
+      is skipped.
+    - **Never history as live:** a page hears live only frames after the high-water mark
+      captured when it connected. Frames committed while no page is open aren't held for
+      later as live.
+    - **At least once:** a frame may reach a page in its replay and live, and pages deduplicate
+      by revision.
+  - **`status.accounting`** appears only once a receipt-mode mapping exists. Until then the
+    status message is unchanged, and its absence means legacy, as from older Workers.
+  - **Rate limits:** private reads share the per-visitor `RATE_PER_IP` budget, in their own
+    bucket.
+- **Pre-activation rows: explicit operator reconciliation.** A mapping a pre-activation core
+  left without saved read settings, or without whole original metadata, is never filled in by
+  a guess. Until reconciled:
+  - **Missing read settings:** every receipt read is 503 `closed`, since nothing can be paged
+    without them.
+  - **Incomplete metadata:** only the affected reads are 503 `{ "error": "closed" }`, namely
+    that invoice's private status and the one history page that holds it.
+    - The record is kept, and the row is never omitted from its page.
+    - No null, zero or guessed `expires` is ever sent.
+    - Other pages, their cursors, other invoices and the global capabilities are unaffected.
+    - With no status, there is no payable address or amount for that invoice, so no
+      amount-bearing QR.
+  - **Health:** `review`, a signal for the operator rather than a capability switch.
+  - **Access:** still checked first.
+
+  An operator reconciles once, through `adoptReadSettings` or `reconcileInvoiceMetadata`.
+  Neither replaces what is already saved, and nothing in the Worker routes to them.
+- **`expires` is always a number.** The pinned consumer requires it, and nothing here sends
+  any other value. Showing such rows in some other way, rather than closing them until
+  reconciled, would need a coordinated contract change, and none is proposed.
 
 ## Goal
 
@@ -57,7 +145,8 @@ and remove time-based decay.
   fresh. The proposed names are `RECEIPT_REPLAY_MAX`, `STATUS_PAGE_SIZE`,
   `ADDRESS_PAGE_SIZE`, `HISTORY_PAGE_SIZE`, `RECENT_RECEIPTS_SIZE`, `RECONCILE_PER_MINUTE`,
   `CURSOR_TTL_SECONDS` and `READ_FRESHNESS_SECONDS`. Existing legacy constants are not a
-  choice of these values.
+  choice of these values. The read bounds are given to the issuer, and saved durably with the
+  first mapping; reads then use the saved set, never live configuration.
 
 ## Capabilities and accounting mode
 

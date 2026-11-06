@@ -10,7 +10,7 @@ import { cleanHandle } from "../shared/handle.mjs";
 import { parseUp } from "../shared/protocol.mjs";
 import { readLimits, readSettings } from "./config.mjs";
 import { PILE_SCHEMA, pileKnows, pileRevision, pileView, recordPileDelta, recordPileException } from "./pile.mjs";
-import { hashRequest } from "./receipts.mjs";
+import { hashRequest, MODE, ReceiptLedger } from "./receipts.mjs";
 import { relayAuthorized } from "./relay-token.mjs";
 import { BANANA_CENTS, bananasOf, fetchPrice, milliBananas, rateOf } from "./price.mjs";
 
@@ -163,6 +163,72 @@ export class DonationsObject {
     this.rateSending = null;
     this.refreshing = null;
     this.receiving = new Map();
+    // Receipt accounting, read side only. Issuance is off, and nothing about receipts is
+    // configured here: every issued mapping carries its own saved policy, and the read settings
+    // were saved with the first issuance, so reads, history and replay go on whatever startup
+    // configuration says, and removing configuration changes nothing at an unchanged revision.
+    this.receipts = new ReceiptLedger({
+      storage: ctx.storage, now: () => platform.now(), randomHex: () => platform.id(), issuance: false, policy: {},
+    });
+    // Frames committed before this start that pages never heard live are sent on the next push;
+    // a first start begins at the current mark, so history is never broadcast as live.
+    if (!this.sql.exec("SELECT 1 FROM meta WHERE key = 'receipt_broadcast'").toArray().length) {
+      this.sql.exec("INSERT INTO meta (key, value) VALUES ('receipt_broadcast', ?)", this.receipts.feedHighWater());
+    }
+    this.receiptBacklog = false;
+    this.capability = JSON.stringify(this.accountingCapability());
+  }
+
+  // What the status message says about receipt accounting. Issuance is always off in this
+  // build. Reads are available once a receipt-mode mapping exists with its saved read settings;
+  // health is the core's own, never claimed current.
+  accountingCapability() {
+    const readable = this.receiptsReadable();
+    return { version: 1, issuance: false, receipts: readable, history: readable, coverage: "invoice", spends: false,
+      reconciliation: this.receipts.health() };
+  }
+
+  receiptsReadable() {
+    return this.receipts.hasMappings() && this.receipts.readSettings() !== null;
+  }
+
+  // Sends committed feed frames pages haven't heard live, in order, one bounded batch at a
+  // time from a durable mark, so a long backlog never loads at once and nothing is skipped: a
+  // full batch asks the alarm to continue at once. With no page connected there is nobody to
+  // tell; the mark moves to the high-water point, and pages that connect later get recent
+  // receipts and the marker instead. At least once: a frame may also reach a page in its replay,
+  // and pages deduplicate by revision. A capability change sends a new status.
+  pushReceiptFrames() {
+    const settings = this.receipts.readSettings();
+    const last = this.sql.exec("SELECT value FROM meta WHERE key = 'receipt_broadcast'").one().value;
+    if (settings && this.ctx.getWebSockets("page").length > 0) {
+      const frames = this.receipts.feedSince(last, settings.replayMax);
+      // A page hears live only frames after the high-water mark its own connect captured;
+      // anything at or below it was its snapshot or replay, and never arrives as live.
+      const pages = this.ctx.getWebSockets("page");
+      for (const { seq, frame } of frames) {
+        const text = JSON.stringify({ ...frame, replay: false });
+        for (const ws of pages) {
+          if ((ws.deserializeAttachment()?.through ?? -1) >= seq) continue;
+          try {
+            ws.send(text);
+          } catch {
+            // A page that's going away misses nothing it can use.
+          }
+        }
+      }
+      if (frames.length) this.sql.exec("UPDATE meta SET value = ? WHERE key = 'receipt_broadcast'", frames.at(-1).seq);
+      this.receiptBacklog = frames.length === settings.replayMax && this.receipts.feedHighWater() > frames.at(-1).seq;
+    } else {
+      this.sql.exec("UPDATE meta SET value = ? WHERE key = 'receipt_broadcast'", Math.max(last, this.receipts.feedHighWater()));
+      this.receiptBacklog = false;
+    }
+    if (this.receiptBacklog) this.ctx.waitUntil(this.ctx.storage.setAlarm(this.platform.now()));
+    const capability = JSON.stringify(this.accountingCapability());
+    if (capability !== this.capability) {
+      this.capability = capability;
+      this.broadcast(this.statusMessage(this.line() !== null));
+    }
   }
 
   migrate() {
@@ -188,6 +254,10 @@ export class DonationsObject {
         return this.note(await request.json());
       case "/onchain":
         return this.onchain(await request.json());
+      case "/status":
+        return this.status(await request.json());
+      case "/history":
+        return this.history(await request.json());
       case "/page":
         return this.page(request, url);
       case "/relay":
@@ -202,7 +272,10 @@ export class DonationsObject {
   // github is the signed-in donor, { id, login }, or null for an anonymous donation. The front
   // door has already checked everything; the text is cleaned again here because every page shows
   // it, and another Worker in the account could reach this object without the front door.
-  async invoice({ sats, handle, message, github, client }) {
+  async invoice({ sats, handle, message, github, client, accounting }) {
+    // Receipt-mode issuance is off in this build. An explicit request for it is closed, before
+    // any provider call, and never quietly downgraded to legacy.
+    if (accounting !== undefined) return closed();
     const limits = readLimits(this.env);
     const { network, invoiceTimeoutMs } = readSettings(this.env);
     if (!limits || !network) return closed();
@@ -320,7 +393,9 @@ export class DonationsObject {
     const group = visitorGroup(visitor);
     if (this.ctx.getWebSockets(group).length >= limits.socketsPerIp) return busy();
     const [client, server] = this.platform.pair();
-    server.serializeAttachment({ role: "page" });
+    // From the moment it is accepted, a page hears live only frames committed after now; any
+    // older backlog still being broadcast is never presented to it as live.
+    server.serializeAttachment({ role: "page", through: this.receipts.feedHighWater() });
     this.ctx.acceptWebSocket(server, ["page", group]);
     server.send(JSON.stringify(this.statusMessage(this.line() !== null)));
     server.send(JSON.stringify(this.pileMessage()));
@@ -335,11 +410,68 @@ export class DonationsObject {
     if (recent) server.send(JSON.stringify(recent));
     const after = url.searchParams.get("after");
     if (after && INVOICE_ID.test(after)) await this.replay(server, after, limits.messageMinSats);
+    if (this.receiptsReadable()) this.receiptReplay(server, url.searchParams.get("receipts"));
     // A page never waits for a price. One older than five minutes is refreshed once the page
     // has what's known, and the alarm keeps it fresh while pages stay.
     this.ctx.waitUntil(this.freshenRate());
     await this.scheduleFreshening();
     return this.platform.upgrade(client);
+  }
+
+  // On every connect while receipt reads are available: the newest credited receipts, then any
+  // receipt and invoiceStatus frames after the page's cursor, then the marker with the
+  // high-water mark taken here. All of it synchronously, so every frame committed later reaches
+  // this page live, after the marker. Nothing here animates: replayed frames say replay: true,
+  // and a cursor too far behind gets no frames and complete: false, to resync.
+  receiptReplay(ws, cursor) {
+    const settings = this.receipts.readSettings();
+    ws.send(JSON.stringify({ type: "recentReceipts", entries: this.receipts.recentReceipts(settings.recentSize) }));
+    const replay = this.receipts.feedAfter(cursor === null ? null : Number(cursor), { limit: settings.replayMax });
+    for (const frame of replay.frames ?? []) ws.send(JSON.stringify(frame));
+    ws.send(JSON.stringify({ type: "replay", after: replay.after ?? null, through: replay.through ?? null, complete: replay.complete ?? false }));
+    // Remembered with the socket, so it survives hibernation: live frames start after this mark.
+    ws.serializeAttachment({ ...ws.deserializeAttachment(), through: replay.through ?? 0 });
+  }
+
+  // POST /donations/status: one invoice's private status, by its bearer request token or by
+  // its signed-in owner's stable id, never by handle. A reader without access gets the same 404
+  // as an unknown invoice, and changes nothing.
+  async status({ request, invoice, cursor = null, addressCursor = null, donor = null, client }) {
+    const limits = readLimits(this.env);
+    if (!limits) return closed();
+    if (!this.allow("read", client, limits)) return busy();
+    if (!this.receiptsReadable()) return closed();
+    let id = null;
+    let access;
+    if (request !== undefined) {
+      const requestHash = await hashRequest(request);
+      id = this.receipts.invoiceForRequest(requestHash);
+      access = { requestHash };
+    } else {
+      id = invoice;
+      access = { donorId: donor?.id ?? null };
+    }
+    if (!id || !this.receipts.canRead(id, access)) return json({ error: "unknown" }, 404);
+    const s = this.receipts.readSettings();
+    const result = this.receipts.statusReply(id, { ...access, cursor, addressCursor,
+      receiptLimit: s.statusPageSize, addressLimit: s.addressPageSize, ttlMs: s.cursorTtlMs });
+    this.pushReceiptFrames();
+    await this.scheduleFreshening();
+    return readReply(result);
+  }
+
+  // POST /donations/history: the signed-in account's own receipt-mode invoices, by stable id.
+  async history({ cursor = null, donor = null, client }) {
+    const limits = readLimits(this.env);
+    if (!limits) return closed();
+    if (!this.allow("read", client, limits)) return busy();
+    if (!this.receiptsReadable()) return closed();
+    if (!donor) return json({ error: "signin" }, 401);
+    const s = this.receipts.readSettings();
+    const result = this.receipts.accountHistory(donor.id, { cursor, limit: s.historyPageSize, ttlMs: s.cursorTtlMs });
+    this.pushReceiptFrames();
+    await this.scheduleFreshening();
+    return readReply(result);
   }
 
   // A page that reconnects names the last donation it saw and gets anything newer. A donation
@@ -431,6 +563,8 @@ export class DonationsObject {
   // so whichever notice gets there first does it, and a resent one finishes what a stopped
   // object didn't.
   async paid({ invoice, sats, method }) {
+    // A legacy notice never credits a receipt-mode invoice, nor makes it a donation.
+    if (this.receipts.modeOf(invoice) === MODE) return "rejected";
     let [row] = this.sql.exec(
       "SELECT * FROM pending WHERE invoice = ?",
       invoice,
@@ -492,6 +626,8 @@ export class DonationsObject {
   // Freeze when BTCPay first reports the whole amount, including any required network fee.
   // Partial receipts don't fix a price or credit the pile. Confirmation only credits the snapshot.
   async seen({ invoice, sats, left }) {
+    // A receipt-mode invoice never emits a legacy seen.
+    if (this.receipts.modeOf(invoice) === MODE) return;
     let [row] = this.sql.exec("SELECT * FROM pending WHERE invoice = ?", invoice).toArray();
     if (!row) return;
     if (left === 0) row = await this.freezePrice(invoice);
@@ -769,19 +905,24 @@ export class DonationsObject {
 
   // The object has one alarm, and this is all it's used for. Set when a page connects and none
   // is due.
+  // Brought forward when something is due sooner, such as a receipt deadline.
   async scheduleFreshening() {
-    if ((await this.ctx.storage.getAlarm()) === null) {
-      await this.ctx.storage.setAlarm(this.freshenAt());
-    }
+    const current = await this.ctx.storage.getAlarm();
+    const due = this.freshenAt();
+    if (current === null || due < current) await this.ctx.storage.setAlarm(due);
   }
 
   // When the price turns five minutes old, or five minutes from now if it already has, as when
-  // the service isn't answering.
+  // the service isn't answering; sooner when a receipt-mode invoice's remaining amount, payable
+  // address, code verification or expiry is due to change, so an amount-bearing QR is withdrawn
+  // on time, not at the next price check.
   freshenAt() {
     const now = this.platform.now();
     const [last] = this.sql.exec("SELECT at FROM price").toArray();
     const due = last ? last.at + PRICE_FRESH_MS : 0;
-    return due > now ? due : now + PRICE_FRESH_MS;
+    const price = due > now ? due : now + PRICE_FRESH_MS;
+    const receipt = this.receiptsReadable() ? this.receipts.nextDeadline() : null;
+    return receipt === null ? price : Math.min(price, Math.max(receipt, now));
   }
 
   // While pages are open, the price beside the tally is never much more than five minutes old.
@@ -790,9 +931,15 @@ export class DonationsObject {
   async alarm() {
     if (this.ctx.getWebSockets("page").length === 0) return;
     try {
+      // What time alone withdrew from receipt-mode invoices goes out while pages are open.
+      if (this.receiptsReadable()) {
+        this.receipts.refreshFreshness();
+        this.pushReceiptFrames();
+      }
       await this.freshenRate();
     } finally {
-      await this.ctx.storage.setAlarm(this.freshenAt());
+      // A broadcast backlog continues at once; otherwise the next price check or receipt deadline.
+      await this.ctx.storage.setAlarm(this.receiptBacklog ? this.platform.now() : this.freshenAt());
     }
   }
 
@@ -809,10 +956,14 @@ export class DonationsObject {
   }
 
   // Whether donations are open, and on which network, so a page can label test donations.
+  // `accounting` appears only once a receipt-mode mapping exists. Until then there is no
+  // receipt service to describe, and its absence means legacy, as it does from older Workers.
   statusMessage(open) {
     const limits = readLimits(this.env);
-    return { type: "status", open, network: readSettings(this.env).network,
+    const message = { type: "status", open, network: readSettings(this.env).network,
       limits: limits ? { minSats: limits.minSats, maxSats: limits.maxSats, lightningMaxSats: limits.lightningMaxSats, messageMinSats: limits.messageMinSats } : null };
+    if (this.receipts.hasMappings()) message.accounting = this.accountingCapability();
+    return message;
   }
 
   line(excluding = null) {
@@ -917,6 +1068,10 @@ const json = (body, status = 200) =>
 
 const closed = () => json({ error: "closed" }, 503);
 const busy = () => json({ error: "busy" }, 429);
+
+// A private read's answer: the core's errors as their agreed statuses, otherwise the reply.
+const READ_ERRORS = { unknown: 404, cursor: 400, resync: 409, closed: 503 };
+const readReply = (result) => (result.error ? json({ error: result.error }, READ_ERRORS[result.error] ?? 400) : json(result));
 
 // What a page shows of a rate: the price and whether it's stale, not when it was fetched. A
 // tally goes out again only when this changes.

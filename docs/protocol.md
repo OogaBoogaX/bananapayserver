@@ -43,6 +43,8 @@ internet can't. Staging binds to `bananapayserver-staging` and production to
 | `POST /donations/invoice` | `invoice(request, donor, visitor)` | the `Response`, as it is |
 | `POST /donations/note` | `note(request, visitor)` | the `Response`, as it is |
 | `POST /donations/onchain` | `onchain(request, visitor)` | the `Response`, as it is |
+| `POST /donations/status` | `status(request, donor, visitor)` | the `Response`, as it is; receipt mode only, see [`receipt-accounting-v1.md`](receipt-accounting-v1.md#private-status-post-donationsstatus) |
+| `POST /donations/history` | `history(request, donor, visitor)` | the `Response`, as it is; receipt mode only, see [`receipt-accounting-v1.md`](receipt-accounting-v1.md#private-history-post-donationshistory) |
 | `GET /donations/socket` | `fetch(request)` | the socket's upgrade |
 
 - **`request`** is a new request carrying only the page's body and its `Content-Type`, never
@@ -70,6 +72,11 @@ except the sign-in.
 ```json
 { "sats": 10000, "handle": "ooga-dev", "message": "for the cave" }
 ```
+
+An optional `"accounting": 1` asks for a receipt-mode invoice. Issuance is off in this build,
+so it is answered 503 `closed` before the provider is asked for anything, and is never
+downgraded to legacy. Any other value is 400 `invalid`. Without it, the invoice is legacy,
+exactly as below.
 
 `handle` and `message` are optional editable display text, available with or without sign-in.
 The Worker sanitizes them with OBL's rules: at most 39 and 280 characters, respectively.
@@ -181,7 +188,14 @@ network fee. Build the payment URI from these two. There is no BTCPay link.
 
 A WebSocket. The page sends nothing on it; a page that does is closed with code 1008. When it
 connects, it receives the status, the pile, the leaderboard and the tally, then anything it
-missed. After that:
+missed.
+
+While receipt-mode reads are available, the page also gets, on every connect:
+- `recentReceipts`;
+- any receipt and invoiceStatus frames after the optional `receipts=<seq>` cursor;
+- the `replay` marker.
+
+See [`receipt-accounting-v1.md`](receipt-accounting-v1.md#connecting-and-replay). After that:
 
 - `{ "type": "status", "open": true, "network": "signet" }` whenever the relay's line opens or
   closes, so the page can say donations are closed before anyone tries. `network` is the

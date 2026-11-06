@@ -323,7 +323,13 @@ test("the archive survives restarts and retention purges, and a retry never over
   ]);
   const after = archive();
   assert.deepEqual(after.filter((r) => r.request_hash === first[0].request_hash), first, "the original is never overwritten");
-  assert.deepEqual(after.filter((r) => r.request_hash !== first[0].request_hash).map((r) => r.handle), ["racing-a"], "racers write once");
+  // Which racer's hash resolves first isn't fixed, so either may win; exactly one is archived,
+  // and the loser never overwrites it.
+  const raced = after.filter((r) => r.request_hash !== first[0].request_hash);
+  assert.equal(raced.length, 1, "racers write once");
+  assert.ok(["racing-a", "racing-b"].includes(raced[0].handle));
+  await object.quarantine("CollideAA1", { ...row, handle: "late-retry" }, "unproven-existing-donation");
+  assert.deepEqual(archive().filter((r) => r.request_hash !== first[0].request_hash), raced, "a later retry changes nothing");
   assert.equal(w.ctx.storage.sql.exec("SELECT count(*) AS n FROM pile_exceptions").one().n, 1);
   assert.equal(deltas(w).length, 0);
 });

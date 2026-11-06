@@ -77,12 +77,19 @@ const ADDR = (n) => segwit("bcrt", 0, Array(20).fill(n));
 
 const T0 = 1_790_000_000_000;
 
+// The reviewed read settings a test issuer saves with its first mapping; test values only.
+const READ = { replayMax: 10_000, statusPageSize: 2, addressPageSize: 2, historyPageSize: 2, recentSize: 10, cursorTtlMs: 600_000 };
+// The original invoice as the provider made it, required for every new mapping.
+const META = { expires: Math.floor(T0 / 1000) + 900, lightning: "unavailable", bolt11: null };
+const BOLT11_VALUE = `lnbcrt10u1${"q".repeat(120)}`;
+
 function setup({ policy = POLICY, storage = fakeStorage(), failpoint, freshnessMs = FRESH } = {}) {
   const time = { now: T0 };
   let n = 0;
   const make = (overrides = {}) => new ReceiptLedger({
     storage, now: () => time.now, randomHex: () => (++n).toString(16).padStart(32, "0"),
-    issuance: true, policy: { ...REVIEWED, ...policy }, failpoint, freshnessMs, ...overrides,
+    issuance: true, policy: { ...REVIEWED, ...policy }, failpoint,
+    readSettings: freshnessMs === null ? null : { ...READ, freshnessMs }, ...overrides,
   });
   return { ledger: make(), storage, time, make };
 }
@@ -93,7 +100,7 @@ async function issue(ledger, overrides = {}) {
   const result = ledger.issueInvoice({
     invoice, network: "regtest", provider: "btcpay", store: "store-a", owner: 4242, login: "ooga-dev",
     handle: "ooga-dev", message: "for the cave", messageMinSats: 1000, due: 10_000,
-    requestHash: await hashRequest(`request-${invoice}`), ...overrides,
+    requestHash: await hashRequest(`request-${invoice}`), ...META, ...overrides,
   });
   assert.equal(result.error, undefined, `issued ${invoice}`);
   return invoice;
@@ -140,7 +147,7 @@ const pick = ({ received, credited, review, left, state }) => ({ received, credi
 test("the schema lives in its own tables, migrates once and survives a restart", () => {
   const { storage, make } = setup();
   make();
-  assert.equal(storage.sql.exec("SELECT value FROM meta WHERE key = 'receipt_schema'").one().value, 3);
+  assert.equal(storage.sql.exec("SELECT value FROM meta WHERE key = 'receipt_schema'").one().value, 5);
   assert.equal(storage.sql.exec("SELECT count(*) AS n FROM sqlite_master WHERE name = 'pending' OR name = 'donations'").one().n, 0);
   make();
 });
@@ -149,7 +156,7 @@ test("issuance saves a permanent receipt-mode record; legacy and reused ids are 
   const { ledger } = setup();
   ledger.fenceLegacyInvoice("LEGACY0001", "donations");
   assert.equal(ledger.modeOf("LEGACY0001"), "legacy");
-  const base = { network: "regtest", provider: "btcpay", store: "store-a", handle: "x", messageMinSats: 1000, due: 100 };
+  const base = { network: "regtest", provider: "btcpay", store: "store-a", handle: "x", messageMinSats: 1000, due: 100, ...META };
   assert.equal(ledger.issueInvoice({ ...base, invoice: "LEGACY0001", requestHash: await hashRequest("legacy") }).error, "fenced");
   const invoice = await issue(ledger);
   assert.equal(ledger.issueInvoice({ ...base, invoice, requestHash: await hashRequest("other") }).error, "fenced");
@@ -161,7 +168,7 @@ test("issuance saves a permanent receipt-mode record; legacy and reused ids are 
 
 test("owner and login are validated together at the boundary", async () => {
   const { ledger } = setup();
-  const base = { invoice: "OWNERTEST1", network: "regtest", provider: "btcpay", store: "store-a", handle: "x", messageMinSats: 1000, due: 100, requestHash: await hashRequest("owner") };
+  const base = { invoice: "OWNERTEST1", network: "regtest", provider: "btcpay", store: "store-a", handle: "x", messageMinSats: 1000, due: 100, requestHash: await hashRequest("owner"), ...META };
   for (const bad of [
     { owner: 0, login: "ooga-dev" }, { owner: -1, login: "ooga-dev" }, { owner: 1.5, login: "ooga-dev" },
     { owner: Number.MAX_SAFE_INTEGER + 1, login: "ooga-dev" }, { owner: "4242", login: "ooga-dev" },
@@ -658,7 +665,7 @@ test("an interrupted lookup is recovered by the rule its invoice was issued unde
   // And the other way round.
   const frozen = await make({ policy: { ...POLICY, pricingRecovery: "stale-candidate" } }).issueInvoice({
     invoice: "STALERULE1", network: "regtest", provider: "btcpay", store: "store-a", owner: null, login: null,
-    handle: "x", messageMinSats: 1000, due: 10_000, requestHash: await hashRequest("stale-rule"),
+    handle: "x", messageMinSats: 1000, due: 10_000, requestHash: await hashRequest("stale-rule"), ...META,
   });
   assert.equal(frozen.invoice, "STALERULE1");
   await restarted.bindAddress("STALERULE1", ADDR(2));
@@ -740,8 +747,15 @@ test("unsettled policy and configuration are never defaulted", async () => {
   }
   assert.equal(make({ issuance: undefined }).issueInvoice({ ...base, invoice: "UNSETTLED1", requestHash: "a".repeat(64) }).error, "closed");
   assert.equal(ledger.modeOf("UNSETTLED1"), null);
+  // No mapping can exist without the reviewed read settings, and no original metadata is guessed.
   const unbounded = setup({ freshnessMs: null }).ledger;
-  assert.throws(() => unbounded.health(), PolicyRequired);
+  await assert.rejects(issue(unbounded), PolicyRequired);
+  assert.equal(unbounded.health(), "off");
+  for (const meta of [{ expires: null }, { expires: 0 }, { lightning: null }, { lightning: "maybe" },
+    { lightning: "available", bolt11: null }, { lightning: "unavailable", bolt11: BOLT11_VALUE }, { lightning: "limit", bolt11: BOLT11_VALUE }]) {
+    assert.equal(ledger.issueInvoice({ ...base, ...META, ...meta, invoice: "NOMETA0001", requestHash: "c".repeat(64) }).error, "invalid", JSON.stringify(meta));
+  }
+  assert.equal(ledger.modeOf("NOMETA0001"), null);
   assert.throws(() => ledger.feedAfter(0, {}), PolicyRequired);
   assert.throws(() => ledger.privateStatus(invoice, { donorId: 4242 }), PolicyRequired);
   assert.throws(() => ledger.recoverPricing("r1", "guess"), /takes no policy/);

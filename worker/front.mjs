@@ -33,6 +33,9 @@ export const pageApi = (env) => ({
   invoice: (request, donor, visitor) => invoice(request, env, donor, visitorOf(visitor)),
   note: (request, visitor) => note(request, env, visitorOf(visitor)),
   onchain: (request, visitor) => onchain(request, env, visitorOf(visitor)),
+  // Private receipt-mode reads. `donor` is the signed-in account, or null, exactly as for invoice.
+  status: (request, donor, visitor) => status(request, env, donor, visitorOf(visitor)),
+  history: (request, donor, visitor) => history(request, env, donor, visitorOf(visitor)),
   // The socket's upgrade, with the visitor's address in X-Client.
   fetch: (request) => socket(request, env),
 });
@@ -41,8 +44,13 @@ export const pageApi = (env) => ({
 // Older clients can still omit it or give anonymously.
 async function invoice(request, env, donor, visitor) {
   if (!isDonor(donor) || !visitor) return reply({ error: "invalid" }, 400);
-  const body = await readBody(request, ["sats", "handle", "message", "anon"], ["sats"]);
+  const body = await readBody(request, ["sats", "handle", "message", "anon", "accounting"], ["sats"]);
   if (body.error) return reply({ error: body.error }, body.status);
+  // Receipt mode: only exactly 1 is a request for it, and issuance is off in this build, so it
+  // is closed at once, before the provider is asked for anything. It is never downgraded.
+  if (Object.hasOwn(body.value, "accounting")) {
+    return body.value.accounting === 1 ? reply({ error: "closed" }, 503) : reply({ error: "invalid" }, 400);
+  }
   const limits = readLimits(env);
   if (!limits || !readSettings(env).network) return reply({ error: "closed" }, 503);
   const { sats, anon = false } = body.value;
@@ -76,15 +84,54 @@ async function onchain(request, env, visitor) {
   return toObject(env, "/onchain", { request: body.value.request, client: visitor });
 }
 
+// POST /donations/status: exactly one of a bearer request token or an invoice id the signed-in
+// donor owns, plus optional receipt and address cursors.
+async function status(request, env, donor, visitor) {
+  if (!isDonor(donor) || !visitor) return reply({ error: "invalid" }, 400);
+  const body = await readBody(request, ["request", "invoice", "cursor", "addressCursor"], []);
+  if (body.error) return reply({ error: body.error }, body.status);
+  const value = body.value;
+  const byRequest = Object.hasOwn(value, "request"), byInvoice = Object.hasOwn(value, "invoice");
+  if (byRequest === byInvoice) return reply({ error: "invalid" }, 400);
+  if (byRequest && !isRequest(value.request)) return reply({ error: "invalid" }, 400);
+  if (byInvoice && !(typeof value.invoice === "string" && INVOICE_ID.test(value.invoice))) return reply({ error: "invalid" }, 400);
+  for (const key of ["cursor", "addressCursor"]) {
+    if (Object.hasOwn(value, key) && !isCursor(value[key])) return reply({ error: "cursor" }, 400);
+  }
+  return toObject(env, "/status", {
+    ...(byRequest ? { request: value.request } : { invoice: value.invoice }),
+    cursor: value.cursor ?? null, addressCursor: value.addressCursor ?? null,
+    donor: donor === null ? null : { id: donor.id, login: donor.login }, client: visitor,
+  });
+}
+
+// POST /donations/history: the signed-in donor's own receipt-mode invoices. Signed out is 401.
+async function history(request, env, donor, visitor) {
+  if (!isDonor(donor) || !visitor) return reply({ error: "invalid" }, 400);
+  const body = await readBody(request, ["cursor"], []);
+  if (body.error) return reply({ error: body.error }, body.status);
+  if (Object.hasOwn(body.value, "cursor") && !isCursor(body.value.cursor)) return reply({ error: "cursor" }, 400);
+  return toObject(env, "/history", {
+    cursor: body.value.cursor ?? null, donor: donor === null ? null : { id: donor.id, login: donor.login }, client: visitor,
+  });
+}
+
+// An opaque cursor is a short string; its meaning is checked where it was made.
+const isCursor = (value) => typeof value === "string" && value.length > 0 && value.length <= 128;
+
 function socket(request, env) {
   const url = new URL(request.url);
   if (url.pathname !== "/donations/socket") return reply({ error: "not found" }, 404);
   if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") return reply({ error: "upgrade" }, 426);
   const after = url.searchParams.get("after");
+  const receipts = url.searchParams.get("receipts");
   const visitor = visitorOf(request.headers.get("X-Client"));
-  if ((after !== null && !INVOICE_ID.test(after)) || !visitor) return reply({ error: "invalid" }, 400);
+  if ((after !== null && !INVOICE_ID.test(after)) || (receipts !== null && !/^\d{1,15}$/.test(receipts)) || !visitor) {
+    return reply({ error: "invalid" }, 400);
+  }
   const target = new URL("https://object/page");
   if (after) target.searchParams.set("after", after);
+  if (receipts !== null) target.searchParams.set("receipts", receipts);
   return stub(env).fetch(target, { headers: forwarded(request, visitor) });
 }
 

@@ -3,15 +3,17 @@
 // byte for byte what these produce; scripts/receipt-vectors.mjs writes it after a reviewed
 // change. Pages consume the same committed bytes.
 //
-// Core-only: these are what worker/receipts.mjs and worker/pile.mjs emit. The endpoint
-// wrappers (accounting, expires, lightning, the guarded bolt11), account history and the
-// socket's connect sequence aren't built yet, and nothing here stands in for them.
+// Two sections. `vectors` is core-only: what worker/receipts.mjs and worker/pile.mjs emit,
+// labeled as such. `endpoints` is what the read endpoints and the socket actually send through
+// the front door and object.
 
 import { fakeCtx, fakeD1, fakePlatform, fakeStorage } from "./cloudflare.mjs";
 import { syntheticAddress } from "./synthetic-address.mjs";
 import { DonationsObject } from "../../worker/object.mjs";
 import { applyPileAnchor, pileView, recordPileDelta } from "../../worker/pile.mjs";
 import { hashRequest, ReceiptLedger } from "../../worker/receipts.mjs";
+import { pay, provider, read, RECEIPT_SETTINGS, seed, TOKEN } from "./receipt-seed.mjs";
+import { world } from "./world.mjs";
 
 export const FIXTURE = new URL("../fixtures/receipt-accounting-v1.json", import.meta.url);
 
@@ -30,11 +32,12 @@ async function receiptVectors() {
   const ledger = new ReceiptLedger({
     storage: fakeStorage(), now: () => time.now, randomHex: () => (++n).toString(16).padStart(32, "0"), issuance: true,
     policy: { editWindow: "first-observation", messageRule: "once", pricingRecovery: "stale-candidate", confirmationPolicy: CONFIRMATIONS, version: "synthetic-policy-1" },
-    freshnessMs: 60_000,
+    readSettings: { replayMax: 100, statusPageSize: 1, addressPageSize: 2, historyPageSize: 2, recentSize: 10, cursorTtlMs: 600_000, freshnessMs: 60_000 },
   });
   ledger.issueInvoice({
     invoice: INVOICE, network: "regtest", provider: PROVIDER, store: STORE, owner: 4242, login: "ooga-dev",
     handle: "ooga-dev", message: "for the cave", messageMinSats: 1000, due: 10_000, requestHash: await hashRequest("synthetic-request"),
+    expires: Math.floor(T0 / 1000) + 900, lightning: "unavailable", bolt11: null,
   });
   for (const k of [1, 2, 3]) await ledger.bindAddress(INVOICE, syntheticAddress(k));
   const payment = (state) => ({
@@ -105,14 +108,89 @@ function pileVectors() {
   return { "pile.pending": pending, "pile.anchored": anchored, "pile.anchoredReview": pileView(sql) };
 }
 
+// What the read endpoints and the socket actually send, through the real front door and
+// object, for synthetic receipt-mode mappings. Issuance is off, so mappings are seeded through
+// the core, as provider ingestion would make them. Every snapshot of a socket is taken by
+// message count at a stated point, so a later call can never leak into it.
+async function endpointVectors() {
+  const w = await world(RECEIPT_SETTINGS);
+  const ledger = provider(w);
+  // The owner's three invoices, so history has two pages; the first holds the payments.
+  await seed(w, ledger, { invoice: "ReceiptInv3", token: TOKEN(0xa3), addresses: [7] });
+  await seed(w, ledger, { invoice: "ReceiptInv2", token: TOKEN(0xa2), addresses: [6] });
+  const { invoice, token } = await seed(w, ledger);
+  read(w, ledger, invoice, [pay(1), pay(2), pay(3)], { left: 7000 });
+  w.object.pushReceiptFrames();
+  const call = async (path, body, donor = null) => {
+    const response = await w.post(path, body, { donor });
+    return { status: response.status, body: await response.json() };
+  };
+  const owner = { id: 4242, login: "ooga-dev" };
+  const status = await call("/donations/status", { request: token });
+  const receiptPage = await call("/donations/status", { request: token, cursor: status.body.next });
+  const addressPage = await call("/donations/status", { request: token, addressCursor: status.body.nextAddress });
+  const unknown = await call("/donations/status", { invoice }, { id: 9999, login: "someone-else" });
+  const crossKind = await call("/donations/status", { request: token, cursor: status.body.nextAddress });
+  const historyPage = await call("/donations/history", {}, owner);
+  const historyNext = await call("/donations/history", { cursor: historyPage.body.next }, owner);
+  const receiptTypes = new Set(["recentReceipts", "receipt", "invoiceStatus", "replay"]);
+  // Each connect's messages, up to and including its replay marker.
+  const connected = await w.connectPage();
+  // The connect's own background work (the rate refresh) finishes first, so the live slice
+  // below holds only what the new payment caused.
+  await w.ctx.settle();
+  const connectCount = connected.messages().length;
+  const firstConnect = connected.messages().filter((m) => receiptTypes.has(m.type) || m.type === "status");
+  const replayed = await w.connectPage(undefined, "visitor-q", 0);
+  const replayFromZero = replayed.messages().filter((m) => receiptTypes.has(m.type));
+  // A new payment, first observed and credited while the first socket is open: exactly what
+  // that socket hears live, as the object broadcasts it.
+  read(w, ledger, invoice, [pay(1), pay(2), pay(3), pay(4)], { left: 6000 });
+  w.object.pushReceiptFrames();
+  const liveFirstCredit = connected.messages().slice(connectCount);
+  // A new binding moves the invoice's revision, so the earlier receipt cursor is stale.
+  await ledger.bindAddress(invoice, syntheticAddress(9));
+  const resync = await call("/donations/status", { request: token, cursor: status.body.next });
+  // Another account's invoice left by a pre-activation core without its expiry: closed for
+  // that invoice and its own history page alone.
+  const broken = await seed(w, ledger, { invoice: "BrokenInv01", token: TOKEN(0xbb), owner: 5150, login: "other-donor", addresses: [8] });
+  w.ctx.storage.sql.exec("UPDATE ra_invoices SET expires = NULL WHERE invoice = ?", broken.invoice);
+  return {
+    "status.byToken": status,
+    "status.addressPage": addressPage,
+    "status.unknown": unknown,
+    "status.cursor": crossKind,
+    "status.resync": resync,
+    "history.page": historyPage,
+    "history.signedOut": await call("/donations/history", {}, null),
+    "invoice.receiptModeClosed": await call("/donations/invoice", { sats: 1000, accounting: 1 }),
+    "socket.firstConnect": firstConnect,
+    "socket.replayFromZero": replayFromZero,
+    "status.receiptPage": receiptPage,
+    "history.nextPage": historyNext,
+    "socket.liveFirstCredit": liveFirstCredit,
+    "status.metadataClosed": await call("/donations/status", { request: broken.token }),
+    "history.metadataClosed": await call("/donations/history", {}, { id: 5150, login: "other-donor" }),
+  };
+}
+
 export async function buildVectors() {
   return {
     contract: "receipt-accounting-v1",
     scope: "core-only",
-    note: "Emitted by worker/receipts.mjs and worker/pile.mjs from a synthetic scenario. Not endpoint replies: " +
-      "the endpoint wrappers, account history and the socket's connect sequence are not built yet. Feed frames " +
-      "are shown as replayed (replay: true); live frames carry replay: false.",
+    note: "Emitted by worker/receipts.mjs and worker/pile.mjs from a synthetic scenario. Core output, not endpoint " +
+      "replies: those are under endpoints. Feed frames are shown as replayed (replay: true); live frames carry replay: false.",
     vectors: { ...(await receiptVectors()), ...pileVectors() },
+    endpoints: {
+      scope: "read-endpoints",
+      note: "What POST /donations/status, POST /donations/history, POST /donations/invoice with accounting: 1, the " +
+        "socket's connect sequence and its live broadcast send, through the real front door and object, for synthetic " +
+        "receipt-mode mappings seeded through the core. Each reply is { status, body }; socket vectors are the messages " +
+        "received at the stated point. Proves the producer's real shapes, cursors, statuses and live/replay framing. Does " +
+        "not prove provider ingestion, D1 projection, reconciliation (health is never current here) or any consumer's " +
+        "parsing. Issuance is off.",
+      vectors: await endpointVectors(),
+    },
   };
 }
 
