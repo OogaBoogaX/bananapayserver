@@ -356,3 +356,26 @@ What the relay does with it:
 - Once a minute, the relay checks every open invoice of its own, which catches any webhook
   that never arrived. After a restart, it finds its invoices from the last day again, every
   page of BTCPay's list, late-paid ones included.
+
+### Private host pile snapshot
+
+`PageApi.pileSnapshot()` is a service-binding RPC for OBL's authoritative
+host. It accepts no arguments and returns only
+`{ v: 1, type: "pile", bananas, at, eatPerHour }`, using the same pile
+calculation as the page socket. `at` is the calculation timestamp in
+milliseconds; `bananas` is the absolute level at that timestamp. Consumers
+replace an older snapshot; they must not add this level as a donation.
+
+This adds no public HTTP route and no WebSocket. It needs no visitor identity
+and must not be exposed as a proxy for arbitrary browser calls. Existing
+invoice, note, on-chain and socket visitor validation remains unchanged.
+No donor, invoice, relay, node or pricing data is returned, and the read does
+not query D1 or write the pile, including when it has never been initialized.
+Existing Durable Object schema initialization still occurs on object startup.
+The caller controls a bounded refresh cadence and finite run lifetime; this
+method starts no timer, subscription, relay operation or alarm. Failure keeps
+the caller's last accepted snapshot and is never a zero-level update.
+
+This local companion change has only been syntax-checked during the owner's
+implementation-only pass. The usual targeted tests and Workers RPC integration
+verification remain required before release. No deployment accompanies it.

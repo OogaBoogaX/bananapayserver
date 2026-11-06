@@ -494,6 +494,17 @@ export class DonationsObject {
   // rate. Each donation is added once, and the Oogas eat at the same rate on every page, so any
   // page can tell the level from the last state it was sent. Its clock never runs backwards,
   // even when notices finish out of order.
+  // A read-only aggregate for the trusted service binding. Do not call
+  // pileState: reading an unused pile must not initialize or write its ledger.
+  // No donor, invoice, node, relay or price data crosses this boundary.
+  pileSnapshot() {
+    const now = this.platform.now();
+    const [saved] = this.sql.exec("SELECT milli, at FROM pile").toArray();
+    const state = saved || { milli: readSettings(this.env).pileStart * 1000, at: now };
+    const at = Math.max(now, state.at);
+    return { v: 1, ...this.pileMessage(at, this.pileAt(at, state)) };
+  }
+
   pileState(now) {
     let [row] = this.sql.exec("SELECT milli, at FROM pile").toArray();
     if (!row) {

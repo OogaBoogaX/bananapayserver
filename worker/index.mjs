@@ -24,6 +24,10 @@ export class Donations extends DurableObject {
     return this.object.fetch(request);
   }
 
+  pileSnapshot() {
+    return this.object.pileSnapshot();
+  }
+
   webSocketMessage(ws, message) {
     return this.object.webSocketMessage(ws, message);
   }
@@ -44,6 +48,11 @@ export class Donations extends DurableObject {
 // The page's calls, from OBL's Worker over its service binding. A named entrypoint is reachable
 // only through a binding, never from the internet. See docs/protocol.md.
 export class PageApi extends WorkerEntrypoint {
+  // Private aggregate read for OBL's host. No public route or visitor identity.
+  pileSnapshot() {
+    return this.env.DONATIONS.get(this.env.DONATIONS.idFromName("donations")).pileSnapshot();
+  }
+
   invoice(request, donor, visitor) {
     return pageApi(this.env).invoice(request, donor, visitor);
   }
