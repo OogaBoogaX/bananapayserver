@@ -745,6 +745,29 @@ operator's reconciled level, the preserved evidence and a reason.
 
   The pile's `revision` also moves when only this health or the uncertain amount changes, so
   pages that deduplicate by revision see it. Coverage stays invoice-only.
+- **What working this out costs.** Each pile message reads the receipt side's health and the
+  uncertain amount.
+  - **Bounded:** rows returned by each existence probe, and extra memory retained by
+    `reviewCredit`. The number of rows handed to `reviewCredit` isn't bounded: it still iterates
+    every review receipt while the sums are safe.
+    - Every existence check on that path asks for at most one row (`LIMIT 1`), however many
+      records match. That covers mappings, pending projection work, projection conflicts, the
+      health checks and pile exceptions.
+    - The uncertain amount is read from the cursor row by row, never collected into an array
+      first. It stops at the first sum that can't be represented exactly, and is otherwise
+      added exactly as before.
+  - **Not bounded:** the rows SQLite examines, and the CPU.
+    - A check that finds nothing still scans its whole table where no index narrows it:
+      unresolved reviews, unresolved projection conflicts, and receipts waiting for a price.
+    - When every invoice is healthy, the lagging-invoice check reads every invoice, with its
+      latest read looked up for each.
+    - Open holds and review receipts are read through partial indexes holding only those rows.
+      The uncertain amount still reads every review receipt when the sums are safe.
+
+    These costs grow with history.
+  - **What's measured:** rows returned and the cursor's use come from the test stand-ins, and
+    the scans from SQLite's query plans. Neither is evidence of what the Durable Object runtime
+    reads or bills, and neither says anything about the object's start-up work.
 - **`behind` on the pile:** an anchored pile may report `"reconciliation": "behind"`, the same
   value the status message already uses for receipt accounting. Pages show the level as not
   yet reconciled. The shared fixture's `pile` section shows what an open page hears through

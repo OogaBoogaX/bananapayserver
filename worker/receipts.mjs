@@ -1345,7 +1345,7 @@ export class ReceiptLedger {
   }
 
   hasMappings() {
-    return this.row("SELECT 1 FROM ra_invoices") !== null;
+    return this.row("SELECT 1 FROM ra_invoices LIMIT 1") !== null;
   }
 
   // The endpoint's reply for POST /donations/status: the core status, with what the page needs
@@ -1491,7 +1491,7 @@ export class ReceiptLedger {
   }
 
   projectionConflict() {
-    return this.row("SELECT 1 FROM ra_projection_conflicts WHERE resolved_at IS NULL") !== null;
+    return this.row("SELECT 1 FROM ra_projection_conflicts WHERE resolved_at IS NULL LIMIT 1") !== null;
   }
 
   // What the D1 projection applies, one committed receipt revision per outbox row, oldest
@@ -1523,7 +1523,7 @@ export class ReceiptLedger {
   }
 
   hasPendingProjection() {
-    return this.row("SELECT 1 FROM ra_outbox") !== null;
+    return this.row("SELECT 1 FROM ra_outbox LIMIT 1") !== null;
   }
 
   // A projection that can't be applied safely: kept for review, and the projection stops.
@@ -1551,10 +1551,13 @@ export class ReceiptLedger {
   }
 
   // What receipts held for review still credit: the pile's uncertain amount, in sats and banana
-  // thousandths. Null if a sum can't be represented exactly.
+  // thousandths. Null if a sum can't be represented exactly. Read row by row from the cursor,
+  // never collected into an array first, and stops reading at the first sum that can't be
+  // represented. That bounds this method's memory, not the work: every review receipt is still
+  // read when the sums are safe.
   reviewCredit() {
     let sats = 0, milli = 0;
-    for (const r of this.rows("SELECT sats, credit, milli FROM ra_receipts INDEXED BY ra_receipts_review WHERE state = 'review'")) {
+    for (const r of this.sql.exec("SELECT sats, credit, milli FROM ra_receipts INDEXED BY ra_receipts_review WHERE state = 'review'")) {
       if (r.credit <= 0) continue;
       const s = sats + r.credit, m = milli + (r.milli ?? 0);
       if (!Number.isSafeInteger(s) || !Number.isSafeInteger(m)) return null;
@@ -1580,22 +1583,22 @@ export class ReceiptLedger {
   // fresh, and nothing waits; otherwise behind.
   // Without a configured freshness bound, nothing can be current: behind.
   health() {
-    if (!this.row("SELECT 1 FROM ra_invoices")) return "off";
-    if (this.row("SELECT 1 FROM ra_reviews WHERE resolved_at IS NULL") || this.row("SELECT 1 FROM ra_holds WHERE resolved_at IS NULL") ||
-        this.row("SELECT 1 FROM ra_receipts WHERE state = 'review'")) return "review";
+    if (!this.row("SELECT 1 FROM ra_invoices LIMIT 1")) return "off";
+    if (this.row("SELECT 1 FROM ra_reviews WHERE resolved_at IS NULL LIMIT 1") || this.row("SELECT 1 FROM ra_holds WHERE resolved_at IS NULL LIMIT 1") ||
+        this.row("SELECT 1 FROM ra_receipts WHERE state = 'review' LIMIT 1")) return "review";
     // A projection conflict: D1 disagrees with a committed revision, and draining has stopped.
-    if (this.row("SELECT 1 FROM ra_projection_conflicts WHERE resolved_at IS NULL")) return "review";
+    if (this.row("SELECT 1 FROM ra_projection_conflicts WHERE resolved_at IS NULL LIMIT 1")) return "review";
     // Mappings without saved read settings or whole metadata wait on an operator's reconciliation.
-    if (!this.readSettings() || this.row(`SELECT 1 FROM ra_invoices WHERE ${INCOMPLETE_METADATA}`)) return "review";
+    if (!this.readSettings() || this.row(`SELECT 1 FROM ra_invoices WHERE ${INCOMPLETE_METADATA} LIMIT 1`)) return "review";
     const bound = this.freshnessMs;
     if (bound === null) return "behind";
     const now = this.now();
     const lagging = this.row(
       "SELECT 1 FROM ra_invoices i WHERE verified_complete = 0 OR applied_at IS NULL OR ? - applied_at > ? OR " +
-      "(SELECT status FROM ra_reads r WHERE r.invoice = i.invoice ORDER BY sequence DESC LIMIT 1) IS NOT 'applied'",
+      "(SELECT status FROM ra_reads r WHERE r.invoice = i.invoice ORDER BY sequence DESC LIMIT 1) IS NOT 'applied' LIMIT 1",
       now, bound,
     );
-    const waiting = lagging || this.row("SELECT 1 FROM ra_outbox") || this.row("SELECT 1 FROM ra_receipts WHERE price_state = 'intent'");
+    const waiting = lagging || this.row("SELECT 1 FROM ra_outbox LIMIT 1") || this.row("SELECT 1 FROM ra_receipts WHERE price_state = 'intent' LIMIT 1");
     return waiting ? "behind" : "current";
   }
 }
