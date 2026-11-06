@@ -46,8 +46,12 @@ export function fakeStorage() {
   };
 }
 
+// node:sqlite has already read every row by the time this exists, unlike the runtime's cursor,
+// which reads lazily. Iterating it lets code that streams a cursor run here, but proves nothing
+// about how many rows the runtime reads or holds; tests that need that use their own cursor.
 function cursor(rows) {
   return {
+    [Symbol.iterator]: () => rows[Symbol.iterator](),
     toArray: () => rows,
     one() {
       if (rows.length !== 1) throw new Error(`expected one row, got ${rows.length}`);

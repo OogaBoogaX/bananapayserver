@@ -196,7 +196,7 @@ export function pileView(sql, accounting = null) {
   const level = add(anchor.milli, add(total, total === null ? null : -anchor.included));
   if (level === null || level < 0) return review(revision);
   const at = last && last.seq > anchor.boundary ? Math.max(anchor.applied_at, last.at) : anchor.applied_at;
-  const exceptions = row(sql, "SELECT 1 FROM pile_exceptions") !== null;
+  const exceptions = row(sql, "SELECT 1 FROM pile_exceptions LIMIT 1") !== null;
   if (accounting === null) {
     return { type: "pile", bananas: level / 1000, at, eatPerHour: 0, revision, basis: "credits",
       cutover: "done", reconciliation: exceptions ? "review" : "off", uncertain: { sats: 0, bananas: 0 } };
