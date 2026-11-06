@@ -7,6 +7,12 @@ maintainers. The storage design is a *proposed* architecture, not a description 
 Open decisions are listed in [Activation gates](#activation-gates) and
 [Open decisions](#open-decisions).
 
+**Phase 1:** the durable core is in [`worker/receipts.mjs`](../worker/receipts.mjs), tested
+in `tests/receipts.test.mjs`. Nothing calls it. The edit window, the message rule, the
+pricing recovery and the freshness bound are explicit inputs, and the operations that need
+them refuse without them, atomically. Without both the edit window and the message rule,
+nothing can be observed, priced, recovered or released into credit. Provider capabilities are fixture inputs, never verified claims.
+
 ## Goal
 
 Count every receipt BTCPay attaches to an invoice: partial, excess, split, late and repeat
@@ -27,9 +33,10 @@ and remove time-based decay.
   outpoint, block identity, provider or store id, node address or BTCPay link.
 - **Limits are deployment configuration.** Every new bound in this document is a required
   setting with no committed default: page sizes, the replay bound, the size of
-  `recentReceipts`, reconciliation pacing and cursor lifetime. The proposed names are
-  `RECEIPT_REPLAY_MAX`, `STATUS_PAGE_SIZE`, `HISTORY_PAGE_SIZE`, `RECENT_RECEIPTS_SIZE`,
-  `RECONCILE_PER_MINUTE` and `CURSOR_TTL_SECONDS`. Existing legacy constants are not a
+  `recentReceipts`, reconciliation pacing, cursor lifetime and how long a provider read stays
+  fresh. The proposed names are `RECEIPT_REPLAY_MAX`, `STATUS_PAGE_SIZE`,
+  `ADDRESS_PAGE_SIZE`, `HISTORY_PAGE_SIZE`, `RECENT_RECEIPTS_SIZE`, `RECONCILE_PER_MINUTE`,
+  `CURSOR_TTL_SECONDS` and `READ_FRESHNESS_SECONDS`. Existing legacy constants are not a
   choice of these values.
 
 ## Capabilities and accounting mode
@@ -86,7 +93,10 @@ fence, because the existing triggers would add it to the aggregates.
 - **Imported-transaction fence:** loaded from the import records, never committed. It holds
   `(network, txid)`.
   - It fences every outpoint of each listed transaction.
-  - A fenced outpoint goes to `review` with no credit, until a reviewed mapping resolves it.
+  - A fenced outpoint goes to `review` with no credit. A reviewed mapping to an invoice is
+    recorded, but a mapping is not money reconciliation: the funds may already be counted by
+    a legacy import row, so the fence stays and nothing credits. Releasing imported funds
+    needs a reconciled disposition against the legacy credit, which v1 doesn't define.
 - **Release fence:** after the first receipt-mode invoice is issued, a rollback to a Worker
   that doesn't know these fences is forbidden.
 
@@ -109,15 +119,24 @@ one transaction.
 
 ### Addresses
 
-Each on-chain address is bound to `(network, address)` and its invoice before it is
-returned. An address already bound to another invoice fails closed: 503, flagged for
-review, and never reassigned.
+Each on-chain address is fully validated for the invoice's network and bound to
+`(network, address)` and its invoice before it is returned. Segwit addresses are checked
+against their bech32 or bech32m checksum and kept lowercase, so an uppercase spelling is
+the same address; mixed case, a bad checksum or another network's prefix is refused. Base58
+addresses keep their case, and their version and checksum are checked. An address already
+bound to another invoice fails closed: 503, flagged for review, and never reassigned.
 
 ### Edit window (unresolved, blocks activation)
 
-It is not decided when edits end for receipt mode: at the first observed receipt, or at the
-existing settlement lock. Legacy behavior does not change. Once a receipt's attribution
-snapshot is captured, it never changes.
+It is not decided when edits end for receipt mode. Both candidates are implemented as
+explicit policy, and neither is a default:
+
+- **`first-observation`:** the first observed receipt captures attribution and ends edits.
+- **`settlement`:** the first observation the provider reports settled does, in the same
+  transaction, before any price lookup, so a note during the lookup changes nothing.
+
+Legacy behavior does not change. Once a receipt's attribution snapshot is captured, it never
+changes.
 
 ### Ownership
 
@@ -157,6 +176,10 @@ Nothing here promises automatic deletion.
 - **`id`:** opaque and random, never derived from a transaction.
 - **`revision`:** counts per receipt. A page applies a frame only when its revision is newer
   than the one it holds.
+- **`at`:** when this revision was recorded, so a correction moves it. For a stable order,
+  use the receipt's immutable first detection, `pricing.receivedAt`, never a correction's
+  time.
+- **No legacy events:** a receipt-mode invoice never emits a legacy `seen` or `donation`.
 
 ### Amounts and state
 
@@ -169,6 +192,20 @@ Nothing here promises automatic deletion.
   - `reversed`: credit undone by an auditable reversal entry;
   - `review`: quarantined. A review receipt keeps whatever `credit` it had until an
     auditable reversal exists.
+
+### Holds
+
+A receipt can carry several holds at once, and any open hold keeps it in `review` without
+new credit. Each is resolved on its own, so resolving one never credits while another
+remains. Unverified identity, an import fence, an unbound destination and an alias that
+disagrees with a canonical identity are never released by hand: only verified evidence
+clears an unverified identity. A known payment's method, amount, destination, scope and
+canonical outpoint or payment hash are immutable; a later observation that changes any of
+them is held and not applied, and its evidence is recorded as not applied.
+
+A snapshot is validated whole before anything applies. Exact repeats collapse, and two
+aliases of one canonical payment that agree become one receipt. Entries for one payment that
+disagree in anything reject the snapshot and flag the invoice, whatever their order.
 
 ### Animation
 
@@ -192,8 +229,11 @@ Snapshots, replays, `recentReceipts` and private replies never animate.
 
 ### Pricing
 
-`pricing` is frozen once and never changes. `rate` and `bananas` are `null` when no price
-was available, and the receipt then credits sats and zero bananas.
+- **`pricing: null`:** the pricing intent is unresolved, and the receipt can't credit yet.
+- **`pricing` as an object:** frozen once, and never changed. A `rate` and `bananas` of
+  `null` inside it mean permanently unpriced: sats counted, zero bananas.
+- **Every freeze is a new revision,** even when the state stays the same. Credit waits for
+  the freeze, and `firstCreditedSeq` is set only by an actual credit.
 
 ### Invoice totals
 
@@ -205,9 +245,11 @@ Totals are authoritative and cumulative. A page applies them only when `revision
   `review` receipts until a reversal exists. `credited ≤ received`.
 - **`review`:** the sats of receipts in `review`. It is a subset of `received`, and can
   overlap `credited`. It describes uncertainty, and is never subtracted automatically. No
-  snapshot implies a reversal that hasn't been performed.
-- **`left`:** the provider's remaining amount, fee-aware, from the latest complete read. It
-  is `null` when unknown, out of date or no longer reported. Never derive it from
+  snapshot implies a reversal that hasn't been performed. This net-credit meaning is decided,
+  not an open choice.
+- **`left`:** the provider's remaining amount, fee-aware, from the latest read with verified
+  remaining-amount capability, within the configured freshness bound. It is `null` when
+  unknown, unverified, out of date or no longer reported. Never derive it from
   `due − received`.
 - **`state`**, in this order:
   1. `review` if any receipt is in review;
@@ -218,6 +260,29 @@ Totals are authoritative and cumulative. A page applies them only when `revision
 
   A confirmed partial payment, or a `left` of `null`, is never `paid`.
 
+Every receipt frame carries the invoice's final committed totals for the transaction that
+made it, never totals from partway through a read.
+
+### Invoice status frames
+
+When an invoice's visible totals change without a receipt revision, the same feed carries:
+
+```json
+{ "type": "invoiceStatus", "seq": 42, "replay": false,
+  "invoice": { "id": "BTCPay invoice id", "due": 10000, "received": 400, "credited": 400,
+               "review": 0, "left": 9300, "state": "partial", "revision": 6 } }
+```
+
+- **When:** a remaining-amount or fee change, a quarantine flag, a remaining amount or
+  payable address that goes stale with time, or a change only the private status shows: a
+  rotated payable address, a newly bound address or a saved note. Each one carries a newer
+  `revision`, and is the page's cue to refresh its private status. It carries public totals
+  only, never the private change itself. A read that confirms nothing new sends nothing.
+- **Only after receipts:** an invoice with no observed receipt publishes none. Private
+  status is always authoritative.
+- **No inference:** nothing about a receipt, accounting or animation is taken from it.
+- **Shared feed:** it uses the same `seq`, high-water mark and replay as receipt frames.
+
 ### Connecting and replay
 
 `GET /donations/socket?after=<invoice id>&receipts=<seq>`. `receipts` is an optional decimal
@@ -227,7 +292,7 @@ integer, 0 or more. When `receipts` is true, a page that connects gets, in order
 2. `{ "type": "recentReceipts", "entries": [receipt…] }`, the newest credited receipts,
    bounded by configuration;
 3. the legacy replay;
-4. receipt frames with `cursor < seq ≤ through`, with `replay: true`;
+4. receipt and invoiceStatus frames with `cursor < seq ≤ through`, with `replay: true`;
 5. `{ "type": "replay", "after": n|null, "through": H|null, "complete": true|false }`.
 
 `through` is the high-water mark taken at connect, and every live frame afterwards has
@@ -236,15 +301,16 @@ integer, 0 or more. When `receipts` is true, a page that connects gets, in order
 - **Gap:** if more frames are waiting than the configured bound, or the cursor is above
   `through`, nothing is replayed and `complete` is `false`. The page then resyncs through
   private status, tally and pile, and takes `through` as its cursor.
-- **No cursor:** nothing is replayed, and the marker supplies the starting cursor.
+- **No cursor:** on a first connection, the page gets `recentReceipts` and the replay marker,
+  whose `through` is its starting cursor. Nothing historical is replayed or animated.
 
 ## Private status: `POST /donations/status`
 
 OBL's Worker calls `status(request, donor, visitor)`. The body is exactly one of:
 
 ```json
-{ "request": "3f0c…32 hex", "cursor": "optional opaque" }
-{ "invoice": "BTCPay invoice id", "cursor": "optional opaque" }
+{ "request": "3f0c…32 hex", "cursor": "optional opaque", "addressCursor": "optional opaque" }
+{ "invoice": "BTCPay invoice id", "cursor": "optional opaque", "addressCursor": "optional opaque" }
 ```
 
 ### Access
@@ -262,17 +328,38 @@ OBL's Worker calls `status(request, donor, visitor)`. The body is exactly one of
                "left", "state", "revision", "expires": 1790000900,
                "lightning": "available" | "limit" | "unavailable" | "expired",
                "bolt11": "lnbc…" | null },
-  "addresses": [ { "address": "bc1q…", "issuedAt": 1790000060000 } ],
+  "payableAddress": "bcrt1q…" | null,
+  "addresses": [ { "address": "bcrt1q…", "issuedAt": 1790000060000 } ],
+  "nextAddress": "opaque" | null,
   "receipts": [ receipt… ],
   "next": "opaque" | null }
 ```
 
-- **`addresses`:** every bound address, oldest first. An address carries no issuance amount.
-- **Amounts:** `left` is the only current, fee-aware amount.
-  - When `left` is a positive number, a page may build an amount-bearing QR from it.
-  - When `left` is `null`, the page shows the address alone, and says the remaining amount
-    is unavailable. It never falls back to `due`, to `due − received`, or to the original
-    amount.
+- **`addresses`:** every bound address, newest issued first, paged by `addressCursor` and
+  `nextAddress`. An address carries no issuance amount, and none is ever dropped.
+- **`payableAddress`:** present on every page. It is the address the provider currently
+  offers, taken only from fresh evidence of a verified destination capability, and only when
+  it is already bound to this invoice; otherwise `null`. An address in the history never
+  implies it is payable now.
+- **Amounts:** `left` is the only current, fee-aware amount. An amount-bearing QR is allowed
+  only when the selected address equals `payableAddress` *and* `invoice.left` is a positive
+  integer. Otherwise the page shows the bare address and says the remaining amount is
+  unavailable. It never falls back to `due`, to `due − received`, or to the original amount.
+- **Cursors:** `cursor` and `addressCursor` are each bound to their kind, the invoice, the
+  reader (token holder or account) and the invoice's revision. Binding an address, saving a
+  note, a flag, or any receipt revision bumps the revision.
+- **Freshness is committed first.** For an authorized reader, a remaining amount or payable
+  address that has gone stale is withdrawn, with a newer revision and one invoiceStatus
+  signal, before the revision is read or any cursor judged. An unauthorized read changes
+  nothing. Freshness counts from when the read began, not when its reply arrived. A reply
+  that arrives after the bound is refused. So is one whose observation time falls before
+  its read began or in the future.
+- **`bolt11`:** the original invoice asks for the full target. In v1 it is `null`, and every
+  page, active or reopened, hides it, once `received`, `credited` or `review` is above zero.
+  This holds until a provider-verified remaining-amount code is defined. Mixed receipts still
+  count. Zero amounts are only a necessary guard (`originalBolt11Allowed`). Showing the code
+  also needs fresh provider-verified evidence that it is usable, unexpired and not yet paid,
+  so a full reversal alone never brings back a stale or settled BOLT11.
 - **`/donations/onchain`** keeps its legacy reply. Its `sats` is the provider's amount at
   issuance, not a reusable amount later.
 - **`receipts`:** newest first, bounded by `STATUS_PAGE_SIZE`.
@@ -415,7 +502,15 @@ operator's reconciled level, the preserved evidence and a reason.
 - confirmations, and the version of the confirmation policy in force;
 - provider state: `observed`, `settled`, `unaccounted` or `invalid`;
 - provenance: webhook prompt, sweep or restart, plus the read attempt and observation time;
-- the complete-snapshot capability of that read.
+- the complete-snapshot capability of that read;
+- whether the observation was applied: one that would change an immutable field is recorded
+  and held, never applied.
+
+Each read declares its capabilities as inputs: `complete`, `outpoints`, `lightningSuccess`,
+`remaining` (a verified fee-aware remaining amount) and `destination` (a verified current
+payment destination). None is assumed. A remaining amount or destination without its
+capability is withdrawn. Health is `current` only while every invoice's latest read applied,
+was complete and is within the freshness bound.
 
 ### Mapping provider states
 
@@ -531,7 +626,8 @@ inventory chosen. Even after a full sweep of retained invoices, coverage stays
 
 1. **Edit window:** freeze at the first observed receipt, or at the existing settlement
    lock. Blocks activation.
-2. **Message:** carried once per invoice, or on every receipt that qualifies. Not approved.
+2. **Message:** carried once per invoice, or on every receipt that qualifies. Not approved,
+   and it blocks activation. There is no default: without it, nothing credits.
 3. **Account deletion:** deletion, redaction, and recovery after signing in again. Blocks
    activation.
 4. **Price after a crash mid-lookup:** freeze the stale stored candidate, as proposed, or
