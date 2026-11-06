@@ -566,8 +566,11 @@ OBL's Worker calls `history(request, donor, visitor)`. The body is exactly `{}` 
 
 ### Lifetime figures
 
-- `tally` and `board` add active receipt credit to the legacy figures, from separate
-  projection tables. Legacy rows are never overwritten.
+- `tally` and `board` include active receipt credit alongside the legacy figures. The D1
+  projection adds each receipt's change to the same `tally`, `tally_hours` and `handle_totals`
+  rows the legacy triggers maintain, while its own tables hold only the per-receipt markers,
+  each receipt's newest projection, the receipt-mode fence and the private account totals (see
+  [D1 projection](#d1-projection)). Legacy `donations` rows are never written or overwritten.
 - A reversal entry corrects both lifetime figures and the pile. Ordinary spending never
   changes lifetime figures.
 
@@ -697,12 +700,21 @@ operator's reconciled level, the preserved evidence and a reason.
       socket (an enqueue), not that any page received it. Nothing here hears back from a page.
       - **Pages going away:** a page closing or closed is skipped, and one that closes during
         the send fails in the ordinary way. Neither blocks the mark.
-      - **Any other failure:** when an open page fails to take it, the mark stays where it was
-        and the failure is raised. A connected page already keeps an alarm set, so that alarm
-        sends it again, in the same instance, with no new payment.
-      - **Backstop:** a failed send also brings the alarm forward to one price-check cadence
-        away, never sooner.
-      - **A failing alarm:** an alarm whose own work fails still sets the next one.
+      - **Any other failure:** when an open page fails to take it, the mark stays where it was,
+        and the failure is logged.
+        - **Backstop:** the alarm is brought forward to no later than one price-check cadence
+          away. That alarm sends the pile again, in the same instance, with no new payment.
+        - **Possibly sooner:** an alarm already due sooner (for receipt deadlines, a frame
+          backlog or projection work) comes first and sends it then. There is no retry floor
+          for the pile itself.
+        - **Unchanged fences:** a page's live-frame retry and the projection's retry time are
+          separate, persisted, and are never brought sooner.
+        - A connected page already keeps an alarm set.
+      - **Never the caller's problem:** nothing is thrown. A legacy settlement, a quarantine, a
+        private read, a projection or the alarm that sent the pile carries on, and the relay
+        hears its usual reply.
+      - **A failing alarm:** an alarm whose own work fails for another reason still sets the
+        next one.
     - **At least once:** a page may hear a revision twice, and deduplicates by revision.
     - **No loop:** once sent, nothing more is scheduled for it.
   - **Bounded:** each step moves at most the saved replay bound of entries. The alarm finishes
@@ -962,8 +974,9 @@ Built in [`worker/projection.mjs`](../worker/projection.mjs) and migration
   overwritten, because every change is relative. Nothing is ever published rounded or negative.
 - **Conflicts stop it, in order.** A marker whose hash differs, a batch the legacy fence
   refuses, or an unsafe total is recorded for review in the object. Draining stops, and the
-  conflict is never drained again or given an alarm until resolved. It is never acknowledged
-  silently. Health is `review` while a conflict waits. Resolving one is an operator step not
+  conflict is never drained again or given an alarm for draining until resolved. It is never
+  acknowledged silently. A publication already owed isn't held back: figures D1 committed
+  before the conflict are still read and sent, on the same retry cadence and across restarts. Health is `review` while a conflict waits. Resolving one is an operator step not
   built yet, and an [activation gate](#activation-gates).
   - **Recognising a conflict:** a refused batch is a conflict only when its error says so, using
     the fence's or guard's own message or a total's CHECK. The error's message is checked, and
@@ -978,7 +991,19 @@ Built in [`worker/projection.mjs`](../worker/projection.mjs) and migration
   sockets still open. Publishing credits nothing, so a retry only sends the same authoritative
   figures again.
 - **Bounded, serialized, and never a tight loop.**
-  - A drain applies at most the saved replay bound of rows; a full one continues at once.
+  - **Drain size:** a drain applies at most `PROJECTION_BATCH_MAX` rows, ten, whatever the
+    client-facing replay bound is. A full drain continues at once, in a new alarm invocation.
+    - **The limit it's sized for:** D1 limits the queries one Worker invocation makes, 1,000
+      on the paid plan and 50 on the free plan, and a batch counts as one query
+      ([D1 limits](https://developers.cloudflare.com/d1/platform/limits/)).
+    - **What a drain costs:** a row costs at most three queries (its marker read, its
+      previous-revision read and its batch), and a row already applied costs one. The
+      publication after it costs four (two for the board, two for the tally).
+    - **Headroom:** one event starts at most one drain, since a drain already running is
+      shared. Ten rows is then at most 34 queries, leaving the rest of the free plan's 50 for
+      the event that started it. A legacy settlement makes about nine.
+    - **What isn't measured:** the tests count queries through the D1 stand-in. What a real
+      invocation counts is unmeasured, and staging must confirm it.
   - A drain already running is shared, never overlapped.
   - A D1 failure, or a failed publication, is retried only after the existing five-minute alarm
     cadence (`PRICE_FRESH_MS`). The retry time is saved, so a restart keeps it.
@@ -995,6 +1020,10 @@ Built in [`worker/projection.mjs`](../worker/projection.mjs) and migration
   only after D1 holds the change.
 - **Not the pile.** The remaining pile is its own journal and is never touched here, and
   nothing spent from the wallet ever reaches these tables.
+- **Later, read replicas.** Each row's change is worked out from a `previous` read made outside
+  its batch. That is sound while every D1 read reaches the primary. If D1's read replicas (the
+  Sessions API) are ever used, the batch should also check `receipt_projection.revision` inside
+  itself. Nothing here uses them now.
 - **Stand-in limits.** Tests run D1 through `node:sqlite`, with `batch` as one transaction that a
   trigger's `RAISE(ABORT)` rolls back. Cloudflare documents D1 batches as atomic in the same
   way. The stand-in can't show D1's limits on statements per batch, payload size or duration,
@@ -1028,8 +1057,11 @@ Broadcasts are at least once, after commit. Pages deduplicate by revision.
   they missed, with no new receipt needed.
 - **Duplicates:** a frame may reach a page twice, across a failure or a stop, or also in its
   replay. Pages deduplicate by revision, so a first credit animates once.
-- **`receipt_broadcast`:** the lowest position of any open page, or the feed's high-water mark
-  when none is open.
+- **No object-wide mark:** each page's position is the only record of what it was sent. An
+  older store may still hold a `receipt_broadcast` value in `meta`; nothing reads it.
+- **A cursor the feed refuses:** `front.mjs` rejects malformed cursors first. If one reaches the
+  object anyway, the page replays nothing and its position starts at the high-water mark,
+  never at 0, so old frames are never sent as live.
 
 ### Uniqueness is not atomicity
 

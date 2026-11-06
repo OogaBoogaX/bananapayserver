@@ -11,7 +11,7 @@ import { parseUp } from "../shared/protocol.mjs";
 import { readLimits, readSettings } from "./config.mjs";
 import { bridgeReceiptEntries, bumpPileRevision, PILE_SCHEMA, pileKnows, pileRevision, pileView, receiptBacklog, recordPileDelta, recordPileException } from "./pile.mjs";
 import { hashRequest, MODE, ReceiptLedger } from "./receipts.mjs";
-import { drainProjection } from "./projection.mjs";
+import { drainProjection, PROJECTION_BATCH_MAX } from "./projection.mjs";
 import { relayAuthorized } from "./relay-token.mjs";
 import { BANANA_CENTS, bananasOf, fetchPrice, milliBananas, rateOf } from "./price.mjs";
 
@@ -174,18 +174,25 @@ export class DonationsObject {
     this.receipts = new ReceiptLedger({
       storage: ctx.storage, now: () => platform.now(), randomHex: () => platform.id(), issuance: false, policy: {},
     });
-    // Frames committed before this start that pages never heard live are sent on the next push;
-    // a first start begins at the current mark, so history is never broadcast as live.
-    if (!this.sql.exec("SELECT 1 FROM meta WHERE key = 'receipt_broadcast'").toArray().length) {
-      this.sql.exec("INSERT INTO meta (key, value) VALUES ('receipt_broadcast', ?)", this.receipts.feedHighWater());
-    }
     this.receiptBacklog = false;
     this.projecting = null;
     this.capability = JSON.stringify(this.accountingCapability());
     // Receipt ledger entries committed before a stop reach the pile before anything is read.
     // Pages that stayed connected across the stop may not have heard the pile's newest revision:
     // the alarm sends it, once, through the normal path.
-    this.pileBacklog = this.bridgeReceipts();
+    // A bridge that fails here mustn't stop the object starting: legacy donations, the relay and
+    // reads don't depend on it. The failure is logged and the pile says review, never current,
+    // until a later bridge succeeds. The next push or alarm tries again, and raises it if it fails
+    // again, so nothing is hidden; the alarm comes back within one cadence for that.
+    this.bridgeFailure = null;
+    try {
+      this.pileBacklog = this.bridgeReceipts();
+    } catch (error) {
+      this.bridgeFailure = error.message;
+      this.pileBacklog = false;
+      console.error(`pile bridge: failed at start (${error.message}); the pile says review, retrying later`);
+      this.ctx.waitUntil(this.scheduleAt(this.platform.now() + PRICE_FRESH_MS));
+    }
     if (this.pileBacklog || this.pileUnsent()) this.ctx.waitUntil(this.scheduleAt(this.platform.now()));
     // Pages that stayed connected across a stop and are behind on receipt frames: the alarm
     // sends them, at once or at a page's retry time.
@@ -211,7 +218,7 @@ export class DonationsObject {
   // saved replay bound; true if more entries wait.
   bridgeReceipts() {
     const meta = (key) => this.sql.exec("SELECT value FROM meta WHERE key = ?", key).toArray()[0]?.value ?? null;
-    return this.ctx.storage.transactionSync(() => {
+    const more = this.ctx.storage.transactionSync(() => {
       if (meta("receipt_pile_bridged") === null) {
         const anchored = this.sql.exec("SELECT 1 FROM pile_anchor").toArray().length > 0 ? 1 : 0;
         this.sql.exec("INSERT INTO meta (key, value) VALUES ('receipt_pile_bridged', 0), ('receipt_pile_retained', ?), ('receipt_pile_retained_anchored', ?)",
@@ -231,6 +238,8 @@ export class DonationsObject {
       this.sql.exec("UPDATE meta SET value = ? WHERE key = 'receipt_pile_bridged'", through);
       return high > through;
     });
+    this.bridgeFailure = null;
+    return more;
   }
 
   // What receipt accounting tells the pile: null while there is none, so the pile reads as it
@@ -240,27 +249,25 @@ export class DonationsObject {
     const health = this.receipts.health();
     if (health === "off") return null;
     const behind = receiptBacklog(this.sql);
-    return { reconciliation: health === "review" ? "review" : behind ? "behind" : health, uncertain: this.receipts.reviewCredit() };
+    // A bridge that failed and hasn't succeeded since is review: something must be looked at.
+    const review = health === "review" || this.bridgeFailure !== null;
+    return { reconciliation: review ? "review" : behind ? "behind" : health, uncertain: this.receipts.reviewCredit() };
   }
 
   // Sends the pile to every page if its revision is newer than the one they were last sent. At
   // least once: a page may hear a revision twice across a stop, and deduplicates by revision.
   // With no page connected there is nobody to tell, and a page that connects is sent it then.
+  // A page that doesn't take it leaves it unmarked, and broadcast brings the alarm forward to no
+  // later than one price-check cadence away; an alarm already due sooner sends it then. Nothing is
+  // thrown: a page's delivery problem never stops the work that called this.
   publishPile() {
     const pile = this.pileMessage();
-    if (pile.revision <= this.pileBroadcast()) return;
+    if (pile.revision <= this.pileBroadcast()) return true;
     if (this.ctx.getWebSockets("page").length === 0) {
       this.markPileBroadcast(pile.revision);
-      return;
+      return true;
     }
-    try {
-      this.broadcast(pile);
-    } catch (error) {
-      // Unacknowledged: an alarm comes back within one price-check cadence, never sooner, and
-      // sends it again. Connected pages already keep that alarm set.
-      this.ctx.waitUntil(this.scheduleAt(this.platform.now() + PRICE_FRESH_MS));
-      throw error;
-    }
+    return this.broadcast(pile);
   }
 
   markPileBroadcast(revision) {
@@ -318,8 +325,8 @@ export class DonationsObject {
   // - Each page is sent at most the saved replay bound of frames per call; a page left behind
   //   asks the alarm to continue at once.
   // At least once: a frame may reach a page twice across a failure or stop, or also in its
-  // replay; pages deduplicate by revision. receipt_broadcast is the lowest position of any open
-  // page, or the high-water mark when none is open. A capability change sends a new status.
+  // replay; pages deduplicate by revision. Each page's position is the only record of what it was
+  // sent; no object-wide mark is kept. A capability change sends a new status.
   pushReceiptFrames() {
     // Committed ledger entries reach the pile first, so the pile sent after these frames, and
     // to any page that connects, already holds them.
@@ -329,7 +336,6 @@ export class DonationsObject {
     const now = this.platform.now();
     const pages = this.ctx.getWebSockets("page").filter((ws) => ws.readyState === OPEN);
     this.receiptBacklog = false;
-    let lowest = high;
     if (settings) {
       const batches = new Map();
       const batch = (after) => {
@@ -356,13 +362,12 @@ export class DonationsObject {
           ws.serializeAttachment({ ...attachment, through, retryAt: failed ? now + PRICE_FRESH_MS : null });
           if (!failed && frames.length === settings.replayMax && high > through) this.receiptBacklog = true;
         }
-        // A page that closed during its send no longer counts.
-        if (ws.readyState === OPEN) lowest = Math.min(lowest, through);
       }
     }
-    this.sql.exec("UPDATE meta SET value = ? WHERE key = 'receipt_broadcast'", lowest);
     if (this.receiptBacklog || this.pileBacklog) this.ctx.waitUntil(this.ctx.storage.setAlarm(this.platform.now()));
-    // A page waiting to be retried brings the alarm forward to its retry time, never sooner.
+    // A page waiting to be retried brings the alarm forward to its retry time. The page itself is
+    // never sent to before then (its retry time is a fence); the alarm may be due sooner for
+    // other work.
     const retry = this.receiptRetryAt();
     if (retry !== null) this.ctx.waitUntil(this.scheduleAt(retry));
     this.kickProjection();
@@ -563,19 +568,22 @@ export class DonationsObject {
 
   // Applies the receipt outbox to D1's lifetime figures, then sends pages D1's current ones.
   // - One drain at a time: a drain already running is shared, never overlapped.
-  // - Bounded by the saved replay bound; a full drain continues at once.
+  // - Bounded by PROJECTION_BATCH_MAX rows (see projection.mjs), never the client-facing replay
+  //   bound; a full drain continues at once, in a new alarm invocation.
   // - A drain that applied a figure-moving batch leaves a durable note (with the outbox row's
   //   removal); the note is cleared only after D1's tally and board were read fresh and sent. A
   //   failed read keeps the note, and a restart finds it, so pages are never left stale.
   // - A D1 failure, or a failed publication, is retried once the existing five-minute alarm
   //   cadence (PRICE_FRESH_MS) has passed, persisted so a restart keeps it: never a tight loop.
-  // - A conflict waits for review, and is never drained again until it is resolved.
+  // - A conflict waits for review, and is never drained again until it is resolved. It doesn't
+  //   hold back a publication already owed: figures D1 committed before the conflict are still
+  //   read and sent, on the same retry cadence.
   // Health stays behind while anything waits, and review on a conflict.
   projectReceipts() {
     if (this.projecting) return this.projecting;
     const settings = this.receipts.readSettings();
-    if (!settings || this.receipts.projectionConflict()) return Promise.resolve(null);
-    const draining = this.receipts.hasPendingProjection();
+    if (!settings) return Promise.resolve(null);
+    const draining = this.receipts.hasPendingProjection() && !this.receipts.projectionConflict();
     const publishing = this.receipts.publicationPending();
     if (!draining && !publishing) return Promise.resolve(null);
     if (this.projectionRetryAt() > this.platform.now()) return Promise.resolve(null);
@@ -583,7 +591,7 @@ export class DonationsObject {
       try {
         let result = null;
         if (draining) {
-          result = await drainProjection({ ledger: this.receipts, db: this.env.DB, now: () => this.platform.now(), limit: settings.replayMax });
+          result = await drainProjection({ ledger: this.receipts, db: this.env.DB, now: () => this.platform.now(), limit: PROJECTION_BATCH_MAX });
           if (result.failed) console.error(`receipt projection: D1 refused a batch (${result.failed}); retrying later`);
           if (result.conflict) console.error(`receipt projection: ${result.conflict}; held for review`);
         }
@@ -635,10 +643,12 @@ export class DonationsObject {
     else this.sql.exec("INSERT INTO meta (key, value) VALUES ('projection_retry', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", at);
   }
 
-  // When the projection next needs the alarm, or null: never while a conflict waits.
+  // When the projection next needs the alarm, or null. A conflict waiting for review needs none
+  // for draining, but a publication already owed still does, at its retry time.
   projectionDue() {
-    if (this.receipts.projectionConflict() || !this.receipts.readSettings()) return null;
-    if (!this.receipts.hasPendingProjection() && !this.receipts.publicationPending()) return null;
+    if (!this.receipts.readSettings()) return null;
+    const draining = this.receipts.hasPendingProjection() && !this.receipts.projectionConflict();
+    if (!draining && !this.receipts.publicationPending()) return null;
     return Math.max(this.projectionRetryAt(), this.platform.now());
   }
 
@@ -669,7 +679,10 @@ export class DonationsObject {
     for (const frame of replay.frames ?? []) ws.send(JSON.stringify(frame));
     ws.send(JSON.stringify({ type: "replay", after: replay.after ?? null, through: replay.through ?? null, complete: replay.complete ?? false }));
     // Remembered with the socket, so it survives hibernation: live frames start after this mark.
-    ws.serializeAttachment({ ...ws.deserializeAttachment(), through: replay.through ?? 0 });
+    // A cursor the feed refuses (front.mjs rejects malformed ones first) replays nothing and
+    // starts at the high-water mark, never at 0, so old frames are never sent as live.
+    const through = replay.error ? this.receipts.feedHighWater() : replay.through ?? 0;
+    ws.serializeAttachment({ ...ws.deserializeAttachment(), through });
   }
 
   // POST /donations/status: one invoice's private status, by its bearer request token or by
@@ -1282,10 +1295,15 @@ export class DonationsObject {
     return entry.promise;
   }
 
-  // A pile message is acknowledged durably only after every page was tried, and only if no page
-  // that is still open failed to take it. Such a failure isn't a page going away: the pile stays
-  // unacknowledged, and the failure is rethrown after the other pages were tried, so the next
-  // alarm or start sends it again. Other messages are sent as before.
+  // A pile message is marked sent durably only after every page was tried, and only if no page
+  // that is still open failed to take it ("sent" meaning ws.send took it: an enqueue, not proof of
+  // receipt). Such a failure isn't a page going away: the pile stays unmarked, the failure is
+  // logged, and the alarm is brought forward to no later than one price-check cadence away, as a
+  // backstop. An alarm already due sooner, for receipt deadlines, a frame backlog or projection
+  // work, comes first and sends it then; there is no retry floor for the pile itself. Connected
+  // pages already keep an alarm set. Nothing is thrown, so settlement,
+  // quarantine, reads and the alarm carry on: a page's delivery problem is never theirs. Returns
+  // whether a pile message was marked; other messages are sent as before.
   broadcast(message) {
     const text = JSON.stringify(message);
     const pile = message?.type === "pile";
@@ -1300,9 +1318,14 @@ export class DonationsObject {
         if (pile && ws.readyState === OPEN) failure ??= error;
       }
     }
-    if (!pile) return;
-    if (failure) throw failure;
+    if (!pile) return true;
+    if (failure) {
+      console.error(`pile: an open page didn't take revision ${message.revision} (${failure.message}); sending it again later`);
+      this.ctx.waitUntil(this.scheduleAt(this.platform.now() + PRICE_FRESH_MS));
+      return false;
+    }
     this.markPileBroadcast(message.revision);
+    return true;
   }
 
   // Fixed one-minute windows. Invoices and on-chain switches, the requests that make work for

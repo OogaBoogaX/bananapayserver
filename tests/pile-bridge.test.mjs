@@ -302,8 +302,9 @@ test("the pile is acknowledged only after every open page took it: a stop before
     // Before any send: no page takes it. After some: the first does, the second doesn't.
     const releases = (variant === "before any send" ? [first, second] : [second]).map((p) => failPiles(p));
     read(w, ledger, invoice, [pay(1)]);
-    assert.throws(() => w.object.pushReceiptFrames(), /synthetic stop/, name);
-    await assert.rejects(w.ctx.settle(), /synthetic stop/, `${name}: the background publication failed the same way`);
+    // A page's failure is never thrown at the caller, nor at the background publication.
+    assert.doesNotThrow(() => w.object.pushReceiptFrames(), name);
+    await w.ctx.settle();
     const current = pileOf(w);
     assert.equal(meta(w, "pile_broadcast"), acked, `${name}: never acknowledged`);
     assert.equal(typed(first, "pile").at(-1).revision === current.revision, variant === "after some pages", `${name}: the first page`);
@@ -368,15 +369,17 @@ test("a failure right after a delta commits is recovered by the existing alarm i
   // The delta commits in the bridge; the pile's publication then fails in the same instance.
   const release = failPiles(page, "synthetic runtime failure after the delta");
   read(w, ledger, invoice, [pay(1)]);
-  assert.throws(() => w.object.pushReceiptFrames(), /synthetic runtime failure/);
-  await assert.rejects(w.ctx.settle(), /synthetic runtime failure/);
+  assert.doesNotThrow(() => w.object.pushReceiptFrames(), "the page's failure isn't the caller's");
+  await w.ctx.settle();
   assert.equal(deltas(w).length, 1, "the delta is committed");
+  assert.equal(w.object.receipts.hasPendingProjection(), false, "the work after the send still ran: D1 drained");
+  assert.ok(typed(page, "receipt").length > 0, "and the receipt frames went out");
   assert.ok(meta(w, "pile_broadcast") < pileOf(w).revision, "its publication isn't acknowledged");
   let at = await w.ctx.storage.getAlarm();
   assert.ok(at > w.platform.now() && at <= w.platform.now() + PRICE_FRESH_MS, "the alarm stays on its cadence");
-  // The alarm's own attempt fails too: it still sets the next one, on its cadence.
+  // The alarm's own attempt fails too: it completes, and sets the next one on its cadence.
   w.platform.advance(at - w.platform.now());
-  await assert.rejects(w.fireAlarm(), /synthetic runtime failure/);
+  await w.fireAlarm();
   at = await w.ctx.storage.getAlarm();
   assert.ok(at > w.platform.now() && at <= w.platform.now() + PRICE_FRESH_MS, "rescheduled, never immediate");
   assert.ok(meta(w, "pile_broadcast") < pileOf(w).revision);

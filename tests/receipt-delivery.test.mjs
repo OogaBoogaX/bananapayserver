@@ -12,7 +12,6 @@ const LIVE = new Set(["receipt", "invoiceStatus"]);
 const live = (page) => page.messages().filter((m) => LIVE.has(m.type));
 const seqs = (page) => live(page).map((m) => m.seq);
 const position = (page) => page.deserializeAttachment().through;
-const mark = (w) => w.ctx.storage.sql.exec("SELECT value FROM meta WHERE key = 'receipt_broadcast'").one().value;
 const high = (w) => w.object.receipts.feedHighWater();
 const restart = (w) => { w.object = new DonationsObject(w.ctx, w.env, w.platform); return w.object; };
 const firstCredits = (page) => live(page).filter((m) => m.type === "receipt" && m.receipt.state === "credited" && m.seq === m.receipt.firstCreditedSeq);
@@ -64,7 +63,6 @@ test("before any send, or after some pages: no position moves past an untaken fr
     } else {
       assert.equal(position(first), start[0]);
     }
-    assert.equal(mark(w), Math.min(position(first), position(second)), `${name}: the mark is the lowest open page's position`);
     // Retried on the cadence, never at once: no new receipt, no new payment.
     for (const f of failing) f.release();
     if (recovery === "restart") {
@@ -82,7 +80,6 @@ test("before any send, or after some pages: no position moves past an untaken fr
       assert.equal(firstCredits(page).length, 1, `${name}: one first-credit frame, so one animation`);
     }
     if (variant === "after some pages") assert.equal(seqs(first).length, sentBefore, `${name}: nothing sent again to the healthy page`);
-    assert.equal(mark(w), top);
   }
 });
 
@@ -147,7 +144,6 @@ test("closing and closed pages are skipped, and never hold the mark or healthy p
   w.object.pushReceiptFrames();
   await w.ctx.settle();
   assert.equal(position(healthy), high(w));
-  assert.equal(mark(w), high(w), "only open pages count");
   assert.equal(w.object.receiptFramesDue(), null, "nothing is due: the open page is current");
   assert.deepEqual(seqs(closing), []);
 });
@@ -165,7 +161,7 @@ test("each page hears live only frames after its own connect's mark, and the mar
   assert.ok(seqs(late).every((s) => s > afterFirst) && seqs(late).length > 0, "only after its own mark");
   assert.deepEqual(seqs(early), Array.from({ length: high(w) }, (_, i) => i + 1));
   assert.ok(late.messages().filter((m) => LIVE.has(m.type) && m.replay === false).every((m) => m.seq > afterFirst));
-  assert.deepEqual([position(early), position(late), mark(w)], [high(w), high(w), high(w)]);
+  assert.deepEqual([position(early), position(late)], [high(w), high(w)]);
 });
 
 test("bounded batches per page, finished by the alarm, in order", async () => {

@@ -30,6 +30,18 @@ import { hashRequest } from "./receipts.mjs";
 
 const HOUR = 3_600_000;
 
+// The most outbox rows one drain applies, apart from the client-facing replay bound, which only
+// sizes socket replay. D1 limits the queries one Worker invocation makes: 1,000 on the paid plan
+// and 50 on the free plan, and a batch counts as one query
+// (https://developers.cloudflare.com/d1/platform/limits/). A row costs at most three: its marker read, its
+// previous-revision read and its batch. A row already applied costs one. After the drain, the
+// publication reads the board and the tally, two queries each. A drain is shared while it runs,
+// so one event starts at most one, and a full drain continues in a new alarm invocation. Ten
+// rows is then at most 30 + 4 queries, which leaves the rest of the free plan's 50 for the event
+// that started it: a legacy settlement makes about nine. The tests count queries through the D1
+// stand-in; what a real invocation counts isn't measured.
+export const PROJECTION_BATCH_MAX = 10;
+
 // What a revision applies, in a fixed key order, so its hash is the same on every attempt.
 const canonical = (r) => ({
   receipt: r.receipt, revision: r.revision, seq: r.seq, observed: r.observed, invoice: r.invoice, state: r.state, sats: r.sats,
@@ -121,8 +133,11 @@ export async function drainProjection({ ledger, db, now, limit }) {
           );
           if (row.handle !== "") {
             statements.push(db.prepare(
+              // A credit shows its own casing of the handle, as a legacy donation does (0005); a
+              // reversal never changes how the handle is shown.
               "INSERT INTO handle_totals (handle, milli, sats, donations) VALUES (?, ?, ?, ?) " +
-              "ON CONFLICT (handle) DO UPDATE SET milli = milli + excluded.milli, sats = sats + excluded.sats, donations = donations + excluded.donations",
+              "ON CONFLICT (handle) DO UPDATE SET handle = CASE WHEN excluded.sats > 0 THEN excluded.handle ELSE handle_totals.handle END, " +
+              "milli = milli + excluded.milli, sats = sats + excluded.sats, donations = donations + excluded.donations",
             ).bind(row.handle, milli, sats, count));
           }
           if (row.owner !== null) {

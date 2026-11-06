@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DonationsObject, PRICE_FRESH_MS } from "../worker/object.mjs";
-import { drainProjection } from "../worker/projection.mjs";
+import { drainProjection, PROJECTION_BATCH_MAX } from "../worker/projection.mjs";
 import { hashRequest } from "../worker/receipts.mjs";
 import { pay, provider, read, READ, RECEIPT_SETTINGS as SETTINGS, seed, TOKEN } from "./helpers/receipt-seed.mjs";
 import { syntheticAddress } from "./helpers/synthetic-address.mjs";
@@ -710,22 +710,95 @@ test("an imported transaction's held receipt never reaches the lifetime figures"
   assert.equal(d1(w, "SELECT credit FROM receipt_projection").credit, 0);
 });
 
-test("drains are serialized, bounded by the saved replay bound, and resume across restarts", async () => {
-  const w = await world(SETTINGS);
-  const ledger = provider(w, { replayMax: 1 });
-  const { invoice } = await seed(w, ledger);
-  read(w, ledger, invoice, [pay(1), pay(2)]);
-  const pending = outbox(w);
-  const base = tally(w);
-  const [a, b] = [w.object.projectReceipts(), w.object.projectReceipts()];
-  assert.equal(a, b, "two drains at once share one");
-  const first = await a;
-  assert.deepEqual([first.applied + first.skipped, first.more], [1, true]);
-  assert.equal(await w.ctx.storage.getAlarm(), w.platform.now(), "the rest is due at once");
-  w.object = new DonationsObject(w.ctx, w.env, w.platform);
-  for (let i = 0; i < pending && outbox(w) > 0; i++) await w.fireAlarm();
-  assert.deepEqual([outbox(w), markers(w)], [0, pending]);
-  assert.deepEqual(since(w, base).slice(0, 2), [2, 2000], "two receipts, each once");
+// Counts the D1 queries made through w.env.DB: each executed statement, and each batch as one.
+function countQueries(w) {
+  const { prepare, batch } = w.env.DB;
+  const seen = { queries: 0 };
+  const wrap = (statement) => new Proxy(statement, {
+    get(target, key) {
+      if (key === "first" || key === "all" || key === "run") return (...args) => { seen.queries += 1; return target[key](...args); };
+      if (key === "bind") return (...args) => wrap(target.bind(...args));
+      const value = target[key];
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  w.env.DB.prepare = (sql) => wrap(prepare.call(w.env.DB, sql));
+  w.env.DB.batch = async (statements) => { seen.queries += 1; return batch.call(w.env.DB, statements); };
+  seen.restore = () => Object.assign(w.env.DB, { prepare, batch });
+  return seen;
+}
+
+test("drains are serialized, bounded by their own D1-sized batch whatever the replay bound, and resume across restarts", async () => {
+  for (const replayMax of [1, 100]) {
+    const name = `replayMax ${replayMax}`;
+    const w = await world(SETTINGS);
+    const ledger = provider(w, { replayMax });
+    const { invoice } = await seed(w, ledger);
+    read(w, ledger, invoice, Array.from({ length: 8 }, (_, i) => pay(i + 1)));
+    const pending = outbox(w);
+    assert.ok(pending > PROJECTION_BATCH_MAX, `${name}: more rows than one drain takes`);
+    const base = tally(w);
+    const seen = countQueries(w);
+    const [a, b] = [w.object.projectReceipts(), w.object.projectReceipts()];
+    assert.equal(a, b, `${name}: two drains at once share one`);
+    const first = await a;
+    seen.restore();
+    assert.deepEqual([first.applied + first.skipped, first.more], [PROJECTION_BATCH_MAX, true], `${name}: exactly the drain's own bound`);
+    // Three per row (marker, previous revision, batch) and four for the publication.
+    assert.ok(seen.queries <= 3 * PROJECTION_BATCH_MAX + 4, `${name}: ${seen.queries} D1 queries for one drain`);
+    assert.equal(await w.ctx.storage.getAlarm(), w.platform.now(), `${name}: the rest is due at once`);
+    // One alarm event starts at most one drain.
+    w.object = new DonationsObject(w.ctx, w.env, w.platform);
+    const work = w.object.receipts.projectionWork.bind(w.object.receipts);
+    let drains = 0;
+    w.object.receipts.projectionWork = (limit) => { drains += 1; return work(limit); };
+    await w.fireAlarm();
+    assert.equal(drains, 1, `${name}: one drain per event`);
+    for (let i = 0; i < pending && outbox(w) > 0; i++) await w.fireAlarm();
+    assert.deepEqual([outbox(w), markers(w)], [0, pending], name);
+    assert.deepEqual(since(w, base).slice(0, 2), [8, 8000], `${name}: eight receipts, each once`);
+  }
+});
+
+test("a conflict blocks new draining but never a publication already owed, which honours its saved retry time", async () => {
+  for (const recovery of ["alarm", "restart"]) {
+    const w = await world(SETTINGS);
+    const ledger = provider(w);
+    const { invoice } = await seed(w, ledger);
+    const page = await w.connectPage();
+    await w.ctx.settle();
+    read(w, ledger, invoice, [pay(1), pay(2)]);
+    const rows = w.object.receipts.projectionWork(100);
+    assert.ok(rows.length >= 2);
+    // The last row's marker is already in D1 with another payload: a conflict, after the earlier
+    // rows applied the credit. And the fresh board read fails in the same call.
+    const last = rows.at(-1);
+    w.env.DB.db.prepare("INSERT INTO receipt_applied (receipt, revision, hash, applied_at) VALUES (?, ?, 'not-this-payload', 1)").run(last.receipt, last.revision);
+    const { prepare } = w.env.DB;
+    w.env.DB.prepare = (sql) => (sql.includes("FROM handle_totals ORDER BY") || sql.includes("FROM handle_totals WHERE milli > 0")
+      ? { bind: () => ({ all: async () => { throw new Error("D1 unavailable"); } }) } : prepare(sql));
+    const heard = page.messages().length;
+    const result = await w.object.projectReceipts();
+    w.env.DB.prepare = prepare;
+    assert.equal(result.conflict, "marker-mismatch", recovery);
+    const committed = tally(w);
+    assert.ok(committed.sats >= 1000, `${recovery}: D1 holds the earlier rows' credit`);
+    assert.equal(w.object.receipts.publicationPending(), true, `${recovery}: the publication is still owed`);
+    assert.equal(page.messages().slice(heard).filter((m) => m.type === "tally").length, 0, `${recovery}: nothing sent from the failed read`);
+    // Never sooner than the saved retry time, conflict or not.
+    assert.equal(await w.object.projectReceipts(), null, `${recovery}: not before the retry time`);
+    assert.ok(w.object.projectionDue() >= w.platform.now() + PRICE_FRESH_MS, `${recovery}: due at the saved retry time`);
+    w.platform.advance(PRICE_FRESH_MS + 1);
+    if (recovery === "restart") w.object = new DonationsObject(w.ctx, w.env, w.platform);
+    const outboxBefore = outbox(w);
+    await w.fireAlarm();
+    assert.equal(w.object.receipts.publicationPending(), false, `${recovery}: published`);
+    assert.equal(page.messages().slice(heard).filter((m) => m.type === "tally").at(-1)?.sats, committed.sats, `${recovery}: D1's committed figures`);
+    assert.equal(outbox(w), outboxBefore, `${recovery}: and the conflict wasn't drained again`);
+    assert.equal(w.object.accountingCapability().reconciliation, "review");
+    // Nothing more is owed: no alarm for the conflict itself.
+    assert.equal(w.object.projectionDue(), null, `${recovery}: no alarm for the conflict alone`);
+  }
 });
 
 test("pages hear the receipt live first, then the tally and board once D1 holds the change", async () => {
