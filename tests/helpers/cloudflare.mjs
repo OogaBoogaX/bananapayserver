@@ -46,8 +46,12 @@ export function fakeStorage() {
   };
 }
 
+// node:sqlite has already read every row by the time this exists, unlike the runtime's cursor,
+// which reads lazily. Iterating it lets code that streams a cursor run here, but proves nothing
+// about how many rows the runtime reads or holds; tests that need that use their own cursor.
 function cursor(rows) {
   return {
+    [Symbol.iterator]: () => rows[Symbol.iterator](),
     toArray: () => rows,
     one() {
       if (rows.length !== 1) throw new Error(`expected one row, got ${rows.length}`);
@@ -64,6 +68,8 @@ export function fakeD1() {
     db.exec(readFileSync(new URL(file, migrations), "utf8"));
   }
   const statement = (sql, args = []) => ({
+    sql,
+    args,
     bind: (...bound) => statement(sql, bound),
     run: async () => {
       const result = db.prepare(sql).run(...args);
@@ -72,7 +78,21 @@ export function fakeD1() {
     first: async () => db.prepare(sql).get(...args) ?? null,
     all: async () => ({ results: db.prepare(sql).all(...args) }),
   });
-  return { db, prepare: (sql) => statement(sql) };
+  // D1's batch: the statements run in order in one transaction, and any failure, a trigger's
+  // RAISE(ABORT) included, rolls back all of them. The stand-in can't show the real runtime's
+  // limits on batch size or duration.
+  const batch = async (statements) => {
+    db.exec("BEGIN");
+    try {
+      const results = statements.map((s) => ({ success: true, meta: { changes: Number(db.prepare(s.sql).run(...s.args).changes) } }));
+      db.exec("COMMIT");
+      return results;
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  };
+  return { db, prepare: (sql) => statement(sql), batch };
 }
 
 export class FakeSocket {
@@ -114,8 +134,13 @@ export function fakeCtx() {
     waitUntil(promise) {
       background.push(promise);
     },
-    // Lets the tests wait for work the object started in the background.
-    settle: () => Promise.all(background.splice(0)),
+    // Lets the tests wait for work the object started in the background: all of it, even when
+    // some fails, then the first failure.
+    settle: async () => {
+      const results = await Promise.allSettled(background.splice(0));
+      const failed = results.find((r) => r.status === "rejected");
+      if (failed) throw failed.reason;
+    },
     acceptWebSocket(ws, tags = []) {
       ws.readyState = OPEN;
       sockets.push({ ws, tags });

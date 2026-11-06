@@ -116,13 +116,10 @@ function setStatus(label, open) {
   $("status").className = open ? "open" : "closed";
 }
 
-// The pile is worked out the same way on every page: the level it was sent, less what the
-// Oogas have eaten since it arrived.
-setInterval(() => {
-  if (!pile) return;
-  const level = Math.max(0, pile.bananas - (pile.eatPerHour * (Date.now() - pile.received)) / 3_600_000);
-  $("pile").textContent = Math.floor(level).toLocaleString();
-}, 1000);
+// The pile doesn't decay: it is the level it was sent, or unknown while its cutover is pending.
+function showPile() {
+  $("pile").textContent = pile && typeof pile.bananas === "number" ? Math.floor(pile.bananas).toLocaleString() : "?";
+}
 
 function showBoard(id, entries, unit) {
   $(id).replaceChildren(...entries.map((entry) => {
@@ -141,7 +138,11 @@ function connect() {
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
     if (message.type === "status") setStatus(`${message.open ? "open" : "closed"}, on ${message.network}`, message.open);
-    if (message.type === "pile") pile = { ...message, received: Date.now() };
+    // Only a newer revision replaces the pile the page holds.
+    if (message.type === "pile" && (!pile || !(message.revision <= pile.revision))) {
+      pile = message;
+      showPile();
+    }
     if (message.type === "board") {
       showBoard("board", message.entries, "bananas");
       showBoard("sats-board", message.satsEntries, "sats");

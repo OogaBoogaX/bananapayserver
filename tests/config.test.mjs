@@ -95,13 +95,10 @@ test("the Worker's other settings", () => {
     network: "signet",
     invoiceTimeoutMs: 10_000,
     pendingDays: 7,
-    pileStart: 1_000,
-    pileEatPerHour: 60,
   });
   assert.equal(readSettings({ NETWORK: "liquid" }).network, null);
-  const pile = readSettings({ PILE_START: "0", PILE_EAT_PER_HOUR: "0" });
-  assert.deepEqual([pile.pileStart, pile.pileEatPerHour], [0, 0], "zero is allowed for the pile");
-  assert.equal(readSettings({ PILE_EAT_PER_HOUR: "-3" }).pileEatPerHour, 60);
+  // The pile has no settings any more: no decay rate, and no configured starting level.
+  assert.deepEqual(readSettings({ NETWORK: "signet", PILE_START: "1000", PILE_EAT_PER_HOUR: "60" }), readSettings({ NETWORK: "signet" }));
 });
 
 test("both ends accept legacy MAX_SATS only when the canonical Lightning threshold is absent", () => {
