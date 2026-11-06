@@ -3,16 +3,17 @@
 // byte for byte what these produce; scripts/receipt-vectors.mjs writes it after a reviewed
 // change. Pages consume the same committed bytes.
 //
-// Two sections. `vectors` is core-only: what worker/receipts.mjs and worker/pile.mjs emit,
+// Three sections. `vectors` is core-only: what worker/receipts.mjs and worker/pile.mjs emit,
 // labeled as such. `endpoints` is what the read endpoints and the socket actually send through
-// the front door and object.
+// the front door and object. `projection` is what an open socket hears when the D1 projection
+// publishes lifetime figures.
 
 import { fakeCtx, fakeD1, fakePlatform, fakeStorage } from "./cloudflare.mjs";
 import { syntheticAddress } from "./synthetic-address.mjs";
-import { DonationsObject } from "../../worker/object.mjs";
+import { DonationsObject, PRICE_FRESH_MS } from "../../worker/object.mjs";
 import { applyPileAnchor, pileView, recordPileDelta } from "../../worker/pile.mjs";
 import { hashRequest, ReceiptLedger } from "../../worker/receipts.mjs";
-import { pay, provider, read, RECEIPT_SETTINGS, seed, TOKEN } from "./receipt-seed.mjs";
+import { pay, provider, read, READ, RECEIPT_SETTINGS, seed, TOKEN } from "./receipt-seed.mjs";
 import { world } from "./world.mjs";
 
 export const FIXTURE = new URL("../fixtures/receipt-accounting-v1.json", import.meta.url);
@@ -174,6 +175,154 @@ async function endpointVectors() {
   };
 }
 
+// What an open page hears when the D1 projection publishes lifetime figures, through the real
+// object and the D1 stand-in. Each vector is the socket's messages from a stated point until the
+// object's background work (the projection and its publication) has finished, with the D1
+// lifetime tally after it, so a consumer can see that a refresh is the authoritative figure and
+// a repeated one adds nothing.
+async function projectionVectors() {
+  const w = await world(RECEIPT_SETTINGS);
+  const ledger = provider(w);
+  const { invoice } = await seed(w, ledger, { invoice: "ProjectInv1", token: TOKEN(0xc1), addresses: [1] });
+  const page = await w.connectPage();
+  await w.ctx.settle();
+  const lifetime = () => {
+    const t = w.env.DB.db.prepare("SELECT count, sats, milli, last FROM tally WHERE id = 1").get();
+    return { count: t.count, sats: t.sats, milli: t.milli, last: t.last };
+  };
+  const kinds = new Set(["receipt", "tally", "board"]);
+  // The socket's receipt, tally and board messages from `from`, after background work settles.
+  const heard = async (from) => {
+    await w.ctx.settle();
+    return { messages: page.messages().slice(from).filter((m) => kinds.has(m.type)), d1: lifetime() };
+  };
+  const restart = () => { w.object = new DonationsObject(w.ctx, w.env, w.platform); };
+
+  // A first credit, broadcast as ingestion would: the receipt live, then D1's figures.
+  let mark = page.messages().length;
+  read(w, ledger, invoice, [pay(1)]);
+  w.object.pushReceiptFrames();
+  const firstCredit = await heard(mark);
+
+  // A second credit whose batch is durable when the object stops, before its outbox row is
+  // removed. After a restart, with the page's socket still open, the marker matches: nothing is
+  // counted again, and the page gets D1's current figures.
+  // It is first observed a moment later, with a different amount, so `last` shows which is newest.
+  w.platform.advance(1_000);
+  read(w, ledger, invoice, [pay(1), pay(2, "settled", 2500)]);
+  w.object.receipts.projected = (id, options) => {
+    if (options?.publish) throw new Error("synthetic stop after the batch");
+    return ReceiptLedger.prototype.projected.call(w.object.receipts, id, options);
+  };
+  mark = page.messages().length;
+  w.object.pushReceiptFrames();
+  await w.ctx.settle().catch(() => {});
+  const stoppedLive = page.messages().slice(mark).filter((m) => kinds.has(m.type));
+  restart();
+  // This time the figures are sent, but the object stops before noting the publication done.
+  w.object.receipts.published = () => { throw new Error("synthetic stop after the broadcast"); };
+  mark = page.messages().length;
+  await w.object.projectReceipts();
+  const crashRecovery = await heard(mark);
+
+  // After a restart, once the retry cadence has passed, the same authoritative figures are sent
+  // again, and nothing is credited.
+  w.platform.advance(PRICE_FRESH_MS + 1);
+  restart();
+  mark = page.messages().length;
+  await w.object.projectReceipts();
+  const duplicateRefresh = await heard(mark);
+
+  // The newer receipt reversed, then reconfirmed at its frozen price: `last` falls back to the
+  // older one, then returns, its first observation unchanged.
+  const [, second] = w.ctx.storage.sql.exec("SELECT id FROM ra_receipts WHERE invoice = ? ORDER BY ord", invoice).toArray();
+  read(w, ledger, invoice, [pay(1), pay(2, "invalid", 2500)]);
+  ledger.reverse(second.id, "synthetic double spend");
+  mark = page.messages().length;
+  w.object.pushReceiptFrames();
+  const reversal = await heard(mark);
+  read(w, ledger, invoice, [pay(1), pay(2, "settled", 2500)]);
+  mark = page.messages().length;
+  w.object.pushReceiptFrames();
+  const reconfirmation = await heard(mark);
+  return {
+    "projection.firstCredit": firstCredit,
+    // The second credit's receipt frames, heard live before the stop: no tally or board yet.
+    "projection.stoppedAfterBatch": { messages: stoppedLive, d1: lifetime() },
+    "projection.crashRecovery": crashRecovery,
+    "projection.duplicateRefresh": duplicateRefresh,
+    "projection.reversal": reversal,
+    "projection.reconfirmation": reconfirmation,
+  };
+}
+
+// The positive payable path through the real front door, object and socket: a complete
+// synthetic snapshot, read through the supported ledger path with destination capability, names
+// an address already bound to the invoice and a remaining amount. Then time withdraws both, and
+// later the original invoice expires, with the private history kept throughout. This world
+// saves a replay bound of 2 (a reviewed read setting, as any deployment saves its own), so a
+// page reconnecting from an old cursor is genuinely too far behind and gets the gap marker.
+async function payableVectors() {
+  const w = await world(RECEIPT_SETTINGS);
+  const ledger = provider(w, { replayMax: 2 });
+  const { invoice, token } = await seed(w, ledger, { invoice: "PayableInv1", token: TOKEN(0xd1), addresses: [1, 2] });
+  const owner = { id: 4242, login: "ooga-dev" };
+  const call = async (path, body, donor = null) => {
+    const response = await w.post(path, body, { donor });
+    return { status: response.status, body: await response.json() };
+  };
+  const page = await w.connectPage();
+  await w.ctx.settle();
+  const kinds = new Set(["receipt", "invoiceStatus", "replay", "recentReceipts"]);
+  const live = (from) => page.messages().slice(from).filter((m) => kinds.has(m.type));
+  // A complete snapshot: one partial payment to the first bound address, and the provider
+  // currently offering the second bound address with 6,000 sats left.
+  let mark = page.messages().length;
+  read(w, ledger, invoice, [{ ...pay(1, "settled", 4000), destination: syntheticAddress(1) }],
+    { left: 6000, destination: syntheticAddress(2), capabilities: { complete: true, destination: true } });
+  w.object.pushReceiptFrames();
+  await w.ctx.settle();
+  const socketPayable = live(mark);
+  const statusPayable = await call("/donations/status", { request: token });
+  const historyPayable = await call("/donations/history", {}, owner);
+  // Past the freshness bound: the alarm withdraws the remaining amount and payable address, live,
+  // and the private status and history say so, at a newer revision.
+  w.platform.advance(READ.freshnessMs + 1);
+  mark = page.messages().length;
+  await w.fireAlarm();
+  const socketWithdrawn = live(mark);
+  const statusWithdrawn = await call("/donations/status", { request: token });
+  const historyWithdrawn = await call("/donations/history", {}, owner);
+  // A reconnect from the start of the feed: three frames now wait, more than the saved bound of
+  // 2, so a gap marker and no frames. A reconnect from the current mark replays nothing and is
+  // complete.
+  const gap = await w.connectPage(undefined, "visitor-gap", 0);
+  const socketGap = gap.messages().filter((m) => kinds.has(m.type));
+  const current = await w.connectPage(undefined, "visitor-current", w.object.receipts.feedHighWater());
+  const socketCurrent = current.messages().filter((m) => kinds.has(m.type));
+  // Past the original invoice's expiry: the alarm commits it live, Lightning reads expired, and
+  // the history keeps the invoice.
+  w.platform.advance(900_000);
+  mark = page.messages().length;
+  await w.fireAlarm();
+  const socketExpired = live(mark);
+  const statusExpired = await call("/donations/status", { request: token });
+  const historyExpired = await call("/donations/history", {}, owner);
+  return {
+    "socket.payableLive": socketPayable,
+    "status.payable": statusPayable,
+    "history.payable": historyPayable,
+    "socket.freshnessWithdrawn": socketWithdrawn,
+    "status.withdrawn": statusWithdrawn,
+    "history.withdrawn": historyWithdrawn,
+    "socket.gapMarker": socketGap,
+    "socket.currentReconnect": socketCurrent,
+    "socket.expired": socketExpired,
+    "status.expired": statusExpired,
+    "history.expired": historyExpired,
+  };
+}
+
 export async function buildVectors() {
   return {
     contract: "receipt-accounting-v1",
@@ -190,6 +339,29 @@ export async function buildVectors() {
         "not prove provider ingestion, D1 projection, reconciliation (health is never current here) or any consumer's " +
         "parsing. Issuance is off.",
       vectors: await endpointVectors(),
+    },
+    projection: {
+      scope: "projection-publication",
+      note: "What an open page's socket hears when the D1 projection publishes lifetime figures, through the real object " +
+        "and the D1 stand-in, after the object's background work has finished: the receipt, tally and board messages " +
+        "from the stated point, and d1, the lifetime tally D1 holds afterwards. A first credit; a restart after a durable " +
+        "batch whose outbox row wasn't removed; a refresh repeated after a stop between sending and noting it sent, which " +
+        "credits nothing; a reversal; and a reconfirmation at the frozen price. Proves the producer's publication order " +
+        "and that every refresh is D1's figure. Does not prove real D1, Durable Object or socket runtime behaviour, " +
+        "provider ingestion, or any consumer's parsing. Issuance is off.",
+      vectors: await projectionVectors(),
+    },
+    payable: {
+      scope: "read-endpoints-payable",
+      note: "The positive payable path through the real front door, object and socket. A complete synthetic snapshot, " +
+        "read through the supported ledger path with destination capability, names a regtest address already bound to " +
+        "the invoice and 6,000 sats left; the private status and history report them while fresh. Past the freshness " +
+        "bound the alarm withdraws both, live, and the replies say so at a newer revision; past the original invoice's " +
+        "expiry Lightning reads expired, and the history keeps the invoice. This world saves a replay bound of 2, so a " +
+        "reconnect from cursor 0 is genuinely too far behind and gets the gap marker. Issuance is off, and no provider " +
+        "has verified the original BOLT11, so Lightning is never available here. Does not prove provider ingestion, " +
+        "real runtime behaviour or any consumer's parsing.",
+      vectors: await payableVectors(),
     },
   };
 }

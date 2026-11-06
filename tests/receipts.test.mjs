@@ -147,7 +147,7 @@ const pick = ({ received, credited, review, left, state }) => ({ received, credi
 test("the schema lives in its own tables, migrates once and survives a restart", () => {
   const { storage, make } = setup();
   make();
-  assert.equal(storage.sql.exec("SELECT value FROM meta WHERE key = 'receipt_schema'").one().value, 5);
+  assert.equal(storage.sql.exec("SELECT value FROM meta WHERE key = 'receipt_schema'").one().value, 6);
   assert.equal(storage.sql.exec("SELECT count(*) AS n FROM sqlite_master WHERE name = 'pending' OR name = 'donations'").one().n, 0);
   make();
 });

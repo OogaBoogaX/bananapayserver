@@ -243,6 +243,9 @@ test("a page connecting gets recent receipts and the replay marker every time, a
   const { invoice } = await seed(w, ledger);
   read(w, ledger, invoice, [pay(1), pay(2)]);
   w.object.pushReceiptFrames();
+  // The push starts the D1 projection in the background; let it finish, so its tally and
+  // board reach no page in the middle of the connect sequences checked below.
+  await w.ctx.settle();
   const through = w.ctx.storage.sql.exec("SELECT max(seq) AS seq FROM ra_feed").one().seq;
   // No cursor: recent receipts and the marker, nothing replayed, nothing live.
   const fresh = await w.connectPage();
@@ -317,16 +320,19 @@ test("legacy paid and seen for a receipt-mode invoice change nothing and make no
   assert.equal(w.env.DB.db.prepare("SELECT count(*) AS n FROM donations").get().n, 0);
 });
 
-test("with receipt reads on and no anchor, the pile is still pending and health is never current", async () => {
+test("with receipt reads on and no anchor, the pile stays pending; health is behind while the outbox waits", async () => {
   const w = await world(SETTINGS);
   const ledger = provider(w);
   const { invoice } = await seed(w, ledger);
   read(w, ledger, invoice, [pay(1)], { capabilities: { complete: true } });
-  w.object.pushReceiptFrames();
+  // Committed but not yet in D1: behind.
+  assert.equal(w.object.accountingCapability().reconciliation, "behind");
+  await w.object.projectReceipts();
+  assert.equal(w.ctx.storage.sql.exec("SELECT count(*) AS n FROM ra_outbox").one().n, 0);
+  // A fresh verified-complete read, priced, projected: only now can it be current.
+  assert.equal(w.object.accountingCapability().reconciliation, "current");
   const page = await w.connectPage();
-  assert.deepEqual([typed(page, "pile")[0].bananas, typed(page, "pile")[0].cutover], [null, "pending"]);
-  // Nothing drains the projection outbox yet, so reconciliation can't be current.
-  assert.equal(typed(page, "status")[0].accounting.reconciliation, "behind");
+  assert.deepEqual([typed(page, "pile")[0].bananas, typed(page, "pile")[0].cutover], [null, "pending"], "the pile is its own journal");
 });
 
 test("recent receipts follow first observation, so a late credit or correction never displaces a newer receipt", async () => {

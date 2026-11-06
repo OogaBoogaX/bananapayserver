@@ -102,6 +102,108 @@ test("the endpoint vectors are the real replies, with the agreed keys and status
   for (const forbidden of ["bcrt1", "11".repeat(32), "btcpay", "store-a"]) assert.equal(socketText.includes(forbidden), false, forbidden);
 });
 
+test("the projection vectors are what an open socket hears: D1's figures after the receipt, and a repeated refresh adds nothing", async () => {
+  const { projection } = await buildVectors();
+  assert.equal(projection.scope, "projection-publication");
+  const v = projection.vectors;
+  assert.deepEqual(Object.keys(v),
+    ["projection.firstCredit", "projection.stoppedAfterBatch", "projection.crashRecovery", "projection.duplicateRefresh", "projection.reversal", "projection.reconfirmation"]);
+  const of = (name, type) => v[name].messages.filter((m) => m.type === type);
+  const tallyOf = (name) => { const t = of(name, "tally"); assert.equal(t.length, 1, `${name}: one tally`); return t[0]; };
+  // Every tally sent is exactly what D1 holds at that point.
+  for (const name of Object.keys(v)) {
+    if (name === "projection.stoppedAfterBatch") continue;
+    const t = tallyOf(name);
+    assert.deepEqual([t.count, t.sats, t.last], [v[name].d1.count, v[name].d1.sats, v[name].d1.last], `${name}: the tally sent is D1's`);
+    assert.equal(of(name, "board").length, 1, `${name}: one board`);
+    // Live receipt frames come before the lifetime figures.
+    const types = v[name].messages.map((m) => m.type);
+    assert.ok(types.lastIndexOf("receipt") < types.indexOf("board") && types.indexOf("board") < types.indexOf("tally"), `${name}: receipt, board, tally`);
+  }
+  assert.deepEqual(v["projection.firstCredit"].d1, { count: 1, sats: 1000, milli: 1000, last: 1000 });
+  // Stopped after a durable batch: the receipt was heard live, the figures not yet.
+  assert.deepEqual(v["projection.stoppedAfterBatch"].messages.map((m) => m.type), ["receipt", "receipt"]);
+  assert.deepEqual(v["projection.stoppedAfterBatch"].d1, { count: 2, sats: 3500, milli: 3500, last: 2500 });
+  // The recovery and the repeated refresh: no receipt frames, and the same figures, counted once.
+  for (const name of ["projection.crashRecovery", "projection.duplicateRefresh"]) {
+    assert.equal(of(name, "receipt").length, 0, `${name}: no receipt replayed as new`);
+    assert.deepEqual(v[name].d1, v["projection.stoppedAfterBatch"].d1, `${name}: nothing counted again`);
+  }
+  assert.deepEqual(tallyOf("projection.duplicateRefresh"), tallyOf("projection.crashRecovery"), "a repeated refresh is the same message, adding no credit");
+  assert.deepEqual(of("projection.duplicateRefresh", "board"), of("projection.crashRecovery", "board"));
+  // Reversal takes the newer receipt out of the figures and of `last`; reconfirmation restores both.
+  assert.deepEqual(v["projection.reversal"].d1, { count: 1, sats: 1000, milli: 1000, last: 1000 });
+  assert.equal(of("projection.reversal", "receipt").at(-1).receipt.state, "reversed");
+  assert.deepEqual(v["projection.reconfirmation"].d1, v["projection.stoppedAfterBatch"].d1, "reconfirmed at the same frozen price");
+  assert.deepEqual(of("projection.reconfirmation", "board"), of("projection.crashRecovery", "board"));
+  assert.ok([...Object.values(v)].flatMap((x) => x.messages).filter((m) => m.type === "receipt").every((m) => m.replay === false), "all heard live");
+  // Nothing private in what the page heard.
+  const text = JSON.stringify(v);
+  for (const forbidden of ["4242", "bcrt1", "btcpay", "store-a", "owner"]) assert.equal(text.includes(forbidden), false, forbidden);
+});
+
+test("the payable vectors are the real positive path: a verified payable address and fresh remainder, withdrawn, expired, and a real gap", async () => {
+  const { payable } = await buildVectors();
+  assert.equal(payable.scope, "read-endpoints-payable");
+  const v = payable.vectors;
+  assert.deepEqual(Object.keys(v), ["socket.payableLive", "status.payable", "history.payable", "socket.freshnessWithdrawn", "status.withdrawn",
+    "history.withdrawn", "socket.gapMarker", "socket.currentReconnect", "socket.expired", "status.expired", "history.expired"]);
+  const statusKeys = ["invoice", "payableAddress", "addresses", "nextAddress", "receipts", "next"];
+  const invoiceKeys = ["id", "accounting", "due", "received", "credited", "review", "left", "state", "revision", "expires", "lightning", "bolt11"];
+  for (const name of ["status.payable", "status.withdrawn", "status.expired"]) {
+    assert.equal(v[name].status, 200, name);
+    assert.deepEqual(Object.keys(v[name].body), statusKeys, name);
+    assert.deepEqual(Object.keys(v[name].body.invoice), invoiceKeys, name);
+  }
+  // While fresh: a payable address that is one of the invoice's own bound regtest addresses, and
+  // the provider's remaining amount, consistent with what was received.
+  const fresh = v["status.payable"].body;
+  assert.ok(fresh.payableAddress?.startsWith("bcrt1"), "a regtest address");
+  assert.ok(fresh.addresses.some((a) => a.address === fresh.payableAddress), "already bound to this invoice");
+  assert.deepEqual([fresh.invoice.left, fresh.invoice.received, fresh.invoice.due, fresh.invoice.state], [6000, 4000, 10_000, "partial"]);
+  assert.deepEqual([fresh.invoice.lightning, fresh.invoice.bolt11], ["unavailable", null], "no provider has verified the original code");
+  assert.ok(fresh.invoice.expires * 1000 > fresh.receipts[0].at, "unexpired original metadata");
+  assert.equal(v["history.payable"].body.invoices[0].left, 6000);
+  // Live, the page heard the receipt with the fresh remainder, and never the address.
+  assert.ok(v["socket.payableLive"].length > 0 && v["socket.payableLive"].every((m) => m.replay === false));
+  assert.equal(v["socket.payableLive"].at(-1).invoice.left, 6000);
+  // Withdrawn by time: live first, then both replies at that newer revision, nothing payable.
+  const withdrawn = v["socket.freshnessWithdrawn"];
+  assert.deepEqual(withdrawn.map((m) => [m.type, m.replay, m.invoice.left]), [["invoiceStatus", false, null]]);
+  for (const name of ["status.withdrawn", "history.withdrawn"]) {
+    const body = v[name].body;
+    const entry = body.invoices ? body.invoices[0] : body.invoice;
+    assert.deepEqual([entry.left, entry.revision], [null, withdrawn[0].invoice.revision], name);
+    assert.ok(entry.revision > (body.invoices ? v["history.payable"].body.invoices[0].revision : fresh.invoice.revision), `${name}: newer`);
+  }
+  assert.equal(v["status.withdrawn"].body.payableAddress, null);
+  assert.deepEqual(v["status.withdrawn"].body.addresses, fresh.addresses, "the address history is kept; it never implies payable");
+  // Expired: live, then Lightning expired, the history retaining the invoice, its receipts kept.
+  const expired = v["socket.expired"];
+  assert.deepEqual(expired.map((m) => [m.type, m.replay]), [["invoiceStatus", false]]);
+  assert.equal(v["status.expired"].body.invoice.lightning, "expired");
+  assert.equal(v["status.expired"].body.invoice.revision, expired[0].invoice.revision);
+  assert.deepEqual(v["status.expired"].body.receipts, fresh.receipts.map((r) => r), "receipts kept");
+  assert.deepEqual(v["history.expired"].body.invoices.map((i) => [i.id, i.credited, i.expires]), [["PayableInv1", 4000, fresh.invoice.expires]]);
+  // A real gap: more frames waiting than the saved bound, so no frames and complete: false; a
+  // current reconnect is complete with nothing to replay.
+  const gap = v["socket.gapMarker"];
+  assert.deepEqual(gap.map((m) => m.type), ["recentReceipts", "replay"]);
+  assert.deepEqual(gap.at(-1), { type: "replay", after: 0, through: withdrawn[0].seq, complete: false });
+  assert.deepEqual(v["socket.currentReconnect"].map((m) => m.type), ["recentReceipts", "replay"]);
+  assert.deepEqual(v["socket.currentReconnect"].at(-1), { type: "replay", after: withdrawn[0].seq, through: withdrawn[0].seq, complete: true });
+  // Nothing private on any socket message: no address, and no account id anywhere.
+  const sockets = JSON.stringify(Object.entries(v).filter(([name]) => name.startsWith("socket.")));
+  for (const forbidden of ["bcrt1", "payableAddress", "11".repeat(32), "btcpay", "store-a"]) assert.equal(sockets.includes(forbidden), false, forbidden);
+  assert.equal(JSON.stringify(v).includes("4242"), false);
+});
+
+test("the vectors are deterministic, and every section before payable is unchanged by it", async () => {
+  const [a, b] = [serialize(await buildVectors()), serialize(await buildVectors())];
+  assert.equal(a, b, "two builds, the same bytes");
+  assert.deepEqual(Object.keys(JSON.parse(a)), ["contract", "scope", "note", "vectors", "endpoints", "projection", "payable"]);
+});
+
 test("the OBL donation fixture is untouched by these vectors", () => {
   // The donation event and its text rules stay pinned by obl-contract.test.mjs alone.
   assert.ok(existsSync(new URL("./fixtures/obl-donations.js", import.meta.url)));

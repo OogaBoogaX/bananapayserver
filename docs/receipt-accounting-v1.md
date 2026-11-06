@@ -41,7 +41,9 @@ the receipt core, through `PageApi.status` and `PageApi.history`.
   - **Issuance:** receipt-mode issuance is off in this build. `accounting: 1` is answered 503
     `closed` before any provider call, and any other value is 400 `invalid`.
   - **Provider ingestion:** nothing creates a mapping or reads the provider yet.
-  - **D1 projection:** the projection outbox is never drained, so health is never `current`.
+  - **Reconciliation:** nothing reads the provider, so in a real deployment no read is ever
+    verified complete and health is never `current`. The D1 projection is built; see
+    [D1 projection](#d1-projection).
 - **Real outputs:** the endpoint and socket outputs are in the shared fixture's `endpoints`
   section; see `tests/receipt-contract.test.mjs`.
   - **What they prove:** the producer's real shapes, statuses and cursors, generated through
@@ -54,9 +56,21 @@ the receipt core, through `PageApi.status` and `PageApi.history`.
 
     Each socket vector is the messages received at a stated point, so no later message can
     leak in.
-  - **What they don't prove:** provider ingestion, the D1 projection, reconciliation (health is
-    never `current` here), or that any consumer parses them. That needs the consumer's own run
-    against these bytes.
+  - **Two more sections, generated the same way:**
+    - **`projection`:** what an open socket hears when the D1 projection publishes lifetime
+      figures, through a first credit, a restart, a repeated refresh, a reversal and a
+      reconfirmation.
+    - **`payable`:** the positive payable path, from a complete synthetic snapshot read with
+      destination capability. It covers:
+      - a status naming a bound regtest payable address, with a fresh remainder;
+      - its live withdrawal once stale, and the invoice's expiry, with the history kept;
+      - a real gap marker from a reconnect further behind than that world's saved replay bound
+        of 2, and a complete current reconnect.
+
+      Lightning is never available there, since no provider has verified the original code.
+  - **What they don't prove:** provider ingestion, reconciliation (health is never `current` in
+    a real deployment), real runtime behaviour, or that any consumer parses them. That needs the
+    consumer's own run against these bytes.
 - **Page bound:** a private page (status receipts, addresses, history) carries at most 100 rows.
   This is a wire bound agreed with the consumer, not a deployment choice. Read settings above it
   are refused when saved or adopted, the saved row's checks refuse it too, and the core never
@@ -748,6 +762,121 @@ D1 is a separate database, with no transaction shared with the object.
 - **Outbox rows** are deleted only after the batch succeeds.
 - **Lag** shows as `behind`.
 
+### D1 projection
+
+Built in [`worker/projection.mjs`](../worker/projection.mjs) and migration
+`0010_receipt_projection.sql`, and tested in `tests/projection.test.mjs`.
+
+- **What it applies:** one committed receipt revision per outbox row, in commit order:
+  - receipt, invoice, revision, state and sats;
+  - the credited sats, and the frozen banana thousandths;
+  - the attribution handle, and the first-observation time;
+  - the invoice's saved stable account id, or none.
+
+  The account id goes only into D1's private account totals, never into a public table or
+  frame. No address, provider id or outpoint is copied.
+- **One atomic batch per revision.** The batch holds:
+  - an idempotency marker `(receipt, revision)`, with the SHA-256 of exactly what is applied;
+  - the receipt's newest projection, and its invoice's receipt-mode fence;
+  - the change to the tally, the hourly figures, the handle totals and the account totals;
+  - the tally's `last`, chosen again from what the batch leaves.
+
+  The outbox row is removed only after the batch succeeds. A crash between the two finds the
+  marker on the next drain, with the same hash, and removes the row without counting again.
+- **Changes against what was applied last.** Each revision's change is worked out against the
+  receipt's last applied revision:
+  - a credit adds once, a reversal takes it back once, and a reconfirmation adds it again, at
+    the same frozen price;
+  - a revision that changes no credit changes no figure;
+  - an older revision arriving after a newer one is marked, and never applied over it.
+- **Counting:**
+  - **Donations:** in receipt mode each credited receipt is one donation, while its credit
+    stands, so partial and repeat payments to one invoice are distinct donations. This applies
+    to `tally.count`, `handle_totals.donations` and the account totals. A legacy donation keeps
+    its historical meaning: one invoice, one donation.
+  - **Amounts:** sats and bananas follow each receipt's credit. The hour is the receipt's first
+    observation. An unpriced receipt adds its sats and no bananas.
+  - **`last`:** the sats of the newest valid donation, legacy or receipt. Legacy donations are
+    ordered by when they were recorded, and receipts by when they were first observed. Neither
+    a correction's time nor processing order can move it, and a reversed receipt is never it.
+    Receipts first observed in the same millisecond are ordered by the feed sequence of their
+    first observation. It is saved with the receipt's first projected row and never changed, so
+    a reversal, a reconfirmation, or a newer revision reaching D1 first can't reorder them. At
+    the same millisecond a receipt is newer than a legacy donation, and legacy donations keep
+    their recorded order.
+  - **Legacy inserts use the same rule.** Migration 0010 replaces the legacy insert trigger from
+    0003. Its count, sats, bananas and hourly figures are unchanged. Its `last` is now chosen
+    by the same query as the projection's, instead of taking the inserted donation's sats.
+    - A late legacy donation with an older `at`, whether older than a receipt or another legacy
+      donation, still counts, but never becomes `last`.
+    - An ordinary legacy settlement is recorded now, so it stays the newest.
+    - That trigger is the only one that writes the tally, so the result never depends on the
+      order SQLite runs triggers in.
+    - Existing figures aren't recomputed.
+  - **Rankings:** named handles rank, combining across accounts as legacy handles do. An unnamed
+    credit tallies but ranks nowhere.
+- **Account totals:** `receipt_account_totals` holds each signed-in account's receipt-mode
+  contributions, by the stable id saved at issuance, never by handle. A renamed handle stays
+  one account, and one handle shared by two accounts stays two. It is private, and no page is
+  sent it. The legacy `totals` table has been history since migration 0007, which dropped its
+  trigger, and nothing reads it; it is left as it is.
+- **Never through legacy donations.** Receipt credit never passes through the legacy insert
+  triggers, and legacy rows, prices and markers are never changed. D1 triggers refuse an
+  invoice id that is both legacy and receipt-mode, from either side, so invoice-level and
+  receipt-level ingestion can't both credit one payment.
+- **Exact or held.** Every total a batch moves is checked inside that batch, against the value
+  it leaves:
+  - **Which totals:** the tally's count, sats and bananas, the hour's sats and bananas, and the
+    handle's and the account's sats, bananas and donations.
+  - **What passes:** each must be an exact integer from 0 to 2^53 − 1. SQLite turns an
+    overflowing sum into a non-integer, and that fails too.
+  - **What fails:** the whole batch rolls back (marker, projection and every total), and the work
+    is kept and held as `unsafe-total`.
+
+  Legacy deliveries move the same totals and can land while a drain waits on D1, so a value
+  read before the batch is never trusted. A legacy amount that landed in between is never
+  overwritten, because every change is relative. Nothing is ever published rounded or negative.
+- **Conflicts stop it, in order.** A marker whose hash differs, a batch the legacy fence
+  refuses, or an unsafe total is recorded for review in the object. Draining stops, and the
+  conflict is never drained again or given an alarm until resolved. It is never acknowledged
+  silently. Health is `review` while a conflict waits. Resolving one is an operator step not
+  built yet, and an [activation gate](#activation-gates).
+  - **Recognising a conflict:** a refused batch is a conflict only when its error says so, using
+    the fence's or guard's own message or a total's CHECK. The error's message is checked, and
+    so are the errors it wraps (`cause`, a few levels deep), since a platform may wrap the
+    database's error.
+  - **Anything else** is a failure, retried on the cadence.
+- **Publication is durable.** When a batch may have moved a figure, a note that pages need
+  D1's current figures is recorded in the same step that removes the outbox row. A batch found
+  applied on retry also sets it, since its effect isn't known there. The note is cleared only
+  after the tally and board were read fresh from D1 and sent. A failed read keeps the note, and
+  a cached figure is never taken for success. A restart finds the note and publishes to the
+  sockets still open. Publishing credits nothing, so a retry only sends the same authoritative
+  figures again.
+- **Bounded, serialized, and never a tight loop.**
+  - A drain applies at most the saved replay bound of rows; a full one continues at once.
+  - A drain already running is shared, never overlapped.
+  - A D1 failure, or a failed publication, is retried only after the existing five-minute alarm
+    cadence (`PRICE_FRESH_MS`). The retry time is saved, so a restart keeps it.
+  - Whenever projection work starts, a durable alarm is set one cadence later, so an instance
+    that stops mid-way still comes back.
+  - With no page open, only projection work schedules the alarm, never an overdue receipt
+    deadline.
+- **Receipt evidence first.** While pages are open, each alarm first commits and sends what time
+  has withdrawn from receipt-mode invoices, synchronously, before anything waits on D1 or the
+  network. With no page open nothing is shown, and the next authorized read commits it, as
+  before. The projection then runs in the background, so a stalled D1 can't delay withdrawing
+  a stale amount-bearing QR.
+- **Public order.** Receipt frames go out live when committed. The tally and board are sent
+  only after D1 holds the change.
+- **Not the pile.** The remaining pile is its own journal and is never touched here, and
+  nothing spent from the wallet ever reaches these tables.
+- **Stand-in limits.** Tests run D1 through `node:sqlite`, with `batch` as one transaction that a
+  trigger's `RAISE(ABORT)` rolls back. Cloudflare documents D1 batches as atomic in the same
+  way. The stand-in can't show D1's limits on statements per batch, payload size or duration,
+  how it behaves under real concurrency or network failure, or how a Durable Object alarm
+  retries. Staging must confirm these on regtest or signet before activation.
+
 ### Pages
 
 Broadcasts are at least once, after commit. Pages deduplicate by revision.
@@ -798,7 +927,23 @@ Every gate stays closed until a separate decision clears it. None is authorized 
    raises.
 5. **Two maintainers** for the relay line, credentials and deployment, and OBL's agreement
    to the page contract.
-6. **The rollout order:**
+6. **Projection conflict resolution:**
+   - **Today:** a projection conflict (`marker-mismatch`, `legacy-collision` or `unsafe-total`)
+     stops the D1 projection for good. Health stays `review`, and lifetime figures stop moving.
+   - **Why it's a gate:** nothing here resolves one, and no administrative endpoint exists or is
+     planned in this contract.
+   - **To clear it:** a reviewed operator procedure for resolving a held conflict, decided and
+     built separately.
+7. **The D1 runtime confirmed on staging:**
+   - batch atomicity with trigger aborts;
+   - the guard's in-batch range check;
+   - the error text the conflict classification matches, and where D1 puts it (message or
+     `cause`);
+   - the replaced legacy insert trigger on real D1;
+   - the alarm and background-projection behaviour.
+
+   The stand-ins can't show these.
+8. **The rollout order:**
    1. the OBL page;
    2. the migrations, then the fence-aware Worker with `issuance` off;
    3. the anchor;

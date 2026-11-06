@@ -11,6 +11,7 @@ import { parseUp } from "../shared/protocol.mjs";
 import { readLimits, readSettings } from "./config.mjs";
 import { PILE_SCHEMA, pileKnows, pileRevision, pileView, recordPileDelta, recordPileException } from "./pile.mjs";
 import { hashRequest, MODE, ReceiptLedger } from "./receipts.mjs";
+import { drainProjection } from "./projection.mjs";
 import { relayAuthorized } from "./relay-token.mjs";
 import { BANANA_CENTS, bananasOf, fetchPrice, milliBananas, rateOf } from "./price.mjs";
 
@@ -176,6 +177,7 @@ export class DonationsObject {
       this.sql.exec("INSERT INTO meta (key, value) VALUES ('receipt_broadcast', ?)", this.receipts.feedHighWater());
     }
     this.receiptBacklog = false;
+    this.projecting = null;
     this.capability = JSON.stringify(this.accountingCapability());
   }
 
@@ -224,6 +226,7 @@ export class DonationsObject {
       this.receiptBacklog = false;
     }
     if (this.receiptBacklog) this.ctx.waitUntil(this.ctx.storage.setAlarm(this.platform.now()));
+    this.kickProjection();
     const capability = JSON.stringify(this.accountingCapability());
     if (capability !== this.capability) {
       this.capability = capability;
@@ -416,6 +419,100 @@ export class DonationsObject {
     this.ctx.waitUntil(this.freshenRate());
     await this.scheduleFreshening();
     return this.platform.upgrade(client);
+  }
+
+  // Applies the receipt outbox to D1's lifetime figures, then sends pages D1's current ones.
+  // - One drain at a time: a drain already running is shared, never overlapped.
+  // - Bounded by the saved replay bound; a full drain continues at once.
+  // - A drain that applied a figure-moving batch leaves a durable note (with the outbox row's
+  //   removal); the note is cleared only after D1's tally and board were read fresh and sent. A
+  //   failed read keeps the note, and a restart finds it, so pages are never left stale.
+  // - A D1 failure, or a failed publication, is retried once the existing five-minute alarm
+  //   cadence (PRICE_FRESH_MS) has passed, persisted so a restart keeps it: never a tight loop.
+  // - A conflict waits for review, and is never drained again until it is resolved.
+  // Health stays behind while anything waits, and review on a conflict.
+  projectReceipts() {
+    if (this.projecting) return this.projecting;
+    const settings = this.receipts.readSettings();
+    if (!settings || this.receipts.projectionConflict()) return Promise.resolve(null);
+    const draining = this.receipts.hasPendingProjection();
+    const publishing = this.receipts.publicationPending();
+    if (!draining && !publishing) return Promise.resolve(null);
+    if (this.projectionRetryAt() > this.platform.now()) return Promise.resolve(null);
+    this.projecting = (async () => {
+      try {
+        let result = null;
+        if (draining) {
+          result = await drainProjection({ ledger: this.receipts, db: this.env.DB, now: () => this.platform.now(), limit: settings.replayMax });
+          if (result.failed) console.error(`receipt projection: D1 refused a batch (${result.failed}); retrying later`);
+          if (result.conflict) console.error(`receipt projection: ${result.conflict}; held for review`);
+        }
+        let published = true;
+        if (this.receipts.publicationPending()) published = await this.publishLifetime();
+        if (result?.failed || !published) this.setProjectionRetry(this.platform.now() + PRICE_FRESH_MS);
+        else this.setProjectionRetry(null);
+        if (result?.more && !result.failed) await this.scheduleAt(this.platform.now());
+        else if (result?.failed || !published) await this.scheduleAt(this.projectionRetryAt());
+        const capability = JSON.stringify(this.accountingCapability());
+        if (capability !== this.capability) {
+          this.capability = capability;
+          this.broadcast(this.statusMessage(this.line() !== null));
+        }
+        return result;
+      } finally {
+        this.projecting = null;
+      }
+    })();
+    return this.projecting;
+  }
+
+  // D1's current tally and board, read fresh and sent; false, keeping the work, if either read
+  // fails. Nothing is credited here, so a retry only sends the same authoritative figures again.
+  async publishLifetime() {
+    try {
+      const [board, tally] = await Promise.all([this.board({ refresh: true, strict: true }), this.tally({ refresh: true, strict: true })]);
+      if (board) this.broadcast(board);
+      if (tally) {
+        this.markRateSent(tally.rate);
+        this.broadcast(tally);
+      }
+      this.receipts.published();
+      return true;
+    } catch (error) {
+      console.error(`receipt projection: publishing lifetime figures failed (${error.message}); retrying later`);
+      return false;
+    }
+  }
+
+  projectionRetryAt() {
+    return this.sql.exec("SELECT value FROM meta WHERE key = 'projection_retry'").toArray()[0]?.value ?? 0;
+  }
+
+  setProjectionRetry(at) {
+    if (at === null) this.sql.exec("DELETE FROM meta WHERE key = 'projection_retry'");
+    else this.sql.exec("INSERT INTO meta (key, value) VALUES ('projection_retry', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value", at);
+  }
+
+  // When the projection next needs the alarm, or null: never while a conflict waits.
+  projectionDue() {
+    if (this.receipts.projectionConflict() || !this.receipts.readSettings()) return null;
+    if (!this.receipts.hasPendingProjection() && !this.receipts.publicationPending()) return null;
+    return Math.max(this.projectionRetryAt(), this.platform.now());
+  }
+
+  // Starts projection work in the background, first making sure a durable alarm will come back
+  // one cadence later in case this instance stops before the work, or its publication, is done.
+  kickProjection() {
+    if (this.projectionDue() === null) return;
+    this.ctx.waitUntil(this.scheduleAt(this.platform.now() + PRICE_FRESH_MS));
+    this.ctx.waitUntil(this.projectReceipts());
+  }
+
+  // Brings the alarm forward to `at`, never back.
+  async scheduleAt(at) {
+    if (at === null) return;
+    const current = await this.ctx.storage.getAlarm();
+    if (current === null || at < current) await this.ctx.storage.setAlarm(at);
   }
 
   // On every connect while receipt reads are available: the newest credited receipts, then any
@@ -723,7 +820,9 @@ export class DonationsObject {
   // independently, since a changing price can give them different leaders. Matching handles combine
   // across accounts and guests, case-insensitively. Legacy unnamed donations never appear. Kept in memory between donations; null if D1 can't be read and nothing is
   // kept. Reads can come back out of order, so only the newest one asked for is kept.
-  async board({ refresh = false } = {}) {
+  // strict: a failed read throws instead of falling back to the cached board, for a caller that
+  // must know the board it sends is D1's current one.
+  async board({ refresh = false, strict = false } = {}) {
     if (refresh || !this.boardEntries) {
       const asked = ++this.boardAsked;
       try {
@@ -741,6 +840,7 @@ export class DonationsObject {
         }
       } catch (error) {
         console.error("reading the leaderboard failed:", error.message);
+        if (strict) throw error;
       }
     }
     return this.boardEntries ? { type: "board", entries: this.boardEntries, satsEntries: this.boardSatsEntries } : null;
@@ -812,7 +912,7 @@ export class DonationsObject {
   // The board's figures from D1, kept up to date there with each donation recorded: every
   // donation, all time, and the last seven days by the hour, with the rate beside them. Kept in
   // memory between donations; null if D1 can't be read and nothing is kept.
-  async tally({ refresh = false } = {}) {
+  async tally({ refresh = false, strict = false } = {}) {
     if (refresh || !this.tallyFigures) {
       const asked = ++this.tallyAsked;
       try {
@@ -828,6 +928,7 @@ export class DonationsObject {
         }
       } catch (error) {
         console.error("reading the tally failed:", error.message);
+        if (strict) throw error;
       }
     }
     if (!this.tallyFigures) return null;
@@ -928,18 +1029,33 @@ export class DonationsObject {
   // While pages are open, the price beside the tally is never much more than five minutes old.
   // With none open, the alarm isn't set again and the object sleeps; the relay's line doesn't
   // keep it going. Between alarms, pages' sockets hibernate, as they always do.
+  // With pages open: the price check, receipt deadlines and any broadcast backlog. With none
+  // open, only projection work keeps it, and only on its own schedule; otherwise it sleeps.
   async alarm() {
-    if (this.ctx.getWebSockets("page").length === 0) return;
+    const pages = this.ctx.getWebSockets("page").length > 0;
+    // First, synchronously, before anything waits on D1 or the network: commit what time has
+    // withdrawn from receipt-mode invoices, and send it to the open pages. A stalled D1 can never
+    // delay this. With no page open nothing is shown, and the next authorized read commits it.
+    if (pages && this.receiptsReadable()) {
+      this.receipts.refreshFreshness();
+      this.pushReceiptFrames();
+    }
+    // The D1 projection runs whether or not pages are open, in the background; it schedules its
+    // own continuation or retry when it finishes, so it never holds this alarm up.
+    this.kickProjection();
     try {
-      // What time alone withdrew from receipt-mode invoices goes out while pages are open.
-      if (this.receiptsReadable()) {
-        this.receipts.refreshFreshness();
-        this.pushReceiptFrames();
-      }
-      await this.freshenRate();
+      if (pages) await this.freshenRate();
     } finally {
+      const now = this.platform.now();
+      const due = [];
       // A broadcast backlog continues at once; otherwise the next price check or receipt deadline.
-      await this.ctx.storage.setAlarm(this.receiptBacklog ? this.platform.now() : this.freshenAt());
+      if (pages) due.push(this.receiptBacklog ? now : this.freshenAt());
+      // Projection work not already running, at its own time: never sooner than a retry allows.
+      if (!this.projecting) {
+        const projection = this.projectionDue();
+        if (projection !== null) due.push(projection);
+      }
+      if (due.length) await this.scheduleAt(Math.min(...due));
     }
   }
 

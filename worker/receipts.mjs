@@ -256,6 +256,16 @@ const SCHEMA = [
     reason TEXT NOT NULL
   );
   ALTER TABLE ra_invoices ADD COLUMN expiry_committed INTEGER NOT NULL DEFAULT 0;`,
+  // Outbox rows the D1 projection refused to apply: a marker for the same revision with a
+  // different payload, or a collision with a legacy donation. Draining stops until review.
+  `CREATE TABLE ra_projection_conflicts (
+    outbox_id INTEGER PRIMARY KEY,
+    receipt TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    resolved_at INTEGER
+  );`,
 ];
 
 const LIGHTNING = ["available", "limit", "unavailable"];
@@ -1456,8 +1466,69 @@ export class ReceiptLedger {
     );
   }
 
-  projected(id) {
-    this.sql.exec("DELETE FROM ra_outbox WHERE id = ?", id);
+  // Removes an applied outbox row. publish: the applied batch may have moved lifetime figures,
+  // so pages must be sent D1's current ones; recorded durably in the same step, so a crash or a
+  // failed read before they go out leaves the work to do, never a silently stale page.
+  projected(id, { publish = false } = {}) {
+    this.storage.transactionSync(() => {
+      this.sql.exec("DELETE FROM ra_outbox WHERE id = ?", id);
+      if (publish) {
+        this.sql.exec("INSERT INTO meta (key, value) VALUES ('projection_publish', 1) ON CONFLICT (key) DO UPDATE SET value = 1");
+      }
+    });
+  }
+
+  publicationPending() {
+    return (this.row("SELECT value FROM meta WHERE key = 'projection_publish'")?.value ?? 0) === 1;
+  }
+
+  // Cleared only after D1's current figures have actually gone out.
+  published() {
+    this.sql.exec("UPDATE meta SET value = 0 WHERE key = 'projection_publish'");
+  }
+
+  projectionConflict() {
+    return this.row("SELECT 1 FROM ra_projection_conflicts WHERE resolved_at IS NULL") !== null;
+  }
+
+  // What the D1 projection applies, one committed receipt revision per outbox row, oldest
+  // first. No address, provider id or outpoint. owner is the invoice's saved stable account id,
+  // or null: it goes only into D1's private account totals, never into any public frame. The
+  // credited milli is the receipt's frozen price, which never changes after its freeze, so a
+  // reversal and a reconfirmation carry the same value. observed is the feed sequence of the
+  // receipt's first revision: the feed is never pruned and its sequence never reused, so it is
+  // the same on every revision, and orders receipts first observed in the same millisecond.
+  // Nothing while a conflict waits for
+  // review: the projection keeps strict order rather than skip past it.
+  projectionWork(limit) {
+    if (!isPositive(limit)) throw new PolicyRequired("projection batch size");
+    if (this.projectionConflict()) return [];
+    return this.rows(
+      "SELECT o.id, f.receipt, f.revision, f.seq, f.payload, r.milli, r.created_at, i.owner, " +
+      "(SELECT min(seq) FROM ra_feed WHERE receipt = f.receipt) AS observed FROM ra_outbox o " +
+      "JOIN ra_feed f ON f.seq = o.feed_seq JOIN ra_receipts r ON r.id = f.receipt JOIN ra_invoices i ON i.invoice = r.invoice " +
+      "ORDER BY o.id LIMIT ?",
+      limit,
+    ).map((row) => {
+      const view = JSON.parse(row.payload).receipt;
+      return {
+        id: row.id, receipt: row.receipt, revision: row.revision, seq: row.seq, observed: row.observed, invoice: view.invoice,
+        state: view.state, sats: view.sats, credit: view.credit, milli: view.credit > 0 ? row.milli ?? 0 : 0,
+        handle: view.handle, owner: row.owner, receivedAt: row.created_at,
+      };
+    });
+  }
+
+  hasPendingProjection() {
+    return this.row("SELECT 1 FROM ra_outbox") !== null;
+  }
+
+  // A projection that can't be applied safely: kept for review, and the projection stops.
+  recordProjectionConflict(outbox, receipt, revision, reason) {
+    this.sql.exec(
+      "INSERT INTO ra_projection_conflicts (outbox_id, receipt, revision, reason, at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (outbox_id) DO NOTHING",
+      outbox, receipt, revision, reason, this.now(),
+    );
   }
 
   // The pile's change from receipts, pending a cutover anchor. Never applied to the legacy pile.
@@ -1478,6 +1549,8 @@ export class ReceiptLedger {
     if (!this.row("SELECT 1 FROM ra_invoices")) return "off";
     if (this.row("SELECT 1 FROM ra_reviews WHERE resolved_at IS NULL") || this.row("SELECT 1 FROM ra_holds WHERE resolved_at IS NULL") ||
         this.row("SELECT 1 FROM ra_receipts WHERE state = 'review'")) return "review";
+    // A projection conflict: D1 disagrees with a committed revision, and draining has stopped.
+    if (this.row("SELECT 1 FROM ra_projection_conflicts WHERE resolved_at IS NULL")) return "review";
     // Mappings without saved read settings or whole metadata wait on an operator's reconciliation.
     if (!this.readSettings() || this.row(`SELECT 1 FROM ra_invoices WHERE ${INCOMPLETE_METADATA}`)) return "review";
     const bound = this.freshnessMs;
