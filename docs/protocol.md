@@ -191,9 +191,14 @@ missed. After that:
 - A signed-in donor's login is the one OBL stored at sign-in. After a GitHub rename,
   the new login cannot earn a check until they sign in to OBL again.
 - `{ "type": "recent", "entries": [{ "seq": 12, "id": "invoice id", "sats": 1000, "handle": "ooga-dev", "message": "for the cave", "at": 1790000000000, "bananas": 1, "verified": true }] }`
-  after the tally when a page connects, with up to ten newest donations of any amount in
-  descending `seq` order. `bananas` is each donation's recorded exact amount, zero when it had no price. Old
-  donations without recorded GitHub login matches have `verified: false`. On reconnect, the
+  after the tally when a page connects, with the twenty newest donations of any amount and the
+  twenty newest at or above the configured `messageMinSats`, at most forty, in descending `seq`
+  order, so a page's list can fill twenty rows whether or not it keeps to the bar. `bananas` is
+  each donation's recorded exact amount, zero when it had no price. Migration
+  `0011_restore_verified_donations.sql` restores the check on older donations whose record proves
+  the match: invoice-priced ones, whose handle was the signed-in login, and later ones named for
+  the login their account's historical total kept. Other old donations without recorded GitHub
+  login matches have `verified: false`. On reconnect, the
   usual `after` replay follows this snapshot; the page deduplicates matching invoice ids.
   Recent entries are compact list rows with a numeric banana amount; live and replayed
   `donation` messages retain the separate OBL event and banana estimate envelope. Recent and

@@ -41,6 +41,46 @@ test("D1 retires account totals and corrects unknown legacy freshness without ch
   }
 });
 
+test("D1 restores the checks older donations prove and leaves every other row as it was", () => {
+  const db = new DatabaseSync(":memory:");
+  try {
+    for (const name of ["0001_donations.sql", "0002_stats.sql", "0003_tally.sql", "0004_donor_sats.sql", "0005_handle_totals.sql", "0006_receipt_pricing.sql"]) db.exec(migration(name));
+    const insert = db.prepare(
+      "INSERT INTO donations (id, sats, handle, message, at, method, github_id, price_cents, price_at, banana_cents, milli, received_at, price_stale, pricing) " +
+      "VALUES (?, 1000, ?, '', 1000, 'lightning', ?, 5000000, 900, 100, 500, NULL, NULL, ?)",
+    );
+    // Before editable handles a signed-in donor's handle was their login; the account total keeps the latest.
+    insert.run("InvoiceOldName", "ooga-old", 4242, "invoice");
+    insert.run("InvoiceLogin", "Ooga-Dev", 4242, "invoice");
+    insert.run("InvoiceUnnamed", "", null, "invoice");
+    insert.run("InvoiceFreeText", "guest-name", null, "invoice");
+    db.exec(migration("0007_legacy_metadata.sql"));
+    db.exec(migration("0008_verified_donations.sql"));
+    // Typed handles, before settlement recorded the donor's login.
+    insert.run("ReceiptLogin", "OOGA-DEV", 4242, "receipt");
+    insert.run("ReceiptTyped", "someone-else", 4242, "receipt");
+    insert.run("ReceiptOldName", "ooga-old", 4242, "receipt");
+    insert.run("ReceiptNoTotal", "new-account", 4343, "receipt");
+    insert.run("ReceiptGuest", "Ooga-Dev", null, "receipt");
+    db.prepare(
+      "INSERT INTO donations (id, sats, handle, message, at, method, github_id, pricing, verified) VALUES ('Recorded', 1000, 'renamed-dev', '', 1000, 'lightning', 4242, 'receipt', 1)",
+    ).run();
+    const unverified = () => rows(db.prepare("SELECT * FROM donations ORDER BY seq").all()).map(({ verified, ...row }) => row);
+    const aggregates = () => ["totals", "handle_totals", "tally"].map(table => rows(db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all()));
+    const before = unverified(), totals = aggregates();
+
+    db.exec(migration("0011_restore_verified_donations.sql"));
+    assert.deepEqual(Object.fromEntries(db.prepare("SELECT id, verified FROM donations ORDER BY seq").all().map(row => [row.id, row.verified])), {
+      InvoiceOldName: 1, InvoiceLogin: 1, InvoiceUnnamed: 0, InvoiceFreeText: 0,
+      ReceiptLogin: 1, ReceiptTyped: 0, ReceiptOldName: 0, ReceiptNoTotal: 0, ReceiptGuest: 0, Recorded: 1,
+    });
+    assert.deepEqual(unverified(), before, "only the check changes");
+    assert.deepEqual(aggregates(), totals, "no total or tally moves");
+  } finally {
+    db.close();
+  }
+});
+
 // Schema 6 as it was deployed, written independently of the current migration array.
 function schemaSix() {
   const ctx = fakeCtx(), sql = ctx.storage.sql;
