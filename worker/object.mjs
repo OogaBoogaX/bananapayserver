@@ -289,7 +289,7 @@ export class DonationsObject {
       server.send(JSON.stringify(tally));
       if (this.sentRate() === null) this.markRateSent(tally.rate);
     }
-    const recent = await this.recent({ messageMinSats: limits.messageMinSats });
+    const recent = await this.recent();
     if (recent) server.send(JSON.stringify(recent));
     const after = url.searchParams.get("after");
     if (after && INVOICE_ID.test(after)) await this.replay(server, after, limits.messageMinSats);
@@ -318,11 +318,11 @@ export class DonationsObject {
   // The latest donations, every amount, cached across page connects: the newest RECENT_SIZE, and
   // the newest RECENT_SIZE at or above the configured message bar, newest first. Concurrent cold
   // connects share a read; refreshes may overlap, so only a newer successful read replaces the cache.
-  async recent({ refresh = false, messageMinSats = 0 } = {}) {
+  async recent({ refresh = false } = {}) {
+    const bar = readLimits(this.env)?.messageMinSats ?? 0;
     if (!refresh && this.recentLoading) await this.recentLoading;
     else if (refresh || !this.recentEntries) {
       const asked = ++this.recentAsked;
-      const bar = readLimits(this.env)?.messageMinSats ?? 0;
       const loading = (async () => {
         try {
           const { results } = await this.env.DB.prepare(
@@ -342,8 +342,8 @@ export class DonationsObject {
       await loading;
       if (this.recentLoading === loading) this.recentLoading = null;
     }
-    return this.recentEntries ? { type: "recent", entries: messageMinSats
-      ? this.recentEntries.map((entry) => atMessageBar(entry, messageMinSats)) : this.recentEntries } : null;
+    return this.recentEntries ? { type: "recent", entries: bar
+      ? this.recentEntries.map((entry) => atMessageBar(entry, bar)) : this.recentEntries } : null;
   }
 
   // The newest line wins: a relay that redials replaces a line that may be half dead.
