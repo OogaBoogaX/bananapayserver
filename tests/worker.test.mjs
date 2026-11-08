@@ -403,6 +403,21 @@ test("a page that reconnects gets what it missed, and no more than the cap", asy
   assert.equal(invalid.status, 400);
 });
 
+test("a joining page gets the newest donations of every amount and the newest at the message bar", async () => {
+  const w = await world();
+  w.env.MESSAGE_MIN_SATS = "2000";
+  const id = (i) => `Mixed${String(i).padStart(4, "0")}`;
+  const insert = w.env.DB.db.prepare("INSERT INTO donations (id, sats, handle, message, at, method) VALUES (?, ?, '', 'historical message', ?, 'lightning')");
+  for (let i = 1; i <= 60; i++) insert.run(id(i), i > 30 ? 1000 : 2000, i);
+  const recent = (await w.connectPage()).messages().find((m) => m.type === "recent").entries;
+  assert.deepEqual(recent.map((entry) => entry.id), [
+    ...Array.from({ length: RECENT_SIZE }, (_, i) => id(60 - i)),
+    ...Array.from({ length: RECENT_SIZE }, (_, i) => id(30 - i)),
+  ], "the newest of any amount, then the newest at the bar, newest first");
+  assert.ok(recent.every((entry) => entry.message === (entry.sats >= 2000 ? "historical message" : "")));
+  assert.deepEqual((await w.object.recent({ refresh: true })).entries, recent, "settlement refreshes use the same bar for selection and messages");
+});
+
 test("recent donations are read once across page connects and refreshed by a payment", async () => {
   const w = await world(), relay = await w.connectRelay();
   const prepare = w.env.DB.prepare;

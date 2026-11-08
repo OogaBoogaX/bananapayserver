@@ -18,8 +18,9 @@ export const REPLAY_MAX = 50;
 // How many donation handles each leaderboard shows.
 export const BOARD_SIZE = 20;
 
-// The newest donations sent to a page when it joins.
-export const RECENT_SIZE = 10;
+// The newest donations sent to a page when it joins: this many of every amount and this many at or
+// above the message bar, so OBL's recent list fills either way its checkbox is set.
+export const RECENT_SIZE = 20;
 
 // After the price service fails to answer, how long invoices use the last price before the
 // object asks it again, so no donor waits on a service that's down.
@@ -288,7 +289,7 @@ export class DonationsObject {
       server.send(JSON.stringify(tally));
       if (this.sentRate() === null) this.markRateSent(tally.rate);
     }
-    const recent = await this.recent({ messageMinSats: limits.messageMinSats });
+    const recent = await this.recent();
     if (recent) server.send(JSON.stringify(recent));
     const after = url.searchParams.get("after");
     if (after && INVOICE_ID.test(after)) await this.replay(server, after, limits.messageMinSats);
@@ -314,17 +315,21 @@ export class DonationsObject {
     }
   }
 
-  // The latest donations, every amount, cached across page connects. Concurrent cold connects
-  // share a read; refreshes may overlap, so only a newer successful read replaces the cache.
-  async recent({ refresh = false, messageMinSats = 0 } = {}) {
+  // The latest donations, every amount, cached across page connects: the newest RECENT_SIZE, and
+  // the newest RECENT_SIZE at or above the configured message bar, newest first. Concurrent cold
+  // connects share a read; refreshes may overlap, so only a newer successful read replaces the cache.
+  async recent({ refresh = false } = {}) {
+    const bar = readLimits(this.env)?.messageMinSats ?? 0;
     if (!refresh && this.recentLoading) await this.recentLoading;
     else if (refresh || !this.recentEntries) {
       const asked = ++this.recentAsked;
       const loading = (async () => {
         try {
           const { results } = await this.env.DB.prepare(
-            "SELECT seq, id, sats, handle, message, at, milli, verified FROM donations ORDER BY seq DESC LIMIT ?",
-          ).bind(RECENT_SIZE).all();
+            "SELECT seq, id, sats, handle, message, at, milli, verified FROM donations " +
+            "WHERE seq IN (SELECT seq FROM donations ORDER BY seq DESC LIMIT ?) " +
+            "OR seq IN (SELECT seq FROM donations WHERE sats >= ? ORDER BY seq DESC LIMIT ?) ORDER BY seq DESC",
+          ).bind(RECENT_SIZE, bar, RECENT_SIZE).all();
           if (asked > this.recentShown) {
             this.recentShown = asked;
             this.recentEntries = results.map(recentEntry);
@@ -337,8 +342,8 @@ export class DonationsObject {
       await loading;
       if (this.recentLoading === loading) this.recentLoading = null;
     }
-    return this.recentEntries ? { type: "recent", entries: messageMinSats
-      ? this.recentEntries.map((entry) => atMessageBar(entry, messageMinSats)) : this.recentEntries } : null;
+    return this.recentEntries ? { type: "recent", entries: bar
+      ? this.recentEntries.map((entry) => atMessageBar(entry, bar)) : this.recentEntries } : null;
   }
 
   // The newest line wins: a relay that redials replaces a line that may be half dead.
