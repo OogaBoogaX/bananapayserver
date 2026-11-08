@@ -196,10 +196,11 @@ missed. After that:
   order, so a page's list can fill twenty rows whether or not it keeps to the bar. `bananas` is
   each donation's recorded exact amount, zero when it had no price. Migration
   `0011_restore_verified_donations.sql` restores the check on older donations whose record proves
-  the match: invoice-priced ones, whose handle was the signed-in login, and later ones named for
-  the login their account's historical total kept. Other old donations without recorded GitHub
-  login matches have `verified: false`. On reconnect, the
-  usual `after` replay follows this snapshot; the page deduplicates matching invoice ids.
+  the match: invoice-priced ones with a GitHub id and handle, whose handle was the signed-in
+  login. Receipt-priced donations stay as recorded: historical account totals cannot prove a
+  match after a GitHub rename. Any repair of those rows needs separate evidence and review.
+  On reconnect, the usual `after` replay follows this snapshot; the page deduplicates matching
+  invoice ids.
   Recent entries are compact list rows with a numeric banana amount; live and replayed
   `donation` messages retain the separate OBL event and banana estimate envelope. Recent and
   replayed rows recorded under an older, lower message bar have their message blanked when

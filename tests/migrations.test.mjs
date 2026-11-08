@@ -62,9 +62,15 @@ test("D1 restores the checks older donations prove and leaves every other row as
     insert.run("ReceiptOldName", "ooga-old", 4242, "receipt");
     insert.run("ReceiptNoTotal", "new-account", 4343, "receipt");
     insert.run("ReceiptGuest", "Ooga-Dev", null, "receipt");
+    // After login checks shipped, settlement deliberately rejects the account's old name.
+    // This can happen before the first verified donation, so that row is not a safe cutoff.
+    insert.run("ReceiptRenamedBefore", "Ooga-Dev", 4242, "receipt");
     db.prepare(
       "INSERT INTO donations (id, sats, handle, message, at, method, github_id, pricing, verified) VALUES ('Recorded', 1000, 'renamed-dev', '', 1000, 'lightning', 4242, 'receipt', 1)",
     ).run();
+    insert.run("ReceiptRenamedAfter", "Ooga-Dev", 4242, "receipt");
+    // A pending invoice issued before editable handles can settle after the login checks shipped.
+    insert.run("InvoiceLate", "Ooga-Dev", 4242, "invoice");
     const unverified = () => rows(db.prepare("SELECT * FROM donations ORDER BY seq").all()).map(({ verified, ...row }) => row);
     const aggregates = () => ["totals", "handle_totals", "tally"].map(table => rows(db.prepare(`SELECT * FROM ${table} ORDER BY 1`).all()));
     const before = unverified(), totals = aggregates();
@@ -72,10 +78,14 @@ test("D1 restores the checks older donations prove and leaves every other row as
     db.exec(migration("0011_restore_verified_donations.sql"));
     assert.deepEqual(Object.fromEntries(db.prepare("SELECT id, verified FROM donations ORDER BY seq").all().map(row => [row.id, row.verified])), {
       InvoiceOldName: 1, InvoiceLogin: 1, InvoiceUnnamed: 0, InvoiceFreeText: 0,
-      ReceiptLogin: 1, ReceiptTyped: 0, ReceiptOldName: 0, ReceiptNoTotal: 0, ReceiptGuest: 0, Recorded: 1,
+      ReceiptLogin: 0, ReceiptTyped: 0, ReceiptOldName: 0, ReceiptNoTotal: 0, ReceiptGuest: 0,
+      ReceiptRenamedBefore: 0, Recorded: 1, ReceiptRenamedAfter: 0, InvoiceLate: 1,
     });
     assert.deepEqual(unverified(), before, "only the check changes");
     assert.deepEqual(aggregates(), totals, "no total or tally moves");
+    const restored = rows(db.prepare("SELECT * FROM donations ORDER BY seq").all());
+    db.exec(migration("0011_restore_verified_donations.sql"));
+    assert.deepEqual(rows(db.prepare("SELECT * FROM donations ORDER BY seq").all()), restored, "reapplying cannot widen the repair");
   } finally {
     db.close();
   }
