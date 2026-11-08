@@ -30,16 +30,25 @@ The machine's operator sets it up, by hand, from `rock` only
 - **BTCPay may send its webhook to the relay.** BTCPay 2.4.5 and later block outbound requests
   to private addresses, and the relay's webhook address on BTCPay's network is one. Give
   BTCPay's container `BTCPAY_SSRFEXCEPTIONS=obl-relay:8080`, after a `;` if it already has
-  exceptions, and check again after every BTCPay update:
+  exceptions:
 
   ```bash
   docker exec <BTCPay's container> printenv BTCPAY_SSRFEXCEPTIONS
   ```
 
   It should list `obl-relay:8080`. Allow nothing broader: no address ranges, and never
-  `BTCPAY_DISABLESSRFPROTECTION=true`. Without it a paid donation still counts, from the
-  relay's own check each minute, but not at once. A Lightning connection to a local address
-  that a server admin saved needs no exception.
+  `BTCPAY_DISABLESSRFPROTECTION=true`. The exception covers every store on that BTCPay, which
+  is safe: the relay takes only deliveries signed with its own secret, for its own store.
+  A Lightning connection to a local address that a server admin saved needs no exception.
+
+  Without the exception, an on-chain payment that arrives after its invoice expired may never
+  be counted. The relay has stopped checking that invoice, and the webhook is its only way
+  back. Every other payment counts up to a minute late, from the relay's own check.
+
+  Set it where it lasts. A packaged install may rewrite BTCPay's compose file when it updates
+  BTCPay, which drops a hand edit. Use the install's own way to keep a setting if it has one:
+  on btcpayserver-docker, a custom fragment, a `.custom.yml` file added with
+  `btcpay-fragments add`. If it has none, set it again after every update.
 - **BTCPay's pages are private.** Two-factor sign-in on every admin account, and public user
   registration off.
 - **The store settles an on-chain payment only after at least one confirmation.** A payment
@@ -144,14 +153,17 @@ The machine's operator sets it up, by hand, from `rock` only
    - **No secrets in the log:** `docker compose -p obl-relay logs relay` shows no token, key
      or macaroon.
    - **BTCPay reaches the webhook:** in the store's webhook settings, send a test event. BTCPay
-     should report it delivered.
+     should report it delivered. A 401 means the webhook's secret in BTCPay doesn't match
+     `BTCPAY_WEBHOOK_SECRET` in `.env`. An error saying the endpoint "does not resolve to an
+     allowed network address" means BTCPay doesn't have the exception.
 
 ## Running it
 
 - **Logs:** `docker compose -p obl-relay logs --tail 50 relay`.
 - **After a reboot or a crash:** Docker starts the relay again by itself.
-- **After a BTCPay update:** check again that BTCPay can't read LND's data folder, and that it
-  still has the webhook's exception.
+- **After a BTCPay update:** check again that BTCPay can't read LND's data folder, and send a
+  test event from the store's webhook settings, as in step 6. A set variable doesn't prove a
+  delivery gets through.
 - **Update:** `git pull` on `rock`, the threshold check from step 5, then
   `docker compose -p obl-relay up -d --build`.
 - **Stop:** `docker compose -p obl-relay stop`. Donations close until it's back.
