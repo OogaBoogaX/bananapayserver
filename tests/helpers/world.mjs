@@ -36,17 +36,25 @@ export async function world(overrides = {}, platformOptions = {}) {
     if (path === "/donations/invoice") return w.page.invoice(request, who, visitor);
     if (path === "/donations/note") return w.page.note(request, visitor);
     if (path === "/donations/onchain") return w.page.onchain(request, visitor);
+    if (path === "/donations/status") return w.page.status(request, who, visitor);
+    if (path === "/donations/history") return w.page.history(request, who, visitor);
     throw new Error(`no call for ${path}`);
   };
-  w.socket = (after, visitor = "visitor-p") =>
-    w.page.fetch(upgrade(`/donations/socket${after ? `?after=${after}` : ""}`, { "X-Client": visitor }));
+  // receipts is the receipt feed cursor, or undefined for none.
+  w.socket = (after, visitor = "visitor-p", receipts) => {
+    const query = new URLSearchParams();
+    if (after) query.set("after", after);
+    if (receipts !== undefined) query.set("receipts", String(receipts));
+    const search = query.toString();
+    return w.page.fetch(upgrade(`/donations/socket${search ? `?${search}` : ""}`, { "X-Client": visitor }));
+  };
   w.connectRelay = async () => {
     const response = await w.send(upgrade("/relay", { Authorization: `Bearer ${TOKEN}` }));
     assert.equal(response.status, 101);
     return w.ctx.getWebSockets("relay").at(-1);
   };
-  w.connectPage = async (after, visitor = "visitor-p") => {
-    const response = await w.socket(after, visitor);
+  w.connectPage = async (after, visitor = "visitor-p", receipts) => {
+    const response = await w.socket(after, visitor, receipts);
     assert.equal(response.status, 101);
     return w.ctx.getWebSockets("page").at(-1);
   };
