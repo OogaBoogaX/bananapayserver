@@ -145,7 +145,7 @@ services:
 
   lnd:
     <<: *service
-    image: btcpayserver/lnd:v0.21.3-beta-2@sha256:24d71a7679d0ce2f8c0599f0c295b3ae0f8d85a03422190758b550736306c0e6
+    image: btcpayserver/lnd:v0.21.8-beta@sha256:7a5c529c5e63b8317bc654be5094607f0da80ce7bbc421b8da6b5e191c4d9fc2
     environment:
       LND_CHAIN: btc
       LND_ENVIRONMENT: signet
